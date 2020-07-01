@@ -1,0 +1,980 @@
+---
+title: "Useful code"
+output:
+  html_document: 
+    toc: yes
+    toc_float: yes
+---
+
+```{R, setup_r, results='hide', include=FALSE}
+library(reticulate)
+library(knitr)
+```
+
+# Terminal/bash and other programmes
+
+## Using rsync to copy files
+
+```{bash, eval=FALSE}
+rsync --partial --progress W0.tar.bz2 robyn@vulcan.pharmacology.dal.ca:/home/robyn/
+```
+
+## PICRUSt2
+
+```{bash, eval=FALSE}
+picrust2_pipeline.py -s Robyn_PICRUSt2/New_sequences.fasta -i Robyn_PICRUSt2/All_samples_reduced.txt -o picrust_test --custom_trait_tables ko_all.txt --stratified --no_pathways
+```
+
+## Barrnap
+
+```{bash, eval=FALSE}
+ssu-align dereplicated_marref_assembly_16S.fasta marref_align_DNA --dna #align
+ssu-mask marref_align_DNA --pf 0.001 --pt 0 #mask
+ssu-mask -a --stk2afa marref_align_DNA #stockholm > fasta
+hmmbuild marref.hmm marref_align_DNA/marref_align_DNA.bacteria.mask.stk #build HMM with bacterial 16S
+```
+
+## RAxML
+
+```{bash, eval=FALSE}
+conda install -c genomedk raxml-ng
+raxmlHPC -s sequence_file -n new_folder_name -m GTRGAMMA
+raxmlHPC -s marref_align_DNA.bacteria.mask.afa -n marref_tree_2 -m GTRGAMMA
+raxml-ng --evaluate --msa $REF_MSA --tree $TREE --prefix info --model GTR+G —threads 2
+```
+
+## Build and run HMM
+
+```{bash, eval=FALSE}
+#first align sequence file using https://www.ebi.ac.uk/Tools/msa/clustalo/ (choose stockholm alignment)
+hmmbuild output_file.hmm input_aligned_sequences.sto
+hmmer hmm_file.hmm fasta_input.fa > output_file.out
+```
+
+## Connect to server
+
+```{bash, eval=FALSE}
+ssh robyn@kronos.pharmacology.dal.ca
+ssh robyn@vulcan.pharmacology.dal.ca
+
+#pwd = standard ZA no !, private = standard Malay no !
+```
+
+## Install Anaconda and QIIME2 on Linux server
+
+```{bash, eval=FALSE}
+wget https://repo.anaconda.com/archive/Anaconda3-2019.10-Linux-x86_64.sh
+chmod +x Anaconda3-2019.10-Linux-x86_64.sh
+./ Anaconda3-2019.10-Linux-x86_64.sh
+
+conda update conda
+conda install wget
+
+wget https://data.qiime2.org/distro/core/qiime2-2020.2-py36-linux-conda.yml
+conda env create -n qiime2-2020.2 --file qiime2-2020.2-py36-linux-conda.yml
+rm qiime2-2020.2-py36-linux-conda.yml
+```
+
+
+## QIIME2/amplicon standard analysis {.tabset}
+
+### Quality control of reads
+
+```{bash, eval=FALSE}
+mkdir fastqc
+fastqc -t 4 path_to_folder/*.fastq.gz -o path_to_output_folder
+multiqc path_to_output_folder --filename multiqc.html -o path_to_multiqc_out_folder #--filename and -o are optional
+```
+
+### Import into QIIME2
+
+```{bash, eval=FALSE}
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path path_to_fastq_files/ \
+  --output-path reads.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime demux summarize \
+  --i-data reads.qza  \
+  --o-visualization summary_reads.qzv
+```
+
+### Run cutadapt
+
+```{bash, eval=FALSE}
+qiime cutadapt trim-paired \
+  --i-demultiplexed-sequences reads.qza \
+  --p-cores 8 \
+  --p-front-f GTGYCAGCMGCCGCGGTAA \
+  --p-front-r CCGYCAATTYMTTTRAGTTT \
+  --p-discard-untrimmed \
+  --p-no-indels \
+  --o-trimmed-sequences trimmed_reads.qza
+```
+
+
+Summarise:
+```{bash, eval=FALSE}
+qiime demux summarize \
+  --i-data trimmed_reads.qza  \
+  --o-visualization summary_trimmed_reads.qzv
+```
+
+### Run DADA2
+
+```{bash, eval=FALSE}
+mkdir dada2_out
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs trimmed_reads.qza \
+  --p-trunc-len-f 260 \
+  --p-trunc-len-r 160 \
+  --p-max-ee-f 2 \
+  --p-max-ee-r 2 \
+  --p-n-threads 8 \
+  --o-table dada2_out/table.qza \
+  --o-representative-sequences dada2_out/representative_sequences.qza \
+  --o-denoising-stats dada2_out/stats.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime metadata tabulate \
+  --m-input-file dada2_out/stats.qza \
+  --o-visualization stats_dada2_out.qzv
+  
+qiime feature-table summarize \
+  --i-table dada2_out/table.qza  \
+  --o-visualization summary_dada2_out.qzv
+```
+
+### Run Deblur
+
+Join paired end reads:
+```{bash, eval=FALSE}
+qiime vsearch join-pairs \
+  --i-demultiplexed-seqs reads_trimmed.qza \
+  --o-joined-sequences reads_joined.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime demux summarize \
+  --i-data reads_joined.qza \
+  --o-visualization summary_reads_joined.qzv
+```
+
+Filter low quality reads:
+```{bash, eval=FALSE}
+qiime quality-filter q-score-joined \
+  --i-demux reads_joined.qza \
+  --o-filter-stats filt_stats.qza \
+  --o-filtered-sequences reads_joined_filtered.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime demux summarize \
+  --i-data reads_joined_filtered.qza \
+  --o-visualization summary_reads_joined_filtered.qzv
+```
+
+Run deblur:
+```{bash, eval=FALSE}
+qiime deblur denoise-16S \
+  --i-demultiplexed-seqs reads_joined_filtered.qza \
+  --p-trim-length 402 \
+  --p-left-trim-len 0 \
+  --p-sample-stats \
+  --p-jobs-to-start 12 \
+  --p-min-reads 1 \
+  --output-dir deblur_output
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime feature-table summarize \
+  --i-table deblur_output_quality/table.qza  \
+  --o-visualization deblur_table_summary.qzv
+```
+
+### Merge tables and sequences (only if multiple runs/studies)
+
+```{bash, eval=FALSE}
+qiime feature-table merge \
+  --i-tables dada2_out1/table.qza \
+  --i-tables dada2_out2/table.qza \
+  --i-tables dada2_out3/table.qza \
+  --o-merged-table merged_table.qza
+  
+qiime feature-table merge-seqs \
+  --i-data dada2_out1/representative_sequences.qza \
+  --i-data dada2_out2/representative_sequences.qza \
+  --i-data dada2_out3/representative_sequences.qza \
+  --o-merged-data merged_representative_sequences.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime feature-table summarize \
+  --i-table merged_table.qza  \
+  --o-visualization merged_table_summary.qzv
+```
+
+### Classify features
+
+Can update classifier/download for the correct region [here](https://docs.qiime2.org/2020.6/data-resources/)
+```{bash, eval=FALSE}
+qiime feature-classifier classify-sklearn \
+  --i-reads merged_representative_sequences.qza \
+  --i-classifier /home/shared/taxa_classifiers/qiime2-2020.2_classifiers/classifier_silva_132_99_16S_V4.V5_515F_926R.qza \
+  --p-n-jobs 8 \
+  --output-dir taxa
+```
+
+Export:
+```{bash, eval=FALSE}
+qiime tools export \
+  --input-path taxa/classification.qza \
+  --output-path taxa
+```
+
+### Filter features
+
+I usually either use a minimum frequency of 10, or of 0.1% of the average frequency per sample (which is what 28 represents).
+
+```{bash, eval=FALSE}
+qiime feature-table filter-features \
+  --i-table merged_table.qza \
+  --p-min-frequency 28 \
+  --p-min-samples 1 \
+  --o-filtered-table merged_table_filtered.qza
+  
+qiime taxa filter-table \
+  --i-table merged_table_filtered.qza \
+  --i-taxonomy taxa/classification.qza \
+  --p-include D_1__ \
+  --p-exclude mitochondria,chloroplast \
+  --o-filtered-table merged_table_filtered_contamination.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime feature-table summarize \
+  --i-table merged_table_filtered_contamination.qza \
+  --o-visualization summary_merged_table_filtered_contamination.qzv
+```
+
+### Generate rarefaction curves
+
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+  --i-table merged_table_filtered_contamination.qza \
+  --p-max-depth 99645 \
+  --p-steps 20 \
+  --p-metrics 'observed_otus' \
+  --o-visualization merged_rarefaction_curves.qzv
+```
+
+### Filter and rarefy
+
+```{bash, eval=FALSE}
+qiime feature-table filter-samples \
+  --i-table merged_table_filtered_contamination.qza \
+  --p-min-frequency 5000 \
+  --o-filtered-table  merged_table_final.qza
+  
+qiime feature-table rarefy \
+  --i-table merged_table_final.qza \
+  --p-sampling-depth 5000 \
+  --o-rarefied-table merged_table_final_rarefied.qza
+  
+qiime feature-table filter-seqs \
+  --i-data merged_representative_sequences.qza \
+  --i-table merged_table_final_rarefied.qza \
+  --o-filtered-data  representative_sequences_final_rarefied.qza
+```
+
+### Insert sequences into tree
+
+```{bash, eval=FALSE}
+qiime fragment-insertion sepp \
+  --i-representative-sequences representative_sequences_final_rarefied.qza \
+  --i-reference-database ref_alignments/sepp-refs-silva-128.qza \
+  --o-tree insertion_tree_rarefied.qza \
+  --o-placements insertion_placements_rarefied.qza \
+  --p-threads 8
+```
+
+### Export all files
+
+```{bash, eval=FALSE}
+qiime tools export \
+  --input-path representative_sequences_final_rarefied.qza \
+  --output-path exports
+  
+sed -i -e '1 s/Feature/#Feature/' -e '1 s/Taxon/taxonomy/' taxa/taxonomy.tsv
+
+qiime tools export \
+  --input-path merged_table_final_rarefied.qza \
+  --output-path exports
+  
+biom add-metadata \
+  -i exports/feature-table.biom \
+  -o exports/feature-table_w_tax.biom \
+  --observation-metadata-fp taxa/taxonomy.tsv \
+  --sc-separated taxonomy
+  
+biom convert \
+  -i exports/feature-table_w_tax.biom \
+  -o exports/feature-table_w_tax.txt \
+  --to-tsv \
+  --header-key taxonomy
+  
+qiime tools export \
+  --input-path insertion_tree_rarefied.qza \
+  --output-path exports
+```
+
+## Downloading NCBI reads
+
+Following instructions from [here](https://www.michaelgerth.net/news--blog/how-to-efficiently-bulk-download-ngs-data-from-sequence-read-databases).
+
+Get Aspera connect:
+```{bash, eval=FALSE}
+wget https://download.asperasoft.com/download/sw/cli/3.9.2/ibm-aspera-cli-3.9.2.1426.c59787a-linux-64-release.sh
+chmod +x ibm-aspera-cli-3.9.2.1426.c59787a-linux-64-release.sh
+./ibm-aspera-cli-3.9.2.1426.c59787a-linux-64-release.sh
+export PATH=/home/robyn/.aspera/cli/bin:$PATH
+```
+
+Get the SRA toolkit (instructions [here](https://trace.ncbi.nlm.nih.gov/Traces/sra/sra.cgi?view=toolkit_doc&f=std)):
+```{bash, eval=FALSE}
+wget "ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sdk/current/sratoolkit.current-centos_linux64.tar.gz"
+tar -xzf sratoolkit.current-centos_linux64.tar.gz
+#rename and then add to path:
+echo $PATH
+export PATH=$PATH:/Users/robynwright/Documents/OneDrive/ACU_meta-analysis/sratoolkit/bin
+```
+
+Download reads (need an accession list .txt file for this):
+```{bash, eval=FALSE}
+prefetch --option-file Dussud\ Hudec\ et\ al.\ 2018/SRR_Acc_List.txt #adding the -X option allows adding a maximum file size (in kb) - this will be important for metagenomes
+#these files by default get added to an ncbi/sra/ folder in your home directory and can then be moved wherever you like
+for i in SRA/* ; do fastq-dump -split-files --gzip $i ; done
+```
+
+## Prokka
+
+```{bash, eval=FALSE}
+conda install -c conda-forge -c bioconda -c defaults prokka
+
+prokka --outdir path_to_output --prefix gene_name_prefix path_to_file.fasta
+```
+
+## CheckM
+
+```{bash, eval=FALSE}
+pip install pysam
+pip install checkm-genome
+wget https://data.ace.uq.edu.au/public/CheckM_databases/checkm_data_2015_01_16.tar.gz
+checkm data setRoot <checkm_data_dir>
+checkm
+
+checkm lineage_wf -t 8 -x fa bin_folder output_folder
+```
+
+## List size of files
+
+```{bash, eval=FALSE}
+du -h | sort -h
+su -sh
+```
+
+## Unzip files
+
+```{bash, eval=FALSE}
+gunzip raw_data/*gz
+tar -xf filename
+```
+
+## Kneaddata
+
+```{bash, eval=FALSE}
+pip install kneaddata
+
+#kneaddata_database --download ribosomal_RNA bowtie2 metaanalysis_metagenome/ref_databases
+```
+
+```{bash, eval=FALSE}
+parallel -j 2 --link 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/Trimmomatic-0.39/ \
+-t 40 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--fast --dovetail" --remove-intermediate-output' \
+ ::: raw_data/*_1.fastq.gz ::: raw_data/*_2.fastq.gz
+ 
+kneaddata_read_count_table --input kneaddata_out --output kneaddata_read_counts.txt
+```
+
+## Concatenate paired end reads
+
+```{bash, eval=FALSE}
+concat_paired_end.pl -p 4 --no_R_match -o cat_reads kneaddata_out/*_paired_*.fastq 
+LINES=`cat cat_reads/SRR8595494.fastq | wc -l`
+READS=`expr $LINES / 4`
+echo $READS
+```
+
+## HUMAnN2
+
+Download databases:
+```{bash, eval=FALSE}
+humann2_databases --download chocophlan full humann_database/
+humann2_databases --download uniref uniref90_diamond humann_database/
+humann2_databases --download uniref uniref50_diamond humann_database/
+```
+
+Run:
+```{bash, eval=FALSE}
+#single sample:
+humann2 --threads 8 --input cat_reads/SRR8595488.fastq --output humann2_out/ --protein-database humann_database/uniref/
+
+#multiple samples:
+parallel -j 4 'humann2 --threads 10 --input {} --output humann2_out_50/{/.} --protein-database humann_database/uniref_50/' ::: cat_reads/*fastq
+```
+
+Sort output log files (makes it easier to look at the number of unaligned reads):
+```{bash, eval=FALSE}
+mkdir humann2_log_90
+
+python
+import os
+samples = os.listdir('humann2_out_50')
+for sample in samples:
+    os.system('cp humann2_out_50/'+sample+'/'+sample+'_humann2_temp/'+sample+'.log humann2_log_50/')
+quit()
+```
+
+Combine output files:
+```{bash, eval=FALSE}
+mkdir humann2_final_out_90
+humann2_join_tables -s --input humann2_out_90/ --file_name pathabundance --output humann2_final_out_90/humann2_pathabundance.tsv
+humann2_join_tables -s --input humann2_out_90/ --file_name pathcoverage --output humann2_final_out_90/humann2_pathcoverage.tsv
+humann2_join_tables -s --input humann2_out_90/ --file_name genefamilies --output humann2_final_out_90/humann2_genefamilies.tsv
+```
+
+Combine metaphlan bugs lists:
+```{bash, eval=FALSE}
+mkdir humann2_final_out_50/bugs_lists/
+
+python
+
+import os
+samples = os.listdir('humann2_out_50')
+for sample in samples:
+    os.system('cp humann2_out_50/'+sample+'/'+sample+'_humann2_temp/'+sample+'_metaphlan_bugs_list.tsv humann2_final_out_50/bugs_lists/')
+
+quit()
+
+merge_metaphlan_tables.py humann2_final_out_50/bugs_lists/*tsv > humann2_final_out_50/metaphlan_merged.tsv
+rm -r humann2_final_out_50/bugs_lists
+```
+
+## HUMAnN3
+
+Install and get databases (note that conda didn't work):
+```{bash, eval=FALSE}
+pip install humann
+pip install metaphlan
+
+humann_databases --download chocophlan full humann_databases/humann3_databases/ --update-config yes
+humann_databases --download uniref uniref90_diamond humann_databases/humann3_databases/ --update-config yes
+humann_databases --download utility_mapping full humann_databases/humann3_databases/ --update-config yes
+```
+
+Get the correct DIAMOND version:
+```{bash, eval=FALSE}
+wget https://github.com/bbuchfink/diamond/releases/download/v0.9.24/diamond-linux64.tar.gz
+tar xvf diamond-linux64.tar.gz
+```
+
+Run HUMAnN3:
+```{bash, eval=FALSE}
+#single sample:
+humann --input human_metagenome/cat_reads/SRR8595488.fastq --output human_metagenome/humann3_out_90/ --threads 8
+
+#multiple samples:
+parallel -j 1 'humann --input {} --output human_metagenome/humann3_out_90/ --threads 12' ::: human_metagenome/cat_reads/*.fastq
+```
+
+Move the bugs lists, as for HUMAnN2 and then merge:
+```{bash, eval=FALSE}
+merge_metaphlan_tables.py humann3_final_out/bugs_lists/*tsv > humann3_final_out/metaphlan_merged.tsv
+rm -r humann2_final_out_50/bugs_lists
+```
+
+Combine output files:
+```{bash, eval=FALSE}
+humann_join_tables -s --input humann3_out_90/ --file_name pathabundance --output humann3_final_out/humann3_pathabundance.tsv
+humann_join_tables -s --input humann3_out_90/ --file_name pathcoverage --output humann3_final_out/humann3_pathcoverage.tsv
+humann_join_tables -s --input humann3_out_90/ --file_name genefamilies --output humann3_final_out/humann3_genefamilies.tsv
+```
+
+Renormalise files:
+```{bash, eval=FALSE}
+humann_renorm_table --input humann3_pathabundance.tsv --units relab --output humann3_pathabundance_relab.tsv
+humann_split_stratified_table --input humann3_pathabundance_relab.tsv --output ./
+
+humann_renorm_table --input humann3_genefamilies.tsv --units relab --output humann3_genefamilies_relab.tsv
+humann_split_stratified_table --input humann3_genefamilies_relab.tsv --output ./
+```
+
+We can then remove other intermediates if we want:
+```{bash, eval=FALSE}
+find . -name \*aligned.sam -type f -delete
+find . -name \*unaligned.fa -type f -delete
+find . -name \*aligned.tsv -type f -delete
+```
+
+Renormalise gene numbers (taking into account gene length):
+```{bash, eval=FALSE}
+humann_renorm_table --input humann3_genefamilies.tsv --output humann3_genefamilies_cpm.tsv --units cpm --update-snames
+```
+
+Regroup to a different functional category:
+```{bash, eval=FALSE}
+humann_regroup_table --input humann3_genefamilies_cpm.tsv --output humann3_genefamilies_cpm_ko_50.tsv --groups uniref50_ko
+humann_regroup_table --input humann3_genefamilies_cpm.tsv --output humann3_genefamilies_cpm_ko_90.tsv --groups uniref90_ko
+```
+
+## Kraken2
+
+Install kraken2:
+```{bash, eval=FALSE}
+wget http://github.com/DerrickWood/kraken2/archive/v2.0.8-beta.tar.gz
+tar -xf v2.0.8-beta.tar.gz
+cd kraken2-2.0.8-beta/
+./install_kraken2.sh kraken2_dir
+cp kraken2/kraken2-2.0.8-beta/kraken2_dir/kraken2 anaconda3/bin/
+cp kraken2/kraken2-2.0.8-beta/kraken2_dir/kraken2-build anaconda3/bin/
+cp kraken2/kraken2-2.0.8-beta/kraken2_dir/kraken2-inspect anaconda3/bin/
+```
+
+Get standard kraken2 databases (maybe if this ever works - some kind of NCBI issue currently):
+```{bash, eval=FALSE}
+kraken2-build --standard --db path_to_folder --protein --threads 24 --use-ftp
+```
+
+Get non-redundant protein database:
+```{bash, eval=FALSE}
+kraken2-build --download-library nr --db bac_protein --use-ftp --protein
+kraken2-build --db bac_protein/ --download-taxonomy --use-ftp
+kraken2-build --build --db bac_protein/ --threads 10
+```
+
+Get minikraken databases from [here](https://ccb.jhu.edu/software/kraken2/index.shtml?t=downloads)
+
+Get GTDB database:
+```{bash, eval=FALSE}
+wget files from here: http://ftp.tue.mpg.de/ebio/projects/struo/GTDB_release89/kraken2/
+wget http://ftp.tue.mpg.de/ebio/projects/struo/GTDB_release89/bracken/
+```
+
+Copy refseq complete into ramdisk:
+```{bash, eval=FALSE}
+#mount
+sudo mount -t ramfs none /scratch/ramdisk/
+sudo cp -a $DBNAME /ramdisk
+sudo cp -a /home/shared/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ /scratch/ramdisk/
+
+#unmount
+sudo umount /scratch/ramdisk
+```
+
+Run kraken2 (note that confidence parameter should always be set):
+```{bash, eval=FALSE}
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output kraken2_outraw_conf/{/.}.kraken.txt --report kraken2_kreport_conf/{/.}.kreport --confidence 0.1' ::: human_metagenome/cat_reads/*.fastq
+```
+I found [this tutorial](https://genomics.sschmeier.com/_downloads/0930752cfceffb98bc5fbc5d54dbd4bc/Genomics.pdf) helpful.
+
+Install bracken:
+```{bash, eval=FALSE}
+wget https://github.com/jenniferlu717/Bracken/archive/v2.5.tar.gz
+sh install_bracken.sh
+#Move all executables and source to bin
+```
+
+Run bracken:
+```{bash, eval=FALSE}
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_refseq/kraken2_kreport_conf/*.kreport
+```
+
+# Genbank uploads
+
+## Genbank genome submission
+
+1. Go to new genome submission at [this link](https://submit.ncbi.nlm.nih.gov/subs/genome/SUB5261114/submission_type)
+2. Select 'single genome'
+3. Fill in your details (it doesn't matter if you put in a group or not)
+4. Click 'no' to whether you already registered a BioProject or BioSample for this project
+5. You can then choose between 'release on a specified date' and release immediately (assuming nothing is too sensitive, I think it's easier to go with immediately so that you don't forget upon publication)
+6. For the assembly data: if you got the genome from MicrobesNG, then this was assembled using SPAdes, and I have put both dates as the month that you received the data from MicrobesNG. The genome coverage is listed on the MicrobesNG project page (Mean Coverage), and MicrobesNG use either MiSeq of HiSeq, so I have put MiSeq for the ‘Sequencing Technology’ (I think the .sqn file may actually have the assembly data, and it also gives the date that this was done in the automatic file name)
+7. 'Yes’ your sample includes the full genome, and ‘yes’ this is the final version. MicrobesNG do not use de novo assembly (they map the reads to a similar existing genome based on the taxonomy you give – so I just gave the genus name as the reference assembly), so ‘No’ to this and ‘no’ to being an update of an existing genome
+8. I gave the submission title as the name that I gave my bacterium, in this case Mycobacterium sp. DBP42
+9. For the public description, I gave a brief overview of what I aimed to do when I obtained this isolate, i.e. This study aimed to isolate bacteria that could grow using six common plasticizers (dibutyl phthalate, bis(2-ethyl hexyl phthalate), diisononyl phthalate, diisodecyl phthalate, acetyl tributyl citrate and trioctyl trimellitate) as a sole carbon source. This was narrowed down to two bacteria that appeared to be able to grow on all six plasticizers and their growth was characterised using proteomics.
+10.	I put that this is of Environmental relevance
+11.	I didn’t add a link or consortium name, but did put in my MIBTP grant details
+12.	For ‘Sample Type’, I selected: Genome, metagenome or marker sequences (MIxS compliant) > Cultured Bacterial/Archaeal Genomic Sequences MIGS > Water
+13.	For sample name, organism and strain, I put: DBP42; Mycobacterium sp.; Mycobacterium sp. DBP42
+Sometimes it doesn’t seem to be happy with the sample name, even though it tells you that you can put whatever you like, but it lets you go forward if you just click submit again, and so far I haven’t had problems further down the line from doing this!
+14.	Now input the data about where you collected the original samples that this was isolated from (hopefully you have this in your lab book! – Plymouth ones are July 2016) – if you hover over the question marks then they will give you examples, so I put for mine: Seawater biome; Nearshore; Seawater (these samples were from Plymouth Sound). For the location, you need the full country name, i.e. United Kingdom, not UK. Plymouth latitude and longitude: 50.3355 N 4.1527 W
+15.	For nucleic acid sequence source, I put ‘Enrichment’ for isolation and growth conditions, and ‘NA’ for number of replicons and reference for biomaterial (unless this is already published for you!)
+16.	Depth: 0m
+17.	I have put that the Bacteria and/or source DNA is available from Joseph, but I think it may also be available from MicrobesNG, if you have used them for the sequencing
+18.	I have then said ‘yes’ to annotating the file (as trying to add a file that you have annotated is ridiculously painful, and might even be impossible, but there are some instructions on that below, that may or may not work…)
+19.	On Files, click option 2 – chromosome is in one or more pieces (unless you are totally sure that you have a complete genome), and then choose Fasta
+20.	This should be a small file, so is fine to ‘upload now’. If you used Prokka, then this should be the .fsa file. 
+21.	No, you don’t have the AGP files. When you click continue after this, it should check the file for you.
+22.	If you now get an error message because there are contigs of below 200 nucleotides, you can just delete these from the end of the file. The contigs in the .fsa file are sorted by length anyway, and they say how long they are in the >contig name part. So then just repeat with your new file. (I haven’t had any other error messages).
+23.	Assignment: ‘No’ it’s not a complete chromosome, and ‘No’ no sequences belong to plasmid (unless you know they do, and can provide information on where the plasmids start and stop)
+24.	I then put in my name as the sequence author, gave the bacteria species name as the reference title, and said it was unpublished, and said reference authors were the same as sequence authors.
+25.	Now, submit! It will give you the project number fairly quickly (10 minutes or so), but will take longer for it to be finalized (especially if it needs curation). Now you can add something like: All sequences have been deposited in the NCBI Short Read Archive (SRA) database under Bioproject PRJNA499076.
+26.	Mine also came back with errors after submission, and I had to remove some of the shorter contigs, and a small sequence in one of the contigs that it said it thought were contamination. 
+27. It will give you the project number fairly quickly (10 minutes or so), but will take longer for it to be finalized (especially if it needs curation). Now you can add something like: All sequences have been deposited in the NCBI Short Read Archive (SRA) database under Bioproject PRJNA499076.
+
+## Genbank amplicon sequencing submission
+
+1. Go to the [sequence read archive submission portal](https://submit.ncbi.nlm.nih.gov/subs/sra/)
+2. Click ‘new submission’ (you can also leave the submissions half completed and come back to them here)
+3. Fill in your details (it doesn’t matter if you put in a group or not)
+4. Click ‘No’ to whether you already registered a BioProject or BioSample for this project
+5. You can then either click on ‘release on a specified date’, or release immediately (I think release immediately is easier, as it ensures that it will be available whenever you publish. 
+6. Enter a title, e.g. “Microbial community succession on PET”
+7. Provide a short description, e.g. “This project aimed to characterise microbial community succession on different types of poly(ethylene terephthalate) (PET), and the PET oligomer BHET, in laboratory incubation experiments.”
+8. I have then clicked that it is of environmental relevance
+9. I then put in my grant details, but leave the rest of this page blank.
+10. I then clicked “Metagenome or environmental sample”
+11. It is then easier to upload a file using excel, as I think it would take FOREVER to fill in online, but you do then need to be careful about how you fill in this form as it is very picky. I can provide an example of how this is filled in if necessary.
+Your sample name can be anything at this point – I stuck with the file name that the reads were from, so they are S1-S140. You can then give any descriptor (mine are e.g. RD01W1, which means it is day 1 of the ‘water’ or no carbon control). You don’t have a bioproject accession until you’ve completed this process, so leave that blank, the organism is ‘Community’ or ‘DNA extraction and sequencing control’ or something like this, N/A for host, isolation source seawater, collection date (should be in the e.g. Jul-2018 format), geographic location needs to be in the format: ‘United Kingdom: Porthcawl’, and then get the coordinates from google. Aerobe for relation to oxygen, DNA extraction method used in samp_mat_proc,, and then 1.5 ml for sample size. I put some more sample details in description, e.g. ‘PET succession - day 1 - no carbon control - replicate 1’. I also made a note here if this sample contains reads from another project, i.e. Mira’s and Craig’s 18S samples. Ref biomaterial won’t allow you to have the same for every sample, so I just put the same as is in description. 
+12. Now you can upload this file, and hopefully it will let you! It may give you a warning that it will need to be curated, but this shouldn’t be a problem. 
+13.	Next you have to do the metadata. This will be similar to the previous file, and will need to have the same names, as well as the additional info on sequencing instruments etc. Again, I have example files that I can send.
+The sample names should be the same as in the previous file, and the library ID can be the sample title. The title can then be the same as the description from the previous file.
+Library strategy – amplicon
+Library source – metagenomic
+Library selection – PCR
+Library layout – paired
+Platform – Illumina
+Instrument model – Illumina MiSeq
+Design description - Taxa PCR, magnetic bead cleanup, index PCR, normalisation, pooling 
+Filetype – fastq
+Filename and filename2 should then be the forward (R1) and reverse (R2) reads (I have a script that will give these in a new excel document if you want to use it – let me know)
+14.	Now upload this!
+15.	Now you will need to upload the files. They will probably be too big to just upload, so you’ll need to use the ‘FTP or Aspera Command Line file preload’. You’ll need to install [Aspera command line](https://downloads.asperasoft.com/en/downloads/62) for this and follow these commands:
+```{bash, eval=FALSE}
+chmod +x file_name
+./file_name
+export PATH=/Users/u1560915/Applications/Aspera\ CLI/bin:$PATH
+```
+16.	Click on the Aspera command line upload instructions (on SRA). Download the key file, put this in a sensible folder, and remove the .txt from the file name
+17.	Now use the link it gives you, e.g. 
+```{bash, eval=FALSE}
+ascp -i <path/to/key_file> -QT -l100m -k1 -d <path/to/folder/containing files>subasp@upload.ncbi.nlm.nih.gov:uploads/robynw371@gmail.com_qRm5Cf4h
+ascp -i SRA\ submission/aspera.openssh -QT -l100m -k1 -d raw_files/ subasp@upload.ncbi.nlm.nih.gov:uploads/robynw371@gmail.com_qRm5Cf4h
+```
+18.	Now you should see the files starting to upload, obviously this will probably take a while (especially if you use uncompressed files, like me)… and you will probably need to wait a little while again before they are visible online. 
+
+# Python
+
+## Plotting
+
+Open figure:
+```{python, eval=FALSE}
+plt.figure(figsize=(10,10))
+plt.suptitle('Overall figure title')
+```
+
+Save figure:
+```{python, eval=FALSE}
+plt.savefig('Means+errors.pdf', bbox_extra_artists=(lgd,), bbox_inches='tight', dpi=600)
+```
+
+Add legend:
+```{python, eval=FALSE}
+ax1.legend(handles=handles, bbox_to_anchor=(1, 1.02), loc='upper left', fontsize=fontsize, ncol=2)
+```
+
+Add second y axis that shares x:
+```{python, eval=FALSE}
+ax2 = ax1.twinx()
+```
+
+Add a subplot (these all add the same axis):
+```{python, eval=FALSE}
+ax3 = plt.add_subplot(222)
+ax3 = plt.subplot2grid((2,2), (0,1))
+ax3 = plt.subplot(2,2,1)
+```
+
+Barplot with errorbars:
+```{python, eval=FALSE}
+barplot = plt.bar(plottingx_w1, vials_w1[0], yerr=vials_w1_std[0], color='b', error_kw=dict(ecolor='gray', lw=1, capsize=3, capthick=1))
+```
+
+Remove y labels and ticks:
+```{python, eval=FALSE}
+plt.setp(ax4.get_yticklabels(), visible=False)
+ax4.tick_params(axis='both', which='right', length=0)
+```
+
+Change tick colors:
+```{python, eval=FALSE}
+for xtick, color in zip(ax1.get_xticklabels(), colors):
+    xtick.set_color(color)
+```
+
+Change tick labels:
+```{python, eval=FALSE}
+plt.setp(ax1, xticks=nums, xticklabels=names)
+plt.xticks(nums, names, rotation=90, fontsize=fontsize)
+```
+
+Plot stacked bar:
+```{python, eval=FALSE}
+data = numpy.array(numbers)
+bottom = numpy.cumsum(data, axis=0)
+colors = get_distinct_colors(count)
+ax1.bar(nums, data[0], color=colors[0], label=OTU[0])
+for j in xrange(1, data.shape[0]):
+    ax1.bar(nums, data[j], color=colors[j], bottom=bottom[j-1], label=OTU[j])
+```
+
+Random plotting:
+```{python, eval=FALSE}
+plt.sca(ax1)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0, wspace=0)
+handles1 = [Patch(facecolor=colors_dict[color], edgecolor='k', label=color) for color in colors_dict]
+ax1.scatter(strain_npos[a,0], strain_npos[a,1], marker=shapes[a], color=colors[a], s=100)
+```
+
+NMDS plot:
+```{python, eval=FALSE}
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+```
+
+Get unique colors:
+```{python, eval=FALSE}
+def get_cols(num):
+    colormap_20, colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20', 256), mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+    norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+    m1, m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_20), mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+    colors_20 = [m1.to_rgba(a) for a in range(20)]
+    colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+    if num < 21: return colors_20
+    elif num < 41: return colors_40
+    else: return colors_40+colors_40+colors_40
+```
+
+Plot text:
+```{python, eval=FALSE}
+ax1.text(0.5, 0.5, sample_names[x], color=colors[x], rotation=90, va='top', ha='center', transform=ax1.transAxes)
+```
+
+## Numbers and text
+
+Get a number to a specific number of decimal places:
+```{python, eval=FALSE}
+float("{0:.4f}".format(r_value**2))
+```
+
+Print special text:
+```{python, eval=FALSE}
+print(r'$h^{-1}$')
+print(r'$x_y$')
+print(r'$\mu$')
+```
+
+Split a string:
+```{python, eval=FALSE}
+string.split('|s__')[0].split('|g__')[1]
+```
+
+Replace part of a string:
+```{python, eval=FALSE}
+string.replace('_', ' ')
+```
+
+Remove whitespace characters from the beginning of a string:
+```{python, eval=FALSE}
+string.lstrip()
+```
+
+## Reading and writing files
+
+Read a file that is tab separated (default is comma separated):
+```{python, eval=FALSE}
+with open(file_name, 'rU') as f:
+  rows = []
+  for row in csv.reader(f, delimiter='\t'):
+    rows.append(row)
+```
+
+Write a file:
+```{python, eval=FALSE}
+rows = []
+with open(file_name, 'w') as f:
+  writer = csv.writer(f)
+  for row in rows:
+    writer.writerow(row)
+```
+
+## Pandas
+
+Open file:
+```{python, eval=FALSE}
+df = pd.read_csv(file_name, header=0, index_col=0, sep='\t')
+```
+
+Save file:
+```{python, eval=FALSE}
+df.to_csv(file_name)
+```
+
+Drop unwanted columns (using axis=0 will drop index):
+```{python, eval=FALSE}
+df.drop(['col1', 'col2'], axis=1, inplace=True)
+```
+
+Rename index/columns:
+```{python, eval=FALSE}
+df.rename(columns=col_dict, index=ind_dict, inplace=True)
+```
+
+Get rows or columns with only those above a certain value included:
+```{python, eval=FALSE}
+df = df[df.max(axis=1) > 1]
+```
+
+Get a list of column or index names:
+```{python, eval=FALSE}
+columns = list(df.columns)
+rows = list(df.index.values)
+```
+
+Get all values from a certain row:
+```{python, eval=FALSE}
+df.loc['k__Viruses', :].values
+```
+
+Get the value from a certain dataframe cell:
+```{python, eval=FALSE}
+df.loc[s, 'Participant']
+```
+
+Make a dataframe (in this case, using only the values from a certain column of an existing dataframe):
+```{python, eval=FALSE}
+df = pd.DataFrame(reads.loc[:, 'cat_reads'], columns=sample_names)
+```
+
+Get more than one column:
+```{python, eval=FALSE}
+reads_remain = reads.loc[:, ['Percentage', 'cat_reads']].rename(index=full_name_dict, columns = {'cat_reads':'Number'})
+```
+
+Transpose the dataframe:
+```{python, eval=FALSE}
+df.transpose()
+```
+
+Group together rows with the same name (this takes a sum, you could easily also use mean, median, etc.):
+```{python, eval=FALSE}
+genus = genus.groupby(by=genus.index, axis=0).sum()
+```
+
+Add together dataframes, filling unknown values with 0:
+```{python, eval=FALSE}
+all_genus = pd.concat(all_genus, axis=1, join='outer').fillna(value=0)
+```
+
+Get relative abundance:
+```{python, eval=FALSE}
+db = db.divide(sums, axis=1).multiply(100)
+```
+
+Get sum (of columns):
+```{python, eval=FALSE}
+sums = db.sum(axis=0)
+```
+
+## Stats
+
+Get gradient, intercept and R2 of a line:
+```{python, eval=FALSE}
+gradient, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+r2 = r_value**2
+```
+
+Binomial test (how likely is it that we get 0 of 10 with out binomial outcome given that the chance is 50/50, or 0.5):
+```{python, eval=FALSE}
+scipy.stats.binom_test(0, 10, p=0.5)
+```
+
+T-test:
+```{python, eval=FALSE}
+T, p = stats.ttest_ind(group1, group2)
+```
+
+Log2 fold change:
+```{python, eval=FALSE}
+math.log2(c1), math.log2(c2)
+diff = c2-c1
+if diff < 1 and diff > 0: diff = -(1/diff)
+```
+
+## Basic python functions
+
+Get the names of the 3 largest scores
+```{python, eval=FALSE}
+heapq.nlargest(3, zip(score, name))
+```
+
+Single line for loops:
+```{python, eval=FALSE}
+sample_names = [participant_dict[name]+' '+site_dict[name] for name in samples]
+elem = 'two' if 'two' in my_list else None
+[(i) for i in my_list if i=="two"]
+[ x if x%2 else x*100 for x in range(1, 10) ]
+```
+
+os functions:
+```{python, eval=FALSE}
+os.path.isdir()
+os.chdir()
+os.listdir()
+os.system()
+```

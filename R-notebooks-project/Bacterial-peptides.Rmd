@@ -1,0 +1,117 @@
+---
+title: "MHC Class I bacterial immuno-peptides"
+output:
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{R, setup_r, results='hide', include=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(exactRankTests)
+library(nlme)
+library(dplyr)
+library(ggplot2)
+library(compositions)
+library(vegan)
+library(phyloseq)
+library(ape)
+
+opts_knit$set(root.dir = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/')
+#reticulate::py_config()
+```
+
+```{python, setup_python, results='hide', include=FALSE}
+import os
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
+from Bio.Alphabet import IUPAC
+import pandas as pd
+import csv
+import numpy as np
+import math
+from matplotlib.lines import Line2D
+import matplotlib as mpl
+from matplotlib.patches import Patch
+import matplotlib.pyplot as plt
+import pickle
+import random
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+import statsmodels.stats.multitest as sm
+```
+
+## Initial setup {.tabset}
+
+These lines of code just take the protein sequences from the supplied .tsv file and convert them to a .fasta file that contains each peptide names with a number and the description taken from the previous sample name.
+
+```{python, convert_fasta, results='hide', cache=TRUE}
+peptides = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/wetransfer-6c2cc0/denovo_peptide_bacteria.tsv', header=0, index_col=0, sep='\t')
+names = list(peptides.index.values)
+pep_list = list(peptides.loc[:, 'peptide'].values)
+sequences = []
+for n in range(len(names)):
+  record = SeqRecord(Seq(pep_list[n], IUPAC.protein),id='peptide'+str(n+1), description=names[n])
+  sequences.append(record)
+SeqIO.write(sequences, "/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/peptide_sequences.fasta", "fasta")
+```
+
+### More information on initial setup
+
+These tabs are really so I can keep a record of what I did, and only of interest if you like reading about installation issues.
+
+### Build Kraken2 protein database
+
+Note that these were run on a server and not locally, I just have these lines here to save the code used. 
+I've had problems downloading the standard kraken2 database, and I think this seems to be linked to having NA's in the NCBI taxonomy, but I get the error:
+```{bash, eval=FALSE}
+kraken2-build --download-library bacteria --db bac_protein --use-ftp #didn't work
+Step 1/2: Performing ftp file transfer of requested files
+rsync_from_ncbi.pl: FTP connection error: Network is unreachable
+```
+even after the edits to the rsync_from_ncbi.pl script, as suggested in [this issue](https://github.com/DerrickWood/kraken/issues/114) AND as suggested in [this issue](https://github.com/DerrickWood/kraken/issues/142).
+
+Running the standard library build on kronos didnn't work either:
+```{bash, eval=FALSE}
+wget http://github.com/DerrickWood/kraken2/archive/v2.0.8-beta.tar.gz
+tar -xf v2.0.8-beta.tar.gz
+cd kraken2-2.0.8-beta/
+./install_kraken2.sh kraken2_dir
+cp kraken2/kraken2-2.0.8-beta/kraken2_dir/kraken2 anaconda3/bin/
+cp kraken2/kraken2-2.0.8-beta/kraken2_dir/kraken2-build anaconda3/bin/
+cp kraken2/kraken2-2.0.8-beta/kraken2_dir/kraken2-inspect anaconda3/bin/
+kraken2-build --standard --db path_to_folder --protein --threads 24 --use-ftp
+```
+Output (before and after editing the rsync_from_ncbi.pl script, as above):
+```{bash, eval=FALSE}
+Downloading taxonomy tree data... done.
+Untarring taxonomy tree data... done.
+Step 1/2: Performing ftp file transfer of requested files
+Step 2/2: Assigning taxonomic IDs to sequences
+Processed 377 projects (934707 sequences, 269.17 Maa)... done.
+All files processed, cleaning up extra sequence files... done, library complete.
+Masking low-complexity regions of downloaded library... done.
+rsync_from_ncbi.pl: unexpected FTP path (new server?) for na
+```
+
+So I have gone with the non-redundant protein database for now:
+```{bash, eval=FALSE}
+kraken2-build --download-taxonomy --db bac_protein --use-ftp
+kraken2-build --download-library nr --db bac_protein --use-ftp --protein
+kraken2-build --db bac_protein/ --download-taxonomy --use-ftp
+kraken2-build --build --db bac_protein/ --threads 10
+```
+
+## Run Kraken2
+
+This is the code used to run Kraken2 using the fasta file created above and the protein database downloaded.
+
+```{bash, eval=FALSE}
+kraken2 --db bac_protein peptides/peptide_sequences.fasta --threads 10 --confidence 0.1 --output peptides/kraken2_out/peptide_sequences.out
+```

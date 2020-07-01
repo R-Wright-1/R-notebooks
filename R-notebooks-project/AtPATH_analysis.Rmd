@@ -1,0 +1,365 @@
+---
+title: "Atlantic PATH microbiome analysis"
+output:
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{R, setup_r, results='hide', include=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(exactRankTests)
+library(nlme)
+library(dplyr)
+library(ggplot2)
+library(compositions)
+library(vegan)
+library(phyloseq)
+library(ape)
+
+opts_knit$set(root.dir = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/AtlanticPATH/')
+#reticulate::py_config()
+```
+
+```{python, setup_python, results='hide', include=FALSE}
+import os
+import pandas as pd
+import csv
+import numpy as np
+import math
+from matplotlib.lines import Line2D
+import matplotlib as mpl
+from matplotlib.patches import Patch
+import matplotlib.pyplot as plt
+import pickle
+import random
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+import statsmodels.stats.multitest as sm
+```
+
+# Summary
+
+These samples are collected by [Atlantic PATH](http://www.atlanticpath.ca/) and we have data for the saliva microbiomes - as well as numerous other data on their health and lifestyles - of 1505 participants from across Atlantic Canada. These samples included paired cases/controls for different types of cancer. The microbiome analysis included sequencing with the V4-V5 16S rRNA gene primers 515FB and 926R. Further processing was performed using the DADA2 pipeline in QIIME2 v2020.2 (i.e. Cutadapt, denoising and merging of paired end reads using DADA2, samples from different sequencing runs were then merged, classified taxonomically using a naive bayesian classifier with the Silva v132 database and insertion into the Silva v128 phylogeny using SEPP). All samples were rarefied to a depth of 5000 reads, with all samples with below this number being removed. 
+
+The sequencing of 87 of these samples (that came from one DNA extraction) was repeated as the ASV richness was much higher than for the other DNA extractions.
+
+## Summary of participants paired data {.tabset}
+
+I'll probably come back to this and add more at some point, once I have a better idea of what's relevant. 
+
+### Cases and controls for each cancer type
+
+This is a summary of the numbers of cases and controls for each cancer type. Note the different scales between the top and the bottom of the plot here.
+
+```{python, summary_participants, results='hide', fig.keep='all'}
+metadata = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/AtlanticPATH/metadata.csv', header=0, index_col=0)
+samples = list(metadata.index.values)
+repeated = []
+for sample in samples:
+  if '-2' in sample:
+    if sample.replace('-2', '') in samples:
+      repeated.append(sample.replace('-2', ''))
+cases_cols = {1: '#B82201', 0: '#2980B9'}
+metadata_single = metadata.drop(repeated, axis=0)
+cancer_types = sorted(list(set(metadata_single.loc[:, 'Cancer.Type'].values)))
+ax1 = plt.subplot2grid((4,8), (0,0), colspan=7)
+ax2 = plt.subplot2grid((4,8), (1,0), colspan=7)
+count = 0
+xplc, names = [], []
+all_sum = 0
+cancer_df = []
+for ctype in cancer_types:
+  ctype_md = metadata_single.loc[metadata_single['Cancer.Type'] == ctype]
+  cancer_df.append(ctype_md)
+  all_sum += ctype_md.shape[0]
+  ax1.bar(count, ctype_md.loc[ctype_md['Case.Control'] == 1].shape[0], color=cases_cols[1], edgecolor='k', width=0.9)
+  ax1.bar(count+1, ctype_md.loc[ctype_md['Case.Control'] == 0].shape[0], color=cases_cols[0], edgecolor='k', width=0.9)
+  ax2.bar(count, ctype_md.loc[ctype_md['Case.Control'] == 1].shape[0], color=cases_cols[1], edgecolor='k', width=0.9)
+  ax2.bar(count+1, ctype_md.loc[ctype_md['Case.Control'] == 0].shape[0], color=cases_cols[0], edgecolor='k', width=0.9)
+  xplc.append(count+0.5)
+  count += 3
+  names.append(ctype.replace('/', '\n'))
+ax1.spines['bottom'].set_visible(False)
+ax2.spines['top'].set_visible(False)
+ax1.set_ylim([50, 800])
+ax2.set_ylim([0, 50])
+plt.sca(ax1)
+plt.xticks([])
+plt.sca(ax2)
+handles = [Patch(facecolor=cases_cols[1], edgecolor='k', label='Cases'), Patch(facecolor=cases_cols[0], edgecolor='k', label='Controls')]
+ax1.legend(handles=handles, loc='upper left', bbox_to_anchor=(1, 1.02))
+ax1.text(-0.1, 0, 'Number of participants', ha='center', va='center', transform = ax1.transAxes, rotation=90)
+plt.xticks(xplc, names, rotation=90)
+plt.yticks([0, 20, 40, 50])
+#plt.semilogy()
+plt.subplots_adjust(hspace=0.01)
+plt.show()
+```
+
+```{python, summary_participants_single_plot, results='hide', fig.keep='all'}
+plot_variables = ['Extraction_Number', 'Combined_Walk', 'Combined_Total_Mod', 'Combined_Total_Vig', 'A_SDC_AGE_CALC', 'PM_STANDING_HEIGHT_AVG', 'PM_BIOIMPED_WEIGHT', 'PM_BIOIMPED_BMI', 'PM_WAIST_AVG', 'PM_HIP_AVG', 'S_SLE_TIME', 'A_SLE_TROUBLE_FREQ']
+variab_dict = {'Extraction_Number':'Extraction\nnumber', 'Combined_Walk':'Minutes\nwalking', 'Combined_Total_Mod':'Minutes\nmoderate\nexercise', 'Combined_Total_Vig':'Minutes\nvigorous\nexercise', 'A_SDC_AGE_CALC':'Age', 'PM_BIOIMPED_BMI':'BMI', 'PM_WAIST_AVG':'Waist size', 'PM_HIP_AVG':'Hip size', 'S_SLE_TIME':'Daily sleep', 'PM_STANDING_HEIGHT_AVG':'Height', 'PM_BIOIMPED_WEIGHT':'Weight', 'A_SLE_TROUBLE_FREQ':'Sleeping\ntrouble\nfrequency', 'A_ALC_CUR_FREQ':'Frequency\nalcohol\nconsumed'}
+handles = [Patch(facecolor=cases_cols[1], edgecolor='k', label='Cases'), Patch(facecolor=cases_cols[0], edgecolor='k', label='Controls')]
+def adjacent_values(vals, q1, q3):
+    upper_adjacent_value = q3 + (q3 - q1) * 1.5
+    upper_adjacent_value = np.clip(upper_adjacent_value, q3, vals[-1])
+
+    lower_adjacent_value = q1 - (q3 - q1) * 1.5
+    lower_adjacent_value = np.clip(lower_adjacent_value, vals[0], q1)
+    return lower_adjacent_value, upper_adjacent_value
+    
+def get_single_cancer_plot_md(ctype, md):
+  plt.figure(figsize=(10,10))
+  ax = []
+  for a in range(5):
+    for b in range(5):
+      if a > 2:
+        continue
+      if a == 2 and b > 1:
+        continue
+      ax.append(plt.subplot2grid((5,5), (a,b)))
+  ax[4].legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1.02))
+  cases = pd.DataFrame(md.loc[md['Case.Control'] == 1])
+  controls = pd.DataFrame(md.loc[md['Case.Control'] == 0])
+  for a in range(len(plot_variables)):
+    ax[a].set_title(variab_dict[plot_variables[a]])
+    this_case = list(cases.loc[:, plot_variables[a]].values)
+    this_controls = list(controls.loc[:, plot_variables[a]].values)
+    cleaned_cases = [x for x in this_case if str(x) != 'nan']
+    cleaned_controls = [x for x in this_controls if str(x) != 'nan']
+    if plot_variables[a] == 'Extraction_Number':
+      cleaned_cases = [int(x.replace('Extraction.', '')) for x in cleaned_cases]
+      cleaned_controls = [int(x.replace('Extraction.', '')) for x in cleaned_controls]
+    data = [cleaned_cases, cleaned_controls]
+    parts = ax[a].violinplot(data, showmeans=False, showmedians=False, showextrema=False)
+    colors=[cases_cols[1], cases_cols[0]]
+    count = 0
+    for pc in parts['bodies']:
+      pc.set_facecolor(colors[count])
+      pc.set_edgecolor('black')
+      pc.set_alpha(1)
+      count += 1
+    quartile1, medians, quartile3 = np.percentile(cleaned_cases, [25, 50, 75])
+    quartile1_con, medians_con, quartile3_con = np.percentile(cleaned_controls, [25, 50, 75])
+    whiskers = adjacent_values(cleaned_cases, quartile1, quartile3)
+    whiskers_con = adjacent_values(cleaned_controls, quartile1_con, quartile3_con)
+    whiskersMin, whiskersMax = whiskers[0], whiskers[1]
+    inds = np.arange(1, 1 + 1)
+    inds_con = np.arange(2, 2 + 1)
+    whiskersMin_con, whiskersMax_con = whiskers_con[0], whiskers_con[1]
+    ax[a].scatter(inds, medians, marker='o', color='white', s=30, zorder=3)
+    ax[a].scatter(inds_con, medians_con, marker='o', color='white', s=30, zorder=3)
+    ax[a].vlines(inds, quartile1, quartile3, color='k', linestyle='-', lw=5)
+    ax[a].vlines(inds, whiskersMin, whiskersMax, color='k', linestyle='-', lw=1)
+    ax[a].vlines(inds_con, quartile1_con, quartile3_con, color='k', linestyle='-', lw=5)
+    ax[a].vlines(inds_con, whiskersMin_con, whiskersMax_con, color='k', linestyle='-', lw=1)
+    plt.sca(ax[a])
+    plt.xticks([])
+  return
+```
+
+### Breast Cancer
+
+```{python, summary_participants_breast, results='hide', fig.keep='all', cache=TRUE}
+get_single_cancer_plot_md(cancer_types[0], cancer_df[0])
+plt.tight_layout()
+plt.show()
+```
+
+### Colon
+
+```{python, summary_participants_colon, results='hide', fig.keep='all', cache=TRUE}
+get_single_cancer_plot_md(cancer_types[4], cancer_df[4])
+plt.tight_layout()
+plt.show()
+```
+
+### IBD
+
+```{python, summary_participants_IBD, results='hide', fig.keep='all', cache=TRUE}
+get_single_cancer_plot_md(cancer_types[6], cancer_df[6])
+plt.tight_layout()
+plt.show()
+```
+
+### Prostate
+
+```{python, summary_participants_prostate, results='hide', fig.keep='all', cache=TRUE}
+get_single_cancer_plot_md(cancer_types[7], cancer_df[7])
+plt.tight_layout()
+plt.show()
+```
+
+## Summary of sequencing data {.tabset}
+
+### Rarefaction curves
+
+The data used to plot these curves is exported from QIIME2's alpha rarefaction command. After this, samples from Extraction 16 were removed.
+
+```{python, rarefaction_curves, results='hide', fig.keep='all', cache=TRUE}
+rare = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/AtlanticPATH/QIIME2_processing/summary/observed_otus_rarefaction.csv', header=0, index_col=0)
+extract = list(rare.loc[:, 'Extraction_Number'].values)
+rare = rare.drop(['Row.names', 'Cancer.Type', 'Case.Control', 'BC_case_control', 'Prostate_case_control', 'Colon_case_control', 'Ibd_case_control', 'Birthyear', 'Extraction_Number'], axis=1)
+rare = rare.fillna(value=0)
+cols = list(rare.columns)
+col_dict = {}
+for c in cols:
+  col_dict[c] = int(c.split('_')[0].split('-')[1])
+rare.rename(columns=col_dict, inplace=True)
+rare = rare.groupby(by=rare.columns, axis=1).mean().astype(int)
+extracts = ['Extraction.1', 'Extraction.2', 'Extraction.3', 'Extraction.4', 'Extraction.5', 'Extraction.6', 'Extraction.7', 'Extraction.8', 'Extraction.9', 'Extraction.10', 'Extraction.11', 'Extraction.12', 'Extraction.13', 'Extraction.14', 'Extraction.15', 'Extraction.16', 'Extraction.17']
+norm = mpl.colors.Normalize(vmin=0, vmax=19)
+m = mpl.cm.ScalarMappable(norm=norm, cmap='tab20')
+col_names = list(rare.columns)
+
+plt.figure(figsize=(12,6))
+ax1 = plt.subplot(111)
+
+for e in range(len(extracts)):
+  rows = []
+  snames = list(rare.index.values)
+  for sn in range(len(snames)):
+    if extract[sn] == extracts[e]:
+      rows.append(list(rare.loc[snames[sn], :].values))
+  this_curve = []
+  for a in range(len(rows[0])):
+    nums = []
+    for b in range(len(rows)):
+      if rows[b][a] > 0:
+        nums.append(rows[b][a])
+    if len(nums) > 0:
+      this_curve.append(int(np.mean(nums)))
+  ax1.plot(col_names[:len(this_curve)], this_curve, 'o-', color=m.to_rgba(e), label=extracts[e].replace('.', ' '))
+ax1.legend(loc='upper left', bbox_to_anchor=(1,1.02))
+ax1.set_ylabel('Observed ASVs')
+ax1.set_xlabel('Sequencing depth')
+plt.tight_layout()
+plt.show()
+```
+
+```{python, sequencing_setup, results='hide'}
+ft_raw = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/AtlanticPATH/QIIME2_processing/exports/feature-table_w_tax.txt', header=0, index_col=0, sep='\t')
+for a in range(len(repeated)):
+  try:
+    ft_raw.drop([repeated[a]], axis=1, inplace=True)
+  except:
+    wasnt_in_df = True
+tax_dict = {}
+tax_list = []
+for otu in list(ft_raw.index.values):
+  tax_dict[otu] = ft_raw.loc[otu, 'taxonomy']
+  this_list = ft_raw.loc[otu, 'taxonomy'].split(';')
+  if this_list[-1] != ' Ambiguous_taxa':
+    last = 'Unclassified '+this_list[-1].split('__')[1]
+  else:
+    last = this_list[-1]
+  for a in range(7):
+    if len(this_list) < a+1:
+      this_list.append('D_'+str(a)+'__'+last)
+  tax_list.append([otu]+this_list)
+with open('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/AtlanticPATH/QIIME2_processing/analysis/tax_dict.dictionary', 'wb') as f: pickle.dump(tax_dict, f)
+ft_raw.drop(['taxonomy'], axis=1, inplace=True)
+ft_raw.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/AtlanticPATH/QIIME2_processing/exports/feature-table.csv')
+tax = pd.DataFrame(tax_list[1:], columns=['ASV', 'Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species'])
+tax = tax.set_index('ASV')
+```
+
+```{R, import_phyloseq}
+asv_table <- as.matrix(py$ft_raw)
+taxonomy <- as.matrix(py$tax)
+metadata <- read.csv("/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/AtlanticPATH/metadata_edit.csv", sep=",", row.names=1)
+phy_tree <- read_tree("/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/AtlanticPATH/QIIME2_processing/exports/tree.nwk")
+physeq <- phyloseq(otu_table(asv_table, taxa_are_rows = TRUE), sample_data(metadata), tax_table(taxonomy), phy_tree)
+
+taxGlomRank = "Genus"
+physeq_genus = tax_glom(physeq, taxrank = taxGlomRank)
+
+prevalenceThreshold = 0.05 * nsamples(physeq)
+prev = apply(X = otu_table(physeq), MARGIN = ifelse(taxa_are_rows(physeq), yes = 1, no = 2), FUN = function(x){sum(x > 0)})
+physeq_prev = prune_taxa((prev > prevalenceThreshold), physeq)
+
+prev_genus = apply(X = otu_table(physeq_genus), MARGIN = ifelse(taxa_are_rows(physeq_genus), yes = 1, no = 2), FUN = function(x){sum(x > 0)})
+physeq_prev_genus = prune_taxa((prev_genus > prevalenceThreshold), physeq_genus)
+```
+
+### PCoA plots (ASV level)
+
+**Weighted unifrac**
+
+```{R, plot_pca_asv_wuf, cache=TRUE}
+wuf <- ordinate(physeq, method="PCoA", distance="wunifrac")
+plot_ordination(physeq, wuf, type="samples", color="Cancer.Type.Healthy")
+```
+
+**Unweighted unifrac**
+
+```{R, plot_pca_asv_uwuf, cache=TRUE}
+uwuf <- ordinate(physeq, method="PCoA", distance="uwunifrac")
+plot_ordination(physeq, uwuf, type="samples", color="Cancer.Type.Healthy")
+```
+
+### PCoA plots (genus level)
+
+**Weighted unifrac**
+
+```{R, plot_pca_genus_wuf, cache=TRUE}
+wuf_genus <- ordinate(physeq_genus, method="PCoA", distance="wunifrac")
+plot_ordination(physeq_genus, wuf_genus, type="samples", color="Cancer.Type.Healthy")
+```
+
+**Unweighted unifrac**
+
+```{R, plot_pca_genus_uwuf, cache=TRUE}
+uwuf_genus <- ordinate(physeq_genus, method="PCoA", distance="uwunifrac")
+plot_ordination(physeq_genus, uwuf_genus, type="samples", color="Cancer.Type.Healthy")
+```
+
+### PCoA plots (ASV level, prevalence filtered)
+
+Here I removed ASVs if they weren't in at least 5% of samples, which significantly reduced the number of ASVs (from ~13,000 to ~400).
+
+**Weighted unifrac**
+
+```{R, plot_pca_asv_wuf_prev, cache=TRUE}
+wuf_prev <- ordinate(physeq_prev, method="PCoA", distance="wunifrac")
+plot_ordination(physeq_prev, wuf_prev, type="samples", color="Cancer.Type.Healthy")
+```
+
+**Unweighted unifrac**
+
+```{R, plot_pca_asv_uwuf_prev, cache=TRUE}
+uwuf_prev <- ordinate(physeq_prev, method="PCoA", distance="uwunifrac")
+plot_ordination(physeq_prev, uwuf_prev, type="samples", color="Cancer.Type.Healthy")
+```
+
+### PCoA plots (Genus level, prevalence filtered)
+
+Here I removed genera if they weren't in at least 5% of samples, which significantly reduced the number of genera present (from ~1,600 to ~100).
+
+**Weighted unifrac**
+
+```{R, plot_pca_genus_wuf_prev, cache=TRUE}
+wuf_prev_genus <- ordinate(physeq_prev_genus, method="PCoA", distance="wunifrac")
+plot_ordination(physeq_prev_genus, wuf_prev_genus, type="samples", color="Cancer.Type.Healthy")
+```
+
+**Unweighted unifrac**
+
+```{R, plot_pca_genus_uwuf_prev, cache=TRUE}
+uwuf_prev_genus <- ordinate(physeq_prev_genus, method="PCoA", distance="uwunifrac")
+plot_ordination(physeq_prev_genus, uwuf_prev_genus, type="samples", color="Cancer.Type.Healthy")
+```
+
+### Taxa in different sample types
+
+```{R, plot_tree_genera_prev}
+merged_genus = merge_samples(physeq_prev_genus, "Cancer.Type.Healthy")
+merged_genus
+plot_tree(merged_genus, ladderize=TRUE, color="Cancer.Type.Healthy", label.tips="Genus", sizebase=1)
+```

@@ -1,0 +1,44 @@
+---
+title: "Impact of DNA source on genetic variant detection from human whole-genome sequencing data"
+subtitle: "Microbiome taxonomic and functional analysis"
+output:
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{R setup_r, include=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(exactRankTests)
+library(nlme)
+library(dplyr)
+library(ggplot2)
+library(compositions)
+
+opts_knit$set(root.dir = '/Users/robynwright/Documents/OneDrive/Github/Human_metagenome/')
+#reticulate::py_config()
+```
+```{python, results='hide'}
+import os
+import pandas as pd
+import csv
+import numpy as np
+import math
+from matplotlib.lines import Line2D
+import matplotlib as mpl
+from matplotlib.patches import Patch
+import matplotlib.pyplot as plt
+import random
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+import statsmodels.stats.multitest as sm
+```
+# Summary
+
+This file contains the taxonomic analysis using the RefSeq Complete v93 database only (not the comparison of different databases presented in the other notebook) as well as the functional analysis of these metagenomes.
+

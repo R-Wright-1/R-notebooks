@@ -1,0 +1,945 @@
+---
+title: "Impact of DNA source on genetic variant detection from human whole-genome sequencing data"
+subtitle: "Microbiome analysis"
+
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+library(reticulate) # Needed for the Python code chunk 
+library(kableExtra) # Needed to write out a formatted table
+library(knitr) # Needed to set root directory
+
+#use_python("/opt/anaconda3/envs/r-reticulate/bin/python")
+use_condaenv(condaenv = "reticulate")
+#conda_create("r-reticulate")
+#use_condaenv("r-reticulate")
+#conda_install("r-reticulate", "scipy")
+#conda_install("r-reticulate", "scikit-learn")
+#theme_set(theme_classic())
+opts_knit$set(root.dir = '/Users/robynwright/Documents/OneDrive/Github/Human_metagenome/')
+#py_install("scikit-learn")
+#scipy <- import("scipy")
+```
+
+# Summary
+
+This file includes the results of a microbiome analysis performed on samples taken from four individuals that were originally used to determine the [**"Impact of DNA source on genetic variant detection from human whole-genome sequencing data"**](https://jmg.bmj.com/content/56/12/809).
+
+This included blood, saliva and buccal samples taken from four individuals (blood samples were taken at a different time than saliva and buccal samples). Additionally, a methylation-based enrichment for eukaryotic DNA was performed on the saliva and buccal samples. 
+
+# Basic processing steps
+
+## Obtaining reads
+
+Fastq.gz files were downloaded from the ENA database, project accession number [PRJNA523344](https://www.ebi.ac.uk/ena/browser/view/PRJNA523344)
+
+## Kneaddata
+
+[Kneaddata](https://huttenhower.sph.harvard.edu/kneaddata/) was used for quality control and removal of human sequences. This included:<br/>
+- **Trimmomatic 0.39**: "SLIDINGWINDOW:4:20 MINLEN:50”<br/>
+- **Bowtie2** with the GRCh38_PhiX database (to remove human and PhiX reads): "--fast --dovetail"<br/>
+
+## Reads kept after Kneaddata {.tabset}
+
+```{python}
+#import all needed packages
+import csv
+import pandas as pd
+import os
+import numpy as np
+import math
+from matplotlib.lines import Line2D
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+from matplotlib_venn import venn2
+from matplotlib_venn import venn3
+import random
+from skbio.stats.composition import ancom
+from sklearn import manifold
+from sklearn.decomposition import PCA
+from scipy.spatial import distance
+
+#set up colors function (to get up to 120 colors, but with up to 40 unique colors)
+def get_cols(num):
+    colormap_20, colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20', 256), mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+    norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+    m1, m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_20), mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+    colors_20 = [m1.to_rgba(a) for a in range(20)]
+    colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+    if num < 21: return colors_20
+    elif num < 41: return colors_40
+    else: return colors_40+colors_40+colors_40
+#and colors and shapes for different participants and body sites
+colors_dict, shapes_dict = {'Blood':'#900C3F', 'Saliva':'#016F85', 'Buccal':'#ff8300', 'Saliva_euk':'#02aed1', 'Buccal_euk':'#FFC300'}, {'Huref':'o', 'PGPC-0002':'^', 'PGPC-0005':'*', 'PGPC-0006':'s', 'PGPC-0050':'p'}
+```
+
+```{python}
+#get numbers of reads for different steps
+reads = pd.read_csv('read_counts.txt', sep='\t', index_col=3, header=0)
+participant_dict, site_dict, full_name_dict = {}, {}, {}
+samples = list(reads.index.values)
+for s in samples:
+    participant_dict[s] = reads.loc[s, 'Participant']
+    site_dict[s] = reads.loc[s, 'Body site']
+    full_name_dict[s] = reads.loc[s, 'Participant']+' '+reads.loc[s, 'Body site']
+total_reads = pd.DataFrame(reads.loc[:, 'cat_reads'])
+sample_names = [participant_dict[name]+' '+site_dict[name] for name in samples]
+colors = [colors_dict[s] for s in list(reads.loc[:, 'Body site'].values)]
+shapes = [shapes_dict[s] for s in list(reads.loc[:, 'Participant'].values)]
+```
+
+### Percentage reads remaining
+```{python, results='hide',fig.keep='all'}
+plt.figure(figsize=(10, 5))
+ax1, ax2 = plt.subplot(121), plt.subplot(122)
+plt.sca(ax1)
+plt.bar(list(reads.index.values), reads.loc[:, 'Percentage'].values, color=colors, edgecolor='k')
+plt.xticks(list(reads.index.values), sample_names, rotation=90)
+plt.ylabel('Reads kept (%)')
+plt.xlim([-0.5,20.5])
+
+plt.sca(ax2)
+plt.bar(list(reads.index.values), reads.loc[:, 'Percentage'].values, color=colors, edgecolor='k')
+plt.semilogy()
+plt.xticks(list(reads.index.values), sample_names, rotation=90)
+plt.ylabel('Log reads kept (%)')
+handles = [Patch(facecolor=colors_dict[color], edgecolor='k', label=color) for color in colors_dict]
+ax2.legend(handles=handles, bbox_to_anchor=(1.4,1.05))
+plt.xlim([-0.5,20.5])
+plt.tight_layout()
+plt.show()
+```
+
+### Number of reads remaining
+
+```{python, results='hide',fig.keep='all'}
+plt.figure(figsize=(10, 5))
+ax1, ax2 = plt.subplot(121), plt.subplot(122)
+plt.sca(ax1)
+plt.bar(list(reads.index.values), reads.loc[:, 'cat_reads'].values, color=colors, edgecolor='k')
+plt.xticks(list(reads.index.values), sample_names, rotation=90)
+plt.xlim([-0.5,20.5])
+plt.ylabel('Reads remaining')
+
+plt.sca(ax2)
+plt.bar(list(reads.index.values), reads.loc[:, 'cat_reads'].values, color=colors, edgecolor='k')
+plt.semilogy()
+plt.xticks(list(reads.index.values), sample_names, rotation=90)
+plt.ylabel('Log reads remaining')
+handles = [Patch(facecolor=colors_dict[color], edgecolor='k', label=color) for color in colors_dict]
+ax2.legend(handles=handles, bbox_to_anchor=(1.4,1.05))
+plt.xlim([-0.5,20.5])
+plt.tight_layout()
+plt.show()
+```
+
+### Table of reads remaining
+```{python}
+reads_remain = reads.loc[:, ['Percentage', 'cat_reads']].rename(index=full_name_dict, columns={'cat_reads':'Number'})
+```
+```{r}
+py$reads_remain %>%
+  kable() %>%
+  kable_styling()
+```
+
+# Taxonomic profiling
+
+The taxonomy has been profiled using:<br/>
+1. [HUMAnN2](https://huttenhower.sph.harvard.edu/humann)<br/>
+    - MetaPhlAn2<br/>
+2. [Kraken2](https://ccb.jhu.edu/software/kraken2/) with [Bracken](https://ccb.jhu.edu/software/bracken/)<br/>
+    - GTDB (no confidence parameter set) - <br/>using the database constructed using [Struo](https://github.com/leylabmpi/Struo), release 89
+    - GTDB (confidence = 0.1)<br/>
+    - Minikraken v1 (no human genome, no confidence parameter set)<br/>
+    - Minikraken v1 (no human genome, confidence = 0.1)<br/>
+    - Minikraken v2 (with human genome, no confidence parameter set)<br/>
+    - Minikraken v2 (with human genome, confidence = 0.1)<br/>
+    - RefSeq Complete v93 (no confidence parameter set)<br/>
+    - RefSeq Complete v93 (confidence = 0.1)<br/>
+
+## MetaPhlAn2 taxonomy nMDS plots {.tabset}
+```{python}
+#get the taxonomy file and sort it to strain and genus level
+taxa = pd.read_csv('metaphlan_humann/processing/humann2_final_out_90/metaphlan_merged.tsv', sep='\t', header=0, index_col=0)
+tax_names = list(taxa.index.values)
+keeping = []
+for a in range(len(tax_names)):
+    if 't__' in tax_names[a]:
+        keeping.append(True)
+    elif 'unclassified' in tax_names[a]:
+        keeping.append(True)
+    else:
+        keeping.append(False)
+strain = taxa.loc[keeping, :]
+strain_names = list(strain.index.values)
+strain_dict = {}
+for i in range(len(strain_names)):
+    strain_dict[strain_names[i]] = strain_names[i].split('|s__')[0].split('|g__')[1]
+genus = strain.rename(index=strain_dict)
+genus = genus.groupby(by=genus.index, axis=0).sum()
+```
+
+```{python}
+#define the function that calculates the nmds plots
+
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+```
+
+### Bray-Curtis distance
+```{python, results='hide',fig.keep='all'}
+strain_t = strain.transpose()
+genus_t = genus.transpose()
+strain_pos, strain_npos, strain_stress = transform_for_NMDS(strain_t, 'braycurtis')
+genus_pos, genus_npos, genus_stress = transform_for_NMDS(genus_t, 'braycurtis')
+
+plt.figure(figsize=(10,5))
+ax1, ax2 = plt.subplot(121), plt.subplot(122)
+for a in range(len(strain_npos)):
+    ax1.scatter(strain_npos[a,0], strain_npos[a,1], marker=shapes[a], color=colors[a], s=100)
+    ax2.scatter(genus_npos[a,0], genus_npos[a,1], marker=shapes[a],  color=colors[a], s=100)
+ax1.set_xlabel('nMDS1')
+ax2.set_xlabel('nMDS1')
+ax1.set_ylabel('nMDS2')
+ax1.set_title('Strain')
+ax2.set_title('Genus')
+
+handles1 = [Patch(facecolor=colors_dict[color], edgecolor='k', label=color) for color in colors_dict]
+handles2 = [Line2D([0], [0], marker=shapes_dict[shape], color='w', label=shape, markerfacecolor='k', markersize=15) for shape in shapes_dict]
+
+ax2.legend(handles=handles1+handles2, bbox_to_anchor=(1,1))
+plt.tight_layout()
+plt.show()
+```
+
+### Euclidean distance
+```{python, results='hide',fig.keep='all'}
+strain_pos, strain_npos, strain_stress = transform_for_NMDS(strain_t, 'euclidean')
+genus_pos, genus_npos, genus_stress = transform_for_NMDS(genus_t, 'euclidean')
+
+plt.figure(figsize=(10,5))
+ax1, ax2 = plt.subplot(121), plt.subplot(122)
+for a in range(len(strain_npos)):
+    ax1.scatter(strain_npos[a,0], strain_npos[a,1], marker=shapes[a], color=colors[a], s=100)
+    ax2.scatter(genus_npos[a,0], genus_npos[a,1], marker=shapes[a],  color=colors[a], s=100)
+ax1.set_xlabel('nMDS1')
+ax2.set_xlabel('nMDS1')
+ax1.set_ylabel('nMDS2')
+ax1.set_title('Strain')
+ax2.set_title('Genus')
+
+ax2.legend(handles=handles1+handles2, bbox_to_anchor=(1.4,1))
+plt.tight_layout()
+plt.show()
+```
+
+### Jaccard distance
+```{python, results='hide',fig.keep='all'}
+strain_pos, strain_npos, strain_stress = transform_for_NMDS(strain_t, 'jaccard')
+genus_pos, genus_npos, genus_stress = transform_for_NMDS(genus_t, 'jaccard')
+
+plt.figure(figsize=(10,5))
+ax1, ax2 = plt.subplot(121), plt.subplot(122)
+for a in range(len(strain_npos)):
+    ax1.scatter(strain_npos[a,0], strain_npos[a,1], marker=shapes[a], color=colors[a], s=100)
+    ax2.scatter(genus_npos[a,0], genus_npos[a,1], marker=shapes[a],  color=colors[a], s=100)
+ax1.set_xlabel('nMDS1')
+ax2.set_xlabel('nMDS1')
+ax1.set_ylabel('nMDS2')
+ax1.set_title('Strain')
+ax2.set_title('Genus')
+
+ax2.legend(handles=handles1+handles2, bbox_to_anchor=(1.4,1))
+plt.tight_layout()
+plt.show()
+```
+
+## MetaPhlAn2 taxonomy relative abundance {.tabset}
+
+### Kingdom
+
+Here the relative abundance of taxa calulated by MetaPhlAn2 are plotted at the Kingdom level for each sample. 
+
+```{python, results='hide',fig.keep='all'}
+plt.figure(figsize=(7,5))
+ax1 = plt.subplot(111)
+plt.bar(list(taxa.columns.values), taxa.loc['k__Viruses', :].values, color='#C70039', edgecolor='k')
+plt.bar(list(taxa.columns.values), taxa.loc['k__Bacteria', :].values, bottom=taxa.loc['k__Viruses', :].values, color='#026B81', edgecolor='k')
+#plt.xticks(list(taxa.columns.values), sample_names, rotation=90)
+empty = []
+for x in range(0,21):
+    empty.append('')
+    ax1.text(x, -2, sample_names[x], color=colors[x], rotation=90, va='top', ha='center')
+plt.xticks(range(0, 21), empty)
+plt.xlim([-0.5,20.5])
+
+handles = [Patch(facecolor='#C70039', edgecolor='k', label='Viruses'), Patch(facecolor='#026B81', edgecolor='k', label='Bacteria')]
+plt.legend(handles=handles, bbox_to_anchor=(1,1.05))
+plt.tight_layout()
+plt.show()
+```
+
+### Genus
+
+Here the relative abundance of taxa calulated by MetaPhlAn2 are plotted at the Genus level for each sample. Genera with below 1% maximum relative abundance have been removed.
+```{python, results='hide',fig.keep='all'}
+genus = genus[genus.max(axis=1) > 1]
+genera = list(genus.index.values)
+plt.figure(figsize=(10,5))
+ax1 = plt.subplot(111)
+gen_colors = get_cols(len(genus.index.values))
+genera = list(genus.index.values)
+handles = []
+for g in range(len(genera)):
+    this_gen = genus.loc[genera[g], :].values
+    if g == 0:
+        ax1.bar(list(genus.columns.values), this_gen, color=gen_colors[g], edgecolor='k')
+        total = this_gen
+    else:
+        ax1.bar(list(genus.columns.values), this_gen, bottom=total, color=gen_colors[g], edgecolor='k')
+        total = this_gen+total
+    handles.append(Patch(facecolor=gen_colors[g], edgecolor='k', label=genera[g]))
+empty = []
+for x in range(0,21):
+    empty.append('')
+    ax1.text(x, -2, sample_names[x], color=colors[x], rotation=90, va='top', ha='center')
+plt.xticks(range(0, 21), empty)
+plt.xlim([-0.5,20.5])
+plt.legend(handles=handles, bbox_to_anchor=(1,1.05), ncol=2)
+plt.tight_layout()
+plt.show()
+```
+<br/>
+<br/>
+
+## Kraken2 reads classified {.tabset}
+
+```{python, results='hide'}
+#get all samples into dataframes based on the database that they use
+folders = sorted(os.listdir('kraken2'))
+del folders[0]
+kraken_columns = {0:'Percent fragments clade', 1:'Number fragments clade', 2:'Number fragments taxon', 3:'Level', 4:'NCBI ID', 5:'Taxon name'}
+kraken_all_db, bracken_all_db, all_domains = [], [], {}
+for fol in folders:
+    if not os.path.isdir('kraken2/'+fol):
+        continue
+    bracken, kraken, bracken_kreport = [], [], []
+    bracken_pd, kraken_pd = [], []
+    for fi in sorted(os.listdir('kraken2/'+fol)):
+        if fi[-7:] == 'bracken':
+            bracken.append(fi)
+        elif fi[-7:] == 'kreport' and 'bracken' not in fi:
+            kraken.append(fi)
+        elif fi[-7:] == 'kreport':
+            bracken_kreport.append(fi)
+    for bk in bracken_kreport:
+        with open('kraken2/'+fol+'/'+bk, 'rU') as f:
+            bk = []
+            domains = {}
+            this_domain, domain_name = [], ''
+            for row in csv.reader(f, delimiter='\t'):
+                bk.append(row)
+                row[5] = row[5].lstrip()
+                if row[3] == 'D':
+                    if domain_name != '':
+                        domains[domain_name] = this_domain
+                    this_domain, domain_name = [], row[5]
+                else:
+                    if row[3] != 'R' and row[3] != 'U' and 'D' not in row[3]:
+                        this_domain.append(row[5])
+            domains[domain_name] = this_domain
+            for domain in domains:
+                if domain in all_domains:
+                    all_domains[domain] = list(set(all_domains[domain]+domains[domain]))
+                else:
+                    all_domains[domain] = list(set(domains[domain]))
+    for b in bracken:
+        if len(b) > 22:
+            continue
+        sample = pd.read_csv('kraken2/'+fol+'/'+b, sep='\t', header=0, index_col=0)
+        b = b.replace('_150', '')
+        sample.drop(['taxonomy_id', 'taxonomy_lvl', 'kraken_assigned_reads', 'added_reads', 'fraction_total_reads'], axis=1, inplace=True)
+        sample.rename(columns={'new_est_reads':b[:-8]}, inplace=True)
+        bracken_pd.append(sample)
+    for k in kraken:
+        sample = pd.read_csv('kraken2/'+fol+'/'+k, sep='\t', header=None, index_col=3)
+        sample = sample.loc[['U', 'D'], :]
+        sample = sample.rename(columns=kraken_columns).drop(['Number fragments taxon', 'NCBI ID'], axis=1).rename(columns={'Percent fragments clade':k[:-8]+'_percent', 'Number fragments clade':k[:-8]+'_reads'}).set_index('Taxon name')
+        taxa = list(sample.index.values)
+        taxa_dict = {}
+        for t in taxa:
+            taxa_dict[t] = t.replace(' ', '')
+        sample = sample.rename(index=taxa_dict)
+        kraken_pd.append(sample)
+    bracken = pd.concat(bracken_pd, join='outer')
+    kraken = pd.concat(kraken_pd, join='outer')
+    kraken = kraken.rename(index={'d__Bacteria':'Bacteria', 'd__Archaea':'Archaea'})
+    kraken = kraken.groupby(by=kraken.index, axis=0).sum()
+    bracken = bracken.groupby(by=bracken.index, axis=0).sum().fillna(value=0)
+    kraken_all_db.append(kraken), bracken_all_db.append(bracken)
+```
+```{python, results='hide'}
+x1 = [x for x in range(21)]
+x2 = [x+0.3 for x in range(21)]
+tax_plotting = ['Archaea', 'Bacteria', 'Eukaryota', 'Viruses', 'unclassified']
+color_plotting = ['#EDBB99', '#5499C7', '#7DCEA0', '#F7DC6F', '#CCD1D1']
+tax_paper = ['Bacteria', 'Eukaryota', 'Other', 'Unclassified']
+color_paper = ['#5499C7', '#7DCEA0', '#CD6155', '#CCD1D1']
+from_paper = pd.read_csv('kraken2/from_paper.csv', header=0, index_col=0)
+
+def get_summary_reads(kraken_db):
+    fig = plt.figure(figsize=(15,15))
+    ax1, ax2, ax3, ax4, ax5 = plt.subplot(321), plt.subplot(322), plt.subplot(323), plt.subplot(324), plt.subplot(325)
+    ax1.set_title('Minikraken V1\n(without human genome)'), ax2.set_title('Minikraken V2\n(with human genome)'), ax3.set_title('GTDB'), ax4.set_title('RefSeq Complete V93')
+    ax5.set_title('From paper')
+    ax_plot = [ax3, ax3, ax1, ax1, ax2, ax2, ax4, ax4]
+    x_plot = [x1, x2, x1, x2, x1, x2, x1, x2]
+    axs = [ax1, ax2, ax3, ax4, ax5]
+    for s in range(len(samples)):
+        if s == 0:
+            continue
+        bottom = 0
+        for t in range(len(tax_paper)):
+            ax5.bar(x1[s], from_paper.loc[tax_paper[t], samples[s]], bottom=bottom, color=color_paper[t], edgecolor='k', width=0.6)
+            bottom += from_paper.loc[tax_paper[t], samples[s]]
+    for db in range(len(kraken_db)):
+        ax_using = ax_plot[db]
+        x = x_plot[db]
+        db = kraken_db[db]
+        handles = []
+        for tax in range(len(tax_plotting)):
+            handles.append(Patch(facecolor=color_plotting[tax], edgecolor='k', label=tax_plotting[tax]))
+            tax = tax_plotting[tax]
+            if tax not in list(db.index.values):
+                db.loc[tax] = [0 for i in range(db.shape[1])]
+        handles.append(Patch(facecolor=color_paper[2], edgecolor='k', label='Other'))
+        db = db.fillna(value=0)
+        for s in range(len(samples)):
+            bottom = 0
+            for t in range(len(tax_plotting)):
+                prop = db.loc[tax_plotting[t], samples[s]+'_reads']
+                cat = total_reads.loc[samples[s], 'cat_reads']
+                prop = (prop/cat)*100
+                ax_using.bar(x[s], prop, bottom=bottom, color=color_plotting[t], edgecolor='k', width=0.3)
+                bottom += prop
+    ax2.legend(handles=handles, bbox_to_anchor=(1,1.05))
+    for ax in axs:
+        plt.sca(ax)
+        plt.xticks(x1, ['' for x in x1])
+        plt.ylim([0, 100])
+        plt.xlim([-0.5, 20.5])
+    for x in x1:
+        ax5.text(x, -2, sample_names[x], color=colors[x], rotation=90, va='top', ha='center')
+        ax4.text(x, -2, sample_names[x], color=colors[x], rotation=90, va='top', ha='center')
+    ax1.set_ylabel('Classified (%)'), ax3.set_ylabel('Classified (%)'), ax5.set_ylabel('Classified(%)')
+    #plt.tight_layout()
+    return
+
+def get_summary_bacteria(kraken_db):
+    tax_plotting = ['Bacteria']
+    alpha = ['#5499C7', '#F1C40F', '#5499C7', '#F1C40F', '#5499C7', '#F1C40F', '#5499C7', '#F1C40F']
+    
+    fig = plt.figure(figsize=(10,8))
+    ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+    ax1.set_title('Minikraken V1\n(without human genome)'), ax2.set_title('Minikraken V2\n(with human genome)'), ax3.set_title('GTDB'), ax4.set_title('RefSeq Complete V93')
+    ax_plot = [ax3, ax3, ax1, ax1, ax2, ax2, ax4, ax4]
+    x_plot = [x1, x2, x1, x2, x1, x2, x1, x2]
+    axs = [ax1, ax2, ax3, ax4]
+    
+    for db in range(len(kraken_db)):
+        ax_using = ax_plot[db]
+        x = x_plot[db]
+        alp = alpha[db]
+        db = kraken_db[db]
+        for tax in range(len(tax_plotting)):
+            tax = tax_plotting[tax]
+            if tax not in list(db.index.values):
+                db.loc[tax] = [0 for i in range(db.shape[1])]
+        db = db.fillna(value=0)
+        for s in range(len(samples)):
+            bottom = 0
+            for t in range(len(tax_plotting)):
+                prop = db.loc[tax_plotting[t], samples[s]+'_reads']
+                cat = total_reads.loc[samples[s], 'cat_reads']
+                ax_using.bar(x[s], prop, bottom=bottom, color=alp, edgecolor='k', width=0.3)
+                bottom += prop
+    handles = []
+    handles.append(Patch(facecolor=alpha[0], edgecolor='k', label='No confidence value'))
+    handles.append(Patch(facecolor=alpha[1], edgecolor='k', label='Confidence=0.1'))
+    ax2.legend(handles=handles, bbox_to_anchor=(1.6,1.03))
+    for ax in axs:
+        plt.sca(ax)
+        plt.xticks(x1, ['' for x in x1])
+        plt.semilogy()
+        plt.xlim([-0.5, 20.5])
+        #plt.ylim([0, 100])
+        plt.xlim([-0.5, 20.5])
+    for x in x1:
+        pl = ((1/21)*(x+1))-0.02
+        ax3.text(pl, -0.03, sample_names[x], color=colors[x], rotation=90, va='top', ha='center', transform=ax3.transAxes)
+        ax4.text(pl, -0.03, sample_names[x], color=colors[x], rotation=90, va='top', ha='center', transform=ax4.transAxes)
+    ax1.set_ylabel('Number of reads'), ax3.set_ylabel('Number of reads')
+    #plt.tight_layout()
+    return
+```
+
+### Percent classified
+
+A summary of the percentage of reads classified as different domains with different databases.
+Note that the 'From paper' plot uses the classifications given in the original paper, where 10,000 unmapped reads were classified using BLAST searches of the NCBI database.
+
+```{python, results='hide',fig.keep='all'}
+get_summary_reads(kraken_all_db)
+plt.show()
+```
+
+### Summary of number of bacteria
+
+Summary of the number of reads that are classified as bacteria by each database.
+
+```{python, results='hide',fig.keep='all'}
+get_summary_bacteria(kraken_all_db)
+plt.tight_layout()
+plt.show()
+```
+
+## Kraken2 taxonomy nMDS plots {.tabset}
+
+These first plots are all separately with the confidence parameter set. See the last tab for those without the confidence parameter set. 
+
+```{python, results='hide'}
+db_names = ['gtdb', 'gtdb_conf', 'minikraken', 'minikraken_conf', 'minikraken_human', 'minikraken_human_conf', 'refseq', 'refseq_conf']
+bacteria = all_domains['Bacteria']+all_domains['d__Bacteria']
+genera, gen_names, genera_1, gen_names_1, strain, gen_sums = [], [], [], [], [], []
+
+for db in range(len(bracken_all_db)):
+    db = bracken_all_db[db]
+    species = list(db.index.values)
+    keeping = []
+    species_dict = {}
+    for sp in species:
+        if sp in bacteria:
+            keeping.append(True)
+            new_sp = sp.split('__')
+            if len(new_sp) > 1:
+                new_sp = new_sp[1]
+            else:
+                new_sp = new_sp[0]
+            species_dict[sp] = new_sp.split(' ')[0].replace("'", '')
+        else:
+            keeping.append(False)
+    in_len = db.shape[0]
+    db = db.loc[keeping, :]
+    strain.append(db)
+    db = db.rename(index=species_dict)
+    db = db.groupby(by=db.index, axis=0).sum()
+    sums = db.sum(axis=0)
+    gen_sums.append(sums)
+    db = db.divide(sums, axis=1).mul(100)
+    #db = db[db.max(axis=1) > 0.1]
+    genera.append(db)
+    gen_names = gen_names+list(db.index.values)
+    db = db[db.max(axis=1) > 1]
+    genera_1.append(db)
+    gen_names_1 = gen_names_1+list(db.index.values)
+gen_names = list(set(gen_names))
+gen_names_1 = list(set(gen_names_1))
+```
+
+```{python, results='hide'}
+def plot_four_nmds(dbs, metric, name):
+    fig = plt.figure(figsize=(15,10))
+    #fig.suptitle(name+metric+'\n\n\n')
+    ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+    axs = [ax3, ax1, ax2, ax4]
+    ax1.set_title('Minikraken V1\n(without human genome)'), ax2.set_title('Minikraken V2\n(with human genome)'), ax3.set_title('GTDB'), ax4.set_title('RefSeq Complete V93')
+    
+    for db in range(len(dbs)):
+        n = db
+        db = dbs[db].transpose()
+        pos, npos, stress = transform_for_NMDS(db, metric)
+        for a in range(len(npos)):
+            axs[n].scatter(npos[a,0], npos[a,1], marker=shapes[a], color=colors[a], s=100, edgecolor='k')
+        axs[n].set_xlabel('nMDS1')
+        axs[n].set_ylabel('nMDS2')
+    handles1 = [Patch(facecolor=colors_dict[color], edgecolor='k', label=color) for color in colors_dict]
+    handles2 = [Line2D([0], [0], marker=shapes_dict[shape], color='w', label=shape, markerfacecolor='k', markersize=15) for shape in shapes_dict]
+
+    ax2.legend(handles=handles1+handles2, bbox_to_anchor=(1,1))
+    plt.tight_layout()
+    return
+```
+
+### Bray-Curtis distance strain level
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([strain[1], strain[3], strain[5], strain[7]], 'braycurtis', 'NMDS confidence=0.1 strain ')
+plt.show()
+```
+
+### Bray-Curtis distance genus level
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([genera[1], genera[3], genera[5], genera[7]], 'braycurtis', 'NMDS confidence=0.1 genera ')
+plt.show()
+```
+
+### Euclidean distance strain level
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([strain[1], strain[3], strain[5], strain[7]], 'euclidean', 'NMDS confidence=0.1 strain ')
+plt.show()
+```
+
+### Euclidean distance genus level
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([genera[1], genera[3], genera[5], genera[7]], 'euclidean', 'NMDS confidence=0.1 genera ')
+plt.show()
+```
+
+### Jaccard distance strain level
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([strain[1], strain[3], strain[5], strain[7]], 'jaccard', 'NMDS confidence=0.1 strain ')
+plt.show()
+```
+
+### Jaccard distance genus level
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([genera[1], genera[3], genera[5], genera[7]], 'jaccard', 'NMDS confidence=0.1 genera ')
+plt.show()
+```
+
+### All plots with no confidence parameter set
+
+**Bray-curtis distance at strain level**
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([strain[0], strain[2], strain[4], strain[6]], 'braycurtis', 'NMDS no confidence strain ')
+plt.show()
+```
+**Bray-curtis distance at genus level**
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([genera[0], genera[2], genera[4], genera[6]], 'braycurtis', 'NMDS no confidence genera ')
+plt.show()
+```
+**Euclidean distance at strain level**
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([strain[0], strain[2], strain[4], strain[6]], 'euclidean', 'NMDS no confidence strain ')
+plt.show()
+```
+**Euclidean distance at genus level**
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([genera[0], genera[2], genera[4], genera[6]], 'euclidean', 'NMDS no confidence genera ')
+plt.show()
+```
+**Jaccard distance at strain level**
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([strain[0], strain[2], strain[4], strain[6]], 'jaccard', 'NMDS no confidence strain ')
+plt.show()
+```
+**Jaccard distance at genus level**
+```{python, results='hide',fig.keep='all'}
+plot_four_nmds([genera[0], genera[2], genera[4], genera[6]], 'jaccard', 'NMDS no confidence genera ')
+plt.show()
+```
+
+
+## Kraken2 taxonomy relative abundance {.tabset}
+
+These plots are now only calculated for the classifications that used confidence = 0.1. Genera with below 1% maximum relative abundance are removed and the numbers in brackets are the number of reads that were classified as bacteria. 
+
+```{python, results='hide'}
+db_names = ['gtdb', 'gtdb_conf', 'minikraken', 'minikraken_conf', 'minikraken_human', 'minikraken_human_conf', 'refseq', 'refseq_conf']
+#bacteria = all_domains['Bacteria']+all_domains['d__Bacteria']
+#genera, gen_names, genera_1, gen_names_1, strain, gen_sums = [], [], [], [], [], []
+gen_names_1 = sorted(gen_names_1)
+def plot_genera(db, sums, tax_cols, gen_names_1, dname):
+    plt.figure(figsize=(10,5))
+    ax1 = plt.subplot(111)
+    bottom = [0 for x in range(len(db.columns))]
+    handles = []
+    for g in range(len(gen_names_1)):
+        if gen_names_1[g] in db.index.values:
+            this_row = db.loc[gen_names_1[g], :].values
+            ax1.bar(x1, this_row, bottom=bottom, color=tax_cols[g], edgecolor='k')
+            handles.append(Patch(facecolor=tax_cols[g], edgecolor='k', label=gen_names_1[g]))
+            for b in range(len(bottom)):
+                bottom[b] += this_row[b]
+    ax1.legend(handles=handles, bbox_to_anchor=(1, 1.03), ncol=3)
+    plt.xticks(x1, ['' for x in x1])
+    plt.ylabel('Relative abundance(%)')
+    plt.xlim([-0.5, 20.5])
+    plt.ylim([0, 100])
+    for x in x1:
+        n = str(int(sums[samples[x]]))
+        ax1.text(x, -2, sample_names[x]+' ('+n+')', color=colors[x], rotation=90, va='top', ha='center')
+    plt.tight_layout()
+    return
+
+gen_plot = [genera_1[1], genera_1[3], genera_1[5], genera_1[7]]
+db_name = ['GTDB', 'Minikraken V1', 'Minikraken V2', 'RefSeq Complete V93']
+all_sums = [gen_sums[1], gen_sums[3], gen_sums[5], gen_sums[7]]
+tax_cols = get_cols(len(gen_names_1))
+```
+
+### Minikraken v1
+```{python, results='hide',fig.keep='all'}
+plot_genera(gen_plot[1], all_sums[1], tax_cols, gen_names_1, db_name[1])
+plt.show()
+```
+
+### Minikraken v2
+```{python, results='hide',fig.keep='all'}
+plot_genera(gen_plot[2], all_sums[2], tax_cols, gen_names_1, db_name[2])
+plt.show()
+```
+
+### GTDB
+```{python, results='hide',fig.keep='all'}
+plot_genera(gen_plot[0], all_sums[0], tax_cols, gen_names_1, db_name[0])
+plt.show()
+```
+
+### RefSeq Complete v93
+```{python, results='hide', fig.keep='all'}
+plot_genera(gen_plot[3], all_sums[3], tax_cols, gen_names_1, db_name[3])
+plt.show()
+```
+
+## Similarities and differences between treatments {.tabset}
+
+```{python, results='hide', fig.keep='all'}
+def get_differences(genus, db_name):
+    try:
+        genus = genus.drop(['SRR8595488'], axis=1)
+    except:
+        do_nothing = True
+    genus = genus[genus.max(axis=1) > 0.1]
+    samples = list(genus.columns)
+    genus.rename(columns=site_dict, inplace=True)
+    
+    blood_saliva = genus.drop(['Buccal', 'Saliva_euk', 'Buccal_euk'], axis=1, inplace=False)
+    blood_saliva = blood_saliva[blood_saliva.max(axis=1) > 0.1]
+
+    blood_buccal = genus.drop(['Saliva', 'Saliva_euk', 'Buccal_euk'], axis=1, inplace=False)
+    blood_buccal = blood_buccal[blood_buccal.max(axis=1) > 0.1]
+
+    saliva_buccal = genus.drop(['Blood', 'Saliva_euk', 'Buccal_euk'], axis=1, inplace=False)
+    saliva_buccal = saliva_buccal[saliva_buccal.max(axis=1) > 0.1]
+
+    saliva = genus.drop(['Blood', 'Buccal', 'Buccal_euk'], axis=1, inplace=False)
+    saliva = saliva[saliva.max(axis=1) > 0.1]
+
+    buccal = genus.drop(['Blood', 'Saliva', 'Saliva_euk'], axis=1, inplace=False)
+    buccal = buccal[buccal.max(axis=1) > 0.1]
+
+    blood_saliva_euk = genus.drop(['Buccal', 'Saliva', 'Buccal_euk'], axis=1, inplace=False)
+    blood_saliva_euk = blood_saliva_euk[blood_saliva_euk.max(axis=1) > 0.1]
+
+    blood_buccal_euk = genus.drop(['Saliva', 'Saliva_euk', 'Buccal'], axis=1, inplace=False)
+    blood_buccal_euk = blood_buccal_euk[blood_buccal_euk.max(axis=1) > 0.1]
+
+    comparisons = [blood_saliva, blood_buccal, saliva_buccal, saliva, buccal, blood_saliva_euk, blood_buccal_euk]
+    significant_all, medians_all, differences = [], [], []
+    no_shared, no_sig, no_sig_over2 = [], [], []
+    for a in range(len(comparisons)):
+        comparison = comparisons[a]
+        comparison = comparison.transpose()
+        comparison = comparison.replace(to_replace=0, value=0.0001)
+        comparison = comparison.fillna(value=0.0001)
+        ancom_df, percentile_df = ancom(comparison, pd.Series(list(comparison.index.values), index=list(comparison.index.values)), multiple_comparisons_correction='holm-bonferroni')
+        ancom_results, percentile_results, tax_names = ancom_df.values.tolist(), percentile_df.values.tolist(), ancom_df.index.values
+        tax_names = list(comparison.columns)
+        significant, significant_over2, medians, medians_over2, not_sig, not_sig_medians, diffs, diffs_over2 = [], [], [], [], [], [], [], []
+        significant_under2, medians_under2, diffs_under2 = [], [], []
+        for b in range(len(ancom_results)):
+            if ancom_results[b][1] == True:
+                    if percentile_results[b][2] == 0.0001 and percentile_results[b][7] == 0.0001:
+                        not_sig_medians.append([percentile_results[b][2], percentile_results[b][7]])
+                        not_sig.append(tax_names[b])
+                    else:
+                        diff = math.log2(percentile_results[b][2])/math.log2(percentile_results[b][7])
+                        diff = math.pow(2, diff)
+                        if diff < 1:
+                            diff = (-1/diff)
+                        significant.append(tax_names[b])
+                        medians.append([percentile_results[b][2], percentile_results[b][7]])
+                        diffs.append(diff)
+                        if diff > 2 or diff < -2:
+                            significant_over2.append(tax_names[b])
+                            medians_over2.append([percentile_results[b][2], percentile_results[b][7]])
+                            diffs_over2.append(diff)
+                        else:
+                            significant_under2.append(tax_names[b])
+                            medians_under2.append([percentile_results[b][2], percentile_results[b][7]])
+                            diffs_under2.append(diff)
+        no_shared.append(comparison.shape[1]), no_sig.append(len(significant)), no_sig_over2.append(len(significant_over2))       
+        significant_all.append(significant)
+        medians_all.append(medians) 
+        differences.append(diffs)
+        
+        
+    figure = plt.figure(figsize=(10,12))
+
+    ax1 = plt.subplot2grid((1,4), (0,0), colspan=2)
+    ax2 = plt.subplot2grid((2,4), (0,2))
+    ax3 = plt.subplot2grid((2,4), (1,2))
+    ax4 = plt.subplot2grid((2,4), (0,3))
+    ax5 = plt.subplot2grid((2,4), (1,3))
+
+    name = [['Saliva', 'Blood'], ['Buccal', 'Blood'], ['Saliva', 'Buccal'], ['Saliva', 'Saliva_euk'], ['Buccal', 'Buccal_euk'], ['Blood', 'Saliva_euk'], ['Blood', 'Buccal_euk']]
+    blood, saliva, buccal = [], [], []
+    for a in range(len(comparisons)):
+        comparison = comparisons[a]
+        names = name[a]
+        comparison = comparison[comparison.max(axis=1) > 0.1]
+        n1 = comparison.drop([names[1]], axis=1)
+        n2 = comparison.drop([names[0]], axis=1)
+        n1 = n1.groupby(by=n1.columns, axis=1).mean()
+        n2 = n2.groupby(by=n2.columns, axis=1).mean()
+        n1 = n1[n1.max(axis=1) > 0]
+        n2 = n2[n2.max(axis=1) > 0]
+        n1 = list(set(n1.index.values))
+        n2 = list(set(n2.index.values))
+        n1_only, n2_only, shared = 0, 0, 0
+        for b in range(len(n1)):
+            if n1[b] in n2:
+                shared += 1
+            else:
+                n1_only += 1
+        for c in range(len(n2)):
+            if n2[c] not in n1:
+                n2_only += 1
+        if a == 0:
+            blood = n2
+            saliva = n1
+        if a == 1:
+            buccal = n1
+        elif a == 3:
+            plt.sca(ax2)
+            venn2(subsets = (n1_only, n2_only, shared), set_labels=(names[0], names[1]))
+        elif a == 4:
+            plt.sca(ax3)
+            venn2(subsets = (n1_only, n2_only, shared), set_labels=(names[0], names[1]))
+        elif a == 5:
+            plt.sca(ax4)
+            venn2(subsets = (n1_only, n2_only, shared), set_labels=(names[0], names[1]))
+        elif a == 6:
+            plt.sca(ax5)
+            venn2(subsets = (n1_only, n2_only, shared), set_labels=(names[0], names[1]))
+
+
+    #venn3(subsets = (A, B, sharedAB, C, sharedAC, sharedBC, sharedall))
+    #a = saliva, b = buccal, c = blood
+
+    A, B, C, sharedAB, sharedAC, sharedBC, shared_all = 0, 0, 0, 0, 0, 0, 0
+    for a in range(len(saliva)):
+        if saliva[a] in buccal and saliva[a] in blood:
+            shared_all += 1
+        elif saliva[a] in buccal:
+            sharedAB += 1
+        elif saliva[a] in blood:
+            sharedAC += 1
+        else:
+            A += 1
+    for b in range(len(buccal)):
+        if buccal[b] not in saliva:
+            if buccal[b] in blood:
+                sharedBC += 1
+            else:
+                B += 1
+    for c in range(len(blood)):
+        if blood[c] not in saliva and blood[c] not in buccal:
+            C += 1
+    plt.sca(ax1)
+    venn3(subsets=(A, B, sharedAB, C, sharedAC, sharedBC, shared_all), set_labels=('Saliva', 'Buccal', 'Blood'))
+    
+    new_list = []
+    for a in range(len(no_shared)):
+        new_list.append([no_shared[a], no_sig[a], no_sig_over2[a]])
+    return new_list
+#gen_plot = [genera_1[1], genera_1[3], genera_1[5], genera_1[7]]
+db_name = ['GTDB', 'Minikraken V1', 'Minikraken V2', 'RefSeq Complete V93']
+```
+
+### Shared genera Minikraken v1
+```{python, results='hide', fig.keep='all'}
+shared = get_differences(genera[3], db_name[1])
+plt.show()
+comparisons_names = ['Blood vs saliva', 'Blood vs buccal', 'Saliva vs buccal', 'Saliva vs saliva_euk', 'Buccal vs buccal_euk', 'Blood vs saliva_euk', 'Blood vs buccal_euk']
+cols = ['Number of genera > 0.1% abundance', 'Differentially abundant (ANCOM)', 'Differentially abundant (ANCOM) and log2FC >2 or <-2']
+new_df = pd.DataFrame(shared, columns=cols, index=comparisons_names)
+```
+
+### Differences Minikraken v1
+```{r}
+py$new_df %>%
+  kable() %>%
+  kable_styling()
+```
+
+### Shared genera Minikraken v2
+```{python, results='hide', fig.keep='all'}
+shared = get_differences(genera[5], db_name[2])
+plt.show()
+new_df = pd.DataFrame(shared, columns=cols, index=comparisons_names)
+```
+
+### Differences Minikraken v2
+```{r}
+py$new_df %>%
+  kable() %>%
+  kable_styling()
+```
+
+### Shared genera GTDB
+```{python, results='hide', fig.keep='all'}
+shared = get_differences(genera[1], db_name[0])
+plt.show()
+new_df = pd.DataFrame(shared, columns=cols, index=comparisons_names)
+```
+
+### Differences GTDB
+```{r}
+py$new_df %>%
+  kable() %>%
+  kable_styling()
+```
+
+### Shared genera RefSeq Complete v93
+```{python, results='hide', fig.keep='all'}
+shared = get_differences(genera[7], db_name[3])
+plt.show()
+new_df = pd.DataFrame(shared, columns=cols, index=comparisons_names)
+```
+
+### Differences RefSeq Complete v93
+```{r}
+py$new_df %>%
+  kable() %>%
+  kable_styling()
+```
