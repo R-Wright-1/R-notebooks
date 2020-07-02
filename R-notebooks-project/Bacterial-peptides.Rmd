@@ -102,7 +102,6 @@ rsync_from_ncbi.pl: unexpected FTP path (new server?) for na
 
 So I have gone with the non-redundant protein database for now:
 ```{bash, eval=FALSE}
-kraken2-build --download-taxonomy --db bac_protein --use-ftp
 kraken2-build --download-library nr --db bac_protein --use-ftp --protein
 kraken2-build --db bac_protein/ --download-taxonomy --use-ftp
 kraken2-build --build --db bac_protein/ --threads 10

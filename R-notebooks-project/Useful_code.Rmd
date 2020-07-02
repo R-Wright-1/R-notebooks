@@ -612,6 +612,24 @@ Run bracken:
 parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_refseq/kraken2_kreport_conf/*.kreport
 ```
 
+## Add existing folder to Github
+
+1. Create a new repository on Github
+2. 
+```{bash, eval=FALSE}
+cd folder_you_want
+git init
+git add .
+git commit -m "First commit"
+```
+3. Copy the URL for the Github repository (on the Github page)
+4. 
+```{bash, eval=FALSE}
+git remote add origin <repository_url>
+git remote -v
+git push -u origin master
+```
+
 # Genbank uploads
 
 ## Genbank genome submission
