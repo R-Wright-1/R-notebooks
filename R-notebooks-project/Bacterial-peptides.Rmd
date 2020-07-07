@@ -107,6 +107,36 @@ kraken2-build --db bac_protein/ --download-taxonomy --use-ftp
 kraken2-build --build --db bac_protein/ --threads 10
 ```
 
+Output:
+```{bash, eval=FALSE}
+Creating sequence ID to taxonomy ID map (step 1)...
+Found 7913/573044508 targets, searched through 753265413 accession IDs, search complete.
+lookup_accession_numbers: 573036595/573044508 accession numbers remain unmapped, see unmapped.txt in DB directory
+Sequence ID to taxonomy ID map complete. [1h31m43.606s]
+Estimating required capacity (step 2)...
+Estimated hash table requirement: 1460 bytes
+Capacity estimation complete. [3m11.010s]
+Building database files (step 3)...
+Taxonomy parsed and converted.
+CHT created with 11 bits reserved for taxid.
+Processed 1311 sequences (377139 bp)...  
+```
+
+I let this run for ~5 days and this is as far as it got. But with the low numbers of classified sequences anyway, maybe this isn't the way to go. Will try putting together a larger database.
+
+Download files (using the scripts at [this repository](https://github.com/fischuu/Kraken_db_install_scripts), edited by me to download '_protein.faa.gz' rather than '_genomic.fna.gz' files):
+```{bash, eval=FALSE}
+kraken2-build --download-taxonomy --db kraken2_protein/ --threads 12 --use-ftp
+bacteria
+archaea
+viral
+human
+fungi
+protozoa
+
+perl download_bacteria_faa.pl 
+```
+
 ## Run Kraken2
 
 This is the code used to run Kraken2 using the fasta file created above and the protein database downloaded.

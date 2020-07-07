@@ -1,10 +1,12 @@
 ---
 title: "Fungal metagenomes"
 output:
-  html_document: 
+  html_document:
     toc: yes
     toc_float: yes
     code_folding: hide
+  pdf_document:
+    toc: yes
 ---
 
 ```{R, setup_r, results='hide', include=FALSE}
@@ -32,6 +34,7 @@ from Bio.Seq import Seq
 from Bio.Alphabet import IUPAC
 import pandas as pd
 import csv
+from colorsys import hls_to_rgb
 import numpy as np
 import math
 from matplotlib.lines import Line2D
@@ -45,6 +48,13 @@ from scipy import stats
 from sklearn import manifold
 from sklearn.decomposition import PCA
 import statsmodels.stats.multitest as sm
+
+def get_colors(num):
+    colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+    norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+    m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+    colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+    return colors_40+colors_40+colors_40+colors_40
 ```
 
 ## Analysis and commands run {.tabset}
@@ -89,34 +99,54 @@ parallel -j 1 'kneaddata -i {} -o kneaddata_out_W0/ \
 --bowtie2-options "--sensitive --dovetail" --remove-intermediate-output' \
  ::: W06_samples/*.fastq.gz
  kneaddata_read_count_table --input kneaddata_out_W06 --output W06_kneaddata_read_counts.txt
+ mkdir W06_decontaminated
  for i in kneaddata_out_W06/*kneaddata.fastq ; do mv $i W06_decontaminated ; done
  
- parallel -j 1 'kneaddata -i {} -o kneaddata_out_W06/ \
+ parallel -j 1 'kneaddata -i {} -o kneaddata_out_W12/ \
 -db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
 -t 12 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
 --bowtie2-options "--sensitive --dovetail" --remove-intermediate-output' \
  ::: W12_samples/*.fastq.gz
  kneaddata_read_count_table --input kneaddata_out_W12 --output W12_kneaddata_read_counts.txt
+ mkdir W12_decontaminated
  for i in kneaddata_out_W12/*kneaddata.fastq ; do mv $i W12_decontaminated ; done
+```
+
+```{python}
+reads_W0  = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W0_kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
+reads_W06 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W06_kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
+reads_W12 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W12_kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
+
+samples = list(reads_W0.index.values)+list(reads_W06.index.values)+list(reads_W12.index.values)
+
+for s in range(len(samples)):
+  samples[s] = samples[s].split('-')[0]
+all_samples = sorted(list(set(samples)))
+pltx = {}
+all_x = []
+for s in range(len(all_samples)):
+  pltx[all_samples[s]] = s
+  all_x.append(s)
 ```
 
 **W0 percent reads kept:**
 ```{python, w0_kneaddata, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
 reads = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W0_kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
 perc = []
-samples = list(reads.index.values)
-for s in samples:
-  perc.append((reads.loc[s, 'final single']/reads.loc[s, 'raw single'])*100)
+x = []
+for s in range(len(all_samples)):
+  x.append(s)
+  if all_samples[s]+'-W0_kneaddata' in reads.index.values:
+    perc.append((reads.loc[all_samples[s]+'-W0_kneaddata', 'final single']/reads.loc[all_samples[s]+'-W0_kneaddata', 'raw single'])*100)
+  else:
+    perc.append(0)
 
 plt.figure(figsize=(10,4))
 ax1 = plt.subplot(111)
-x = []
 for a in range(len(perc)):
-  ax1.bar(a, perc[a], width=0.8, color='#8E0145', edgecolor='k')
-  x.append(a)
-  samples[a] = samples[a].replace('-W0_kneaddata', '')
+  ax1.bar(x[a], perc[a], width=0.8, color='#8E0145', edgecolor='k')
 
-plt.xticks(x, samples, rotation=90, fontsize=8)
+plt.xticks(x, all_samples, rotation=90, fontsize=8)
 plt.xlim([-0.7, x[-1]+0.5])
 plt.ylim([0, 100])
 plt.ylabel('Reads remaining (%)')
@@ -125,22 +155,23 @@ plt.show()
 ```
 
 **W06 percent reads kept:**
-```{python, w06_kneaddata, results='hide', fig.keep='all', cache=TRUE, echo=FALSE, eval=FALSE}
+```{python, w06_kneaddata, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
 reads = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W06_kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
 perc = []
-samples = list(reads.index.values)
-for s in samples:
-  perc.append((reads.loc[s, 'final single']/reads.loc[s, 'raw single'])*100)
+x = []
+for s in range(len(all_samples)):
+  x.append(s)
+  if all_samples[s]+'-W06_kneaddata' in reads.index.values:
+    perc.append((reads.loc[all_samples[s]+'-W06_kneaddata', 'final single']/reads.loc[all_samples[s]+'-W06_kneaddata', 'raw single'])*100)
+  else:
+    perc.append(0)
 
 plt.figure(figsize=(10,4))
 ax1 = plt.subplot(111)
-x = []
 for a in range(len(perc)):
-  ax1.bar(a, perc[a], width=0.8, color='#8E0145', edgecolor='k')
-  x.append(a)
-  samples[a] = samples[a].replace('-W06_kneaddata', '')
+  ax1.bar(x[a], perc[a], width=0.8, color='#8E0145', edgecolor='k')
 
-plt.xticks(x, samples, rotation=90, fontsize=8)
+plt.xticks(x, all_samples, rotation=90, fontsize=8)
 plt.xlim([-0.7, x[-1]+0.5])
 plt.ylim([0, 100])
 plt.ylabel('Reads remaining (%)')
@@ -149,22 +180,23 @@ plt.show()
 ```
 
 **W12 percent reads kept:**
-```{python, w12_kneaddata, results='hide', fig.keep='all', cache=TRUE, echo=FALSE, eval=FALSE}
+```{python, w12_kneaddata, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
 reads = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W12_kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
 perc = []
-samples = list(reads.index.values)
-for s in samples:
-  perc.append((reads.loc[s, 'final single']/reads.loc[s, 'raw single'])*100)
+x = []
+for s in range(len(all_samples)):
+  x.append(s)
+  if all_samples[s]+'-W12_kneaddata' in reads.index.values:
+    perc.append((reads.loc[all_samples[s]+'-W12_kneaddata', 'final single']/reads.loc[all_samples[s]+'-W12_kneaddata', 'raw single'])*100)
+  else:
+    perc.append(0)
 
 plt.figure(figsize=(10,4))
 ax1 = plt.subplot(111)
-x = []
 for a in range(len(perc)):
-  ax1.bar(a, perc[a], width=0.8, color='#8E0145', edgecolor='k')
-  x.append(a)
-  samples[a] = samples[a].replace('-W12_kneaddata', '')
+  ax1.bar(x[a], perc[a], width=0.8, color='#8E0145', edgecolor='k')
 
-plt.xticks(x, samples, rotation=90, fontsize=8)
+plt.xticks(x, all_samples, rotation=90, fontsize=8)
 plt.xlim([-0.7, x[-1]+0.5])
 plt.ylim([0, 100])
 plt.ylabel('Reads remaining (%)')
@@ -174,7 +206,7 @@ plt.show()
 
 ### Kraken2 and Bracken
 
-**Run with RefSeq Complete v93:**
+**Commands run (with RefSeq Complete v93):**
 ```{bash, eval=FALSE}
 sudo mount -t ramfs none /scratch/ramdisk/
 sudo cp -a /home/shared/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ /scratch/ramdisk/
@@ -183,11 +215,19 @@ mkdir W0_kraken2_kreport
 parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output W0_kraken2_out/{/.}.kraken.txt --report W0_kraken2_kreport/{/.}.kreport --confidence 0.1' ::: W0_decontaminated/*.fastq
 
 parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: W0_kraken2_kreport/*.kreport
-```
 
-**Relevant files:**
-- 
-- 
+mkdir W06_kraken2_out
+mkdir W06_kraken2_kreport
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output W06_kraken2_out/{/.}.kraken.txt --report W06_kraken2_kreport/{/.}.kreport --confidence 0.1' ::: W06_decontaminated/*.fastq
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: W06_kraken2_kreport/*.kreport
+
+mkdir W12_kraken2_out
+mkdir W12_kraken2_kreport
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output W12_kraken2_out/{/.}.kraken.txt --report W12_kraken2_kreport/{/.}.kreport --confidence 0.1' ::: W12_decontaminated/*.fastq
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: W12_kraken2_kreport/*.kreport
+```
 
 ```{python, get_kraken_bracken, results='hide', fig.keep='all', echo=FALSE}
 kraken_columns = {0:'Percent fragments clade', 1:'Number fragments clade', 2:'Number fragments taxon', 3:'Level', 4:'NCBI ID', 5:'Taxon name'}
@@ -210,12 +250,12 @@ def get_kraken_bracken(fol):
             for row in csv.reader(f, delimiter='\t'):
                 bk.append(row)
                 row[5] = row[5].lstrip()
-                if row[3] == 'D':
+                if row[3] == 'K':
                     if domain_name != '':
                         domains[domain_name] = this_domain
                     this_domain, domain_name = [], row[5]
                 else:
-                    if row[3] != 'R' and row[3] != 'U' and 'D' not in row[3]:
+                    if row[3] != 'R' and row[3] != 'U' and 'K' not in row[3]:
                         this_domain.append(row[5])
             domains[domain_name] = this_domain
             for domain in domains:
@@ -231,7 +271,7 @@ def get_kraken_bracken(fol):
         bracken_pd.append(sample)
     for k in kraken:
         sample = pd.read_csv(fol+'/'+k, sep='\t', header=None, index_col=3)
-        sample = sample.loc[['U', 'D'], :]
+        sample = sample.loc[['U', 'D', 'K'], :]
         sample = sample.rename(columns=kraken_columns).drop(['Number fragments taxon', 'NCBI ID'], axis=1).rename(columns={'Percent fragments clade':k[:-8]+'_percent', 'Number fragments clade':k[:-8]+'_reads'}).set_index('Taxon name')
         taxa = list(sample.index.values)
         taxa_dict = {}
@@ -250,46 +290,68 @@ def get_kraken_bracken(fol):
       if 'reads' in s:
         reads.append(True)
         percent.append(False)
-        rename[s] = s.replace('_kneaddata_reads', '')
+        s_new = s.replace('-W0_kneaddata_reads', '')
+        s_new = s_new.replace('-W06_kneaddata_reads', '')
+        s_new = s_new.replace('-W12_kneaddata_reads', '')
+        rename[s] = s_new
       else:
         reads.append(False)
         percent.append(True)
-        rename[s] = s.replace('_kneaddata_percent', '')
+        s_new = s.replace('-W0_kneaddata_percent', '')
+        s_new = s_new.replace('-W06_kneaddata_percent', '')
+        s_new = s_new.replace('-W12_kneaddata_percent', '')
+        rename[s] = s_new
     kraken_reads = kraken.loc[:, reads].rename(columns=rename)
     kraken_percent = kraken.loc[:, percent].rename(columns=rename)
-    return bracken, kraken, bracken_kreport, kraken_reads, kraken_percent
+    
+    kraken_perc_drop = kraken_percent.drop(['Metazoa', 'Viridiplantae'], axis=0)
+    kraken_reads_drop = kraken_reads.drop(['Metazoa', 'Viridiplantae'], axis=0)
+
+    for s in list(kraken_perc_drop.columns):
+      kraken_perc_drop.loc['Eukaryota', s] = kraken_perc_drop.loc['Eukaryota', s]-kraken_perc_drop.loc['Fungi', s]
+      kraken_reads_drop.loc['Eukaryota', s] = kraken_reads_drop.loc['Eukaryota', s]-kraken_reads_drop.loc['Fungi', s]
+    kraken_perc_drop.rename(index={'Eukaryota':'Other Eukaryota'}, inplace=True)
+    kraken_reads_drop.rename(index={'Eukaryota':'Other Eukaryota'}, inplace=True)
+    
+    fungi = all_domains['Fungi']
+    fungi_in_table = []
+    for f in fungi:
+      if f in list(bracken.index.values):
+        fungi_in_table.append(f)
+    bracken_fungi = pd.DataFrame(bracken.loc[fungi_in_table, :])
+    bracken_fungi_ra = pd.DataFrame(bracken_fungi.divide(bracken_fungi.sum(axis=0)).multiply(100))
+  
+    return bracken, kraken, bracken_kreport, kraken_reads_drop, kraken_perc_drop, bracken_fungi, bracken_fungi_ra
 ```
 
 ```{python, tax_plot, echo=FALSE}
 def plot_domain(kraken_reads, kraken_percent):
-  plotting = ['Eukaryota', 'Bacteria', 'Archaea', 'Viruses', 'unclassified']
-  colors = {'Eukaryota':'#7DCEA0', 'Bacteria':'#5499C7', 'Archaea':'#EDBB99', 'Viruses':'#F7DC6F', 'unclassified':'#CCD1D1'}
-  plt.figure(figsize=(8,6))
+  plotting = ['Fungi', 'Other Eukaryota', 'Bacteria', 'Archaea', 'Viruses', 'unclassified']
+  colors = {'Fungi':'#2C8101', 'Other Eukaryota':'#7DCEA0', 'Bacteria':'#5499C7', 'Archaea':'#EDBB99', 'Viruses':'#F7DC6F', 'unclassified':'#CCD1D1'}
+  plt.figure(figsize=(10,6))
   ax1 = plt.subplot(211)
   ax2 = plt.subplot(212)
-  x = 0
-  handles, all_x = [], []
+  handles = []
   for s in kraken_reads.columns:
+    sn = s.split('-')[0]
     c_reads, c_perc = 0, 0
     for p in plotting:
       reads, perc = kraken_reads.loc[p, s], kraken_percent.loc[p, s]
-      ax1.bar(x, reads, bottom=c_reads, color=colors[p], edgecolor='k', width=0.8)
-      ax2.bar(x, perc, bottom=c_perc, color=colors[p], edgecolor='k', width=0.8)
+      ax1.bar(pltx[sn], reads, bottom=c_reads, color=colors[p], edgecolor='k', width=0.8)
+      ax2.bar(pltx[sn], perc, bottom=c_perc, color=colors[p], edgecolor='k', width=0.8)
       c_reads += reads
       c_perc += perc
-    all_x.append(x)
-    x += 1
   for p in plotting:
     handles.append(Patch(facecolor=colors[p], edgecolor='k', label=p))
-  ax1.set_xlim([-0.7, all_x[-1]]+0.5), ax2.set_xlim([-0.7, all_x[-1]]+0.5)
+  ax1.set_xlim([-0.7, all_x[-1]+0.5]), ax2.set_xlim([-0.7, all_x[-1]+0.5])
   ax2.set_ylim([0, 100])
   plt.sca(ax2)
-  plt.xticks(x, list(kraken_reads.columns), rotation=90)
+  plt.xticks(all_x, all_samples, rotation=90, fontsize=8)
   plt.sca(ax1)
   plt.semilogy()
   plt.xticks([])
   ax1.legend(handles=handles, bbox_to_anchor=(1,1.02), loc='upper left')
-  ax1.set_ylabel('Number of reads (log scale)')
+  ax1.set_ylabel('Number of reads')
   ax2.set_ylabel('Number of reads (%)')
   return
 ```
@@ -297,33 +359,76 @@ def plot_domain(kraken_reads, kraken_percent):
 **W0 domain level:**
 ```{python, W0_domain, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
 fol = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W0_kraken2_kreport/'
-bracken, kraken, bracken_kreport, kraken_reads, kraken_percent = get_kraken_bracken(fol)
+bracken, kraken, bracken_kreport, kraken_reads, kraken_percent, bracken_fungi, bracken_fungi_ra = get_kraken_bracken(fol)
+
+kraken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_kraken.csv')
+bracken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_full_species.csv')
+bracken_fungi.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_bracken_fungi.csv')
+bracken_fungi_ra.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_bracken_fungi_relabun.csv')
+
 
 plot_domain(kraken_reads, kraken_percent)
+plt.tight_layout()
 plt.show()
 ```
 
 **W06 domain level:**
-```{python}
+```{python, W06_domain, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
+fol = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W06_kraken2_kreport/'
+bracken, kraken, bracken_kreport, kraken_reads, kraken_percent, bracken_fungi, bracken_fungi_ra = get_kraken_bracken(fol)
 
+kraken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_kraken.csv')
+bracken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_full_species.csv')
+bracken_fungi.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_bracken_fungi.csv')
+bracken_fungi_ra.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_bracken_fungi_relabun.csv')
+
+plot_domain(kraken_reads, kraken_percent)
+plt.tight_layout()
+plt.show()
 ```
 
 **W12 domain level:**
-```{python}
+```{python, W12_domain, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
+fol = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W12_kraken2_kreport/'
+bracken, kraken, bracken_kreport, kraken_reads, kraken_percent, bracken_fungi, bracken_fungi_ra = get_kraken_bracken(fol)
 
+kraken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_kraken.csv')
+bracken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_full_species.csv')
+bracken_fungi.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_bracken_fungi.csv')
+bracken_fungi_ra.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_bracken_fungi_relabun.csv')
+
+plot_domain(kraken_reads, kraken_percent)
+plt.tight_layout()
+plt.show()
 ```
 
 ### Get fungal reads
 
+Using [KrakenTools](https://github.com/jenniferlu717/KrakenTools.git) - this searches based on the NCBI fungal taxon ID ([4751](https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=4751&lvl=0)) and then also takes all lower classifications (because we have used the --include-children).
 ```{bash, eval=FALSE}
+git clone https://github.com/jenniferlu717/KrakenTools.git
 
+cd W0_kraken2_out
+for i in * ; do mv $i ${i%.*} ; done
+cd ..
+parallel -j 1 'python KrakenTools/extract_kraken_reads.py -k {} -s W0_decontaminated/{/.}.fastq -o W0_fungi/{/.}.fastq -t 4751 --include-children -r W0_kraken2_kreport/{/.}.kreport' ::: W0_kraken2_out/*.kraken
+
+cd W06_kraken2_out
+for i in * ; do mv $i ${i%.*} ; done
+cd ..
+parallel -j 1 'python KrakenTools/extract_kraken_reads.py -k {} -s W06_decontaminated/{/.}.fastq -o W06_fungi/{/.}.fastq -t 4751 --include-children -r W06_kraken2_kreport/{/.}.kreport' ::: W06_kraken2_out/*.kraken
+
+cd W12_kraken2_out
+for i in * ; do mv $i ${i%.*} ; done
+cd ..
+parallel -j 1 'python KrakenTools/extract_kraken_reads.py -k {} -s W12_decontaminated/{/.}.fastq -o W12_fungi/{/.}.fastq -t 4751 --include-children -r W12_kraken2_kreport/{/.}.kreport' ::: W12_kraken2_out/*.kraken
 ```
 
 ### HUMAnN3
 
 **Run using Uniref90 and Uniref50 databases:**
 ```{bash, eval=FALSE}
-
+parallel -j 1 'humann --input {} --output W0_fungi_humann/ --threads 12 --nucleotide-database /home/robyn/databases/humann/humann3_databases/' ::: W0_fungi/*.fastq
 ```
 
 **Combine output files:**
@@ -343,20 +448,172 @@ plt.show()
 
 ## Taxonomic analysis {.tabset}
 
-### Number of reads (domain level)
+```{python, nmds_func, echo=FALSE}
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+```
+```{python, get_metadata, echo=FALSE}
+metadata = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/metadata.csv', header=0, index_col=0)
 
-### Percentage of reads (domain level)
+treatment_dict, wk6 = {}, {}
+for s in list(metadata.index.values):
+  treatment_dict[s] = metadata.loc[s, 'treatment']
+  wk6[s] = metadata.loc[s, '6wkITT']
+color_dict = {'cded':'#810168', 'een':'#016281', 'out':'#E0B401'}
+handles = [Line2D([0], [0], marker='o', color='w', label='Week 0', markerfacecolor='k', markersize=10), Line2D([0], [0], marker='^', color='w', label='Week 6', markerfacecolor='k', markersize=10), Line2D([0], [0], marker='s', color='w', label='Week 12', markerfacecolor='k', markersize=10), Patch(facecolor=color_dict['cded'], edgecolor='k', label='cded'), Patch(facecolor=color_dict['een'], edgecolor='k', label='een'), Patch(facecolor=color_dict['out'], edgecolor='k', label='out')]
+edge_dict = {'nr':'k', 'out':'gray', 'rem':'b'}
+```
 
-### NMDS plots (all taxa)
+### NMDS plot (all taxa)
 
-### Stacked bar plots (all taxa)
+This uses Bray-Curtis distance calculated on the lowest taxonomic classification given by Kraken2 for all taxa present in the sample.
 
-### NMDS plots (fungi only)
+```{python, all_tax_nmds, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
+W0 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_full_species.csv', header=0, index_col=0)
+W06 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_full_species.csv', header=0, index_col=0)
+W12 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_full_species.csv', header=0, index_col=0)
 
-### Stacked bar plots (fungi only)
+all_taxa = pd.concat([W0, W06, W12]).fillna(value=0)
+all_taxa = all_taxa.groupby(by=all_taxa.index, axis=0).sum()
+all_taxa = all_taxa.divide(all_taxa.sum(axis=0)).multiply(100)
+pos, npos, stress = transform_for_NMDS(all_taxa.transpose(), 'braycurtis')
 
-### Differential abundance
-Do I want to do this? Between sample sets on different weeks? Between different sample sets within the same week? Probably still not enough samples for machine learning...
+plt.figure(figsize=(7,5))
+ax1 = plt.subplot(111)
+names = list(all_taxa.columns)
+for a in range(len(npos)):
+  if 'W06' in names[a]:
+    marker = '^'
+  elif 'W12' in names[a]:
+    marker = 's'
+  else:
+    marker = 'o'
+  ax1.scatter(npos[a,0], npos[a,1], marker=marker, color=color_dict[treatment_dict[names[a]]])
+ax1.legend(handles=handles, bbox_to_anchor=(1, 1.02), loc='upper left')
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+### NMDS plot (fungi only)
+
+This uses Bray-Curtis distance calculated on the lowest taxonomic classification given by Kraken2 for fungi only.
+
+```{python, all_fungi_nmds, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
+fungi_ra_W0 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_bracken_fungi_relabun.csv', header=0, index_col=0)
+fungi_ra_W06 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_bracken_fungi_relabun.csv', header=0, index_col=0)
+fungi_ra_W12 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_bracken_fungi_relabun.csv', header=0, index_col=0)
+
+all_taxa = pd.concat([fungi_ra_W0, fungi_ra_W06, fungi_ra_W12]).fillna(value=0)
+all_taxa = all_taxa.groupby(by=all_taxa.index, axis=0).sum()
+pos, npos, stress = transform_for_NMDS(all_taxa.transpose(), 'braycurtis')
+
+plt.figure(figsize=(7,5))
+ax1 = plt.subplot(111)
+names = list(all_taxa.columns)
+for a in range(len(npos)):
+  if 'W06' in names[a]:
+    marker = '^'
+  elif 'W12' in names[a]:
+    marker = 's'
+  else:
+    marker = 'o'
+  ax1.scatter(npos[a,0], npos[a,1], marker=marker, color=color_dict[treatment_dict[names[a]]])
+ax1.legend(handles=handles, bbox_to_anchor=(1, 1.02), loc='upper left')
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+### Stacked bar fungi (genus)
+
+Here all fungi have been grouped to the genus level and this shows all genera that are above 2% abundance in at least one sample. Note that these colours are not unique, but are cycled and the genera are plotted in order, so as e.g. Acanthamoeba (where present) is plotted at 0 and Other is always plotted at 100.
+
+```{python, all_genus, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
+fungi_ra_W0 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_bracken_fungi_relabun.csv', header=0, index_col=0)
+fungi_ra_W06 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_bracken_fungi_relabun.csv', header=0, index_col=0)
+fungi_ra_W12 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_bracken_fungi_relabun.csv', header=0, index_col=0)
+
+def get_genus(fungi_ra):
+  genus = {}
+  for f in fungi_ra.index.values:
+    genus[f] = f.split(' ')[0]
+  genus = fungi_ra.rename(index=genus)
+  genus = genus.groupby(by=genus.index, axis=0).sum()
+  genus = genus[genus.max(axis=1) > 2]
+  return genus
+
+genus_W0 = get_genus(fungi_ra_W0)
+genus_W06 = get_genus(fungi_ra_W06)
+genus_W12 = get_genus(fungi_ra_W12)
+
+plt.figure(figsize=(10,14))
+ax1 = plt.subplot(311)
+ax2 = plt.subplot(312)
+ax3 = plt.subplot(313)
+
+def get_stacked_bar(ra, ax, color_dict):
+  genera = list(ra.index.values)
+  for s in ra.columns:
+    sn = s.split('-')[0]
+    bottom = 0
+    for g in genera:
+      this_gen = ra.loc[g, s]
+      ax.bar(pltx[sn], this_gen, bottom=bottom, color=color_dict[g], edgecolor='k', width=0.8)
+      bottom += this_gen
+    ax.bar(pltx[sn], 100, bottom=bottom, color=color_dict['Other (<1%)'], edgecolor='k', width=0.8)
+  ax.set_xlim([-0.7, all_x[-1]+0.5])
+  ax.set_ylim([0, 100])
+  return
+
+all_genera = sorted(list(set(list(genus_W0.index.values)+list(genus_W06.index.values)+list(genus_W12.index.values))))
+all_genera.append('Other (<1%)')
+tax_colors = get_colors(len(all_genera))
+color_dict = {}
+handles = []
+for a in range(len(all_genera)):
+  color_dict[all_genera[a]] = tax_colors[a]
+  handles.append(Patch(facecolor=tax_colors[a], edgecolor='k', label=all_genera[a]))
+
+get_stacked_bar(genus_W0, ax1, color_dict)
+get_stacked_bar(genus_W06, ax2, color_dict)
+get_stacked_bar(genus_W12, ax3, color_dict)
+
+plt.sca(ax1)
+plt.xticks([])
+plt.ylabel('Week 0\nRelative abundance (%)')
+plt.sca(ax2)
+plt.xticks([])
+plt.ylabel('Week 6\nRelative abundance (%)')
+plt.sca(ax3)
+plt.ylabel('Week 12\nRelative abundance (%)')
+plt.xticks(all_x, all_samples, rotation=90, fontsize=8)
+ax3.legend(handles=handles, loc='upper left', bbox_to_anchor=(-0.02,-0.2), ncol=7, fontsize=6)
+plt.tight_layout()
+plt.show()
+
+```
 
 ## Functional analysis {.tabset}
 
@@ -365,7 +622,3 @@ Do I want to do this? Between sample sets on different weeks? Between different 
 ### Gene family richness
 
 ### Pathway richness
-
-### Any pathways of interest?
-
-### Differential abundance?

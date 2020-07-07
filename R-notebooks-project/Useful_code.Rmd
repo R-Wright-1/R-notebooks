@@ -939,14 +939,14 @@ Add together dataframes, filling unknown values with 0:
 all_genus = pd.concat(all_genus, axis=1, join='outer').fillna(value=0)
 ```
 
-Get relative abundance:
-```{python, eval=FALSE}
-db = db.divide(sums, axis=1).multiply(100)
-```
-
 Get sum (of columns):
 ```{python, eval=FALSE}
 sums = db.sum(axis=0)
+```
+
+Get relative abundance:
+```{python, eval=FALSE}
+db = db.divide(db.sum(axis=0), axis=1).multiply(100)
 ```
 
 ## Stats

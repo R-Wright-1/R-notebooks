@@ -795,6 +795,7 @@ def plot_four_nmds(dbs, metric, name):
     plt.tight_layout()
     return
 ```
+
 ### Bray-Curtis distance strain level
 ```{python, tax_kraken_7, results='hide',fig.keep='all', cache=TRUE}
 #22
