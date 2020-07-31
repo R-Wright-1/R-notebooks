@@ -1,0 +1,366 @@
+---
+title: "MHC Class I bacterial immuno-peptides"
+output:
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{R, setup_r, results='hide', include=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(exactRankTests)
+library(nlme)
+library(dplyr)
+library(ggplot2)
+library(compositions)
+library(vegan)
+library(phyloseq)
+library(ape)
+
+opts_knit$set(root.dir = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/')
+#reticulate::py_config()
+```
+
+```{python, setup_python, results='hide', include=FALSE}
+import os
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
+from Bio.Alphabet import IUPAC
+import pandas as pd
+import csv
+import numpy as np
+import math
+from matplotlib.lines import Line2D
+import matplotlib as mpl
+from matplotlib.patches import Patch
+import matplotlib.pyplot as plt
+import pickle
+import random
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+import statsmodels.stats.multitest as sm
+```
+
+This document contains all code that I've used to classify the peptide sequences given in the denovo_peptide_bacteria.tsv file. 
+
+## Initial setup {.tabset}
+
+These tabs are really just so I can keep a record of what I did (and what didn't work when I was building the kraken2 database).
+
+### Setup
+
+These lines of code take the protein sequences from the supplied .tsv file and convert them to a .fasta file that contains each peptide, names the peptides with a number and adds the description, taken from the previous sample name. It also makes individual .fasta files with each sequence (but I found that having almost 1,000,000 individual sequence files was a bit overwhelming).
+```{python, convert_fasta, results='hide', eval=FALSE}
+peptides = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/wetransfer-6c2cc0/denovo_peptide_bacteria.tsv', header=0, index_col=0, sep='\t')
+names = list(peptides.index.values)
+pep_list = list(peptides.loc[:, 'peptide'].values)
+sequences = []
+for n in range(len(names)):
+  record = SeqRecord(Seq(pep_list[n], IUPAC.protein),id='peptide'+str(n+1), description=names[n])
+  sequences.append(record)
+  #SeqIO.write(record, "/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_peptides/peptide"+str(n+1)+".fasta", "fasta")
+SeqIO.write(sequences, "/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/peptide_sequences.fasta", "fasta")
+```
+
+Note that the .fasta file that I made for some reason ended up with more sequences (some as duplicates) than were in the input, but the output is fixed to take this into account. 
+
+### Build Kraken2 protein database (unsuccessful attempts)
+
+Note that these were run on a server and not locally, I just have these lines here to save the code used. 
+I've had problems downloading the standard kraken2 database, and I think this seems to be linked to having NA's in the NCBI taxonomy, but I get the error:
+```{bash, eval=FALSE}
+kraken2-build --download-library bacteria --db bac_protein --use-ftp #didn't work
+Step 1/2: Performing ftp file transfer of requested files
+rsync_from_ncbi.pl: FTP connection error: Network is unreachable
+```
+even after the edits to the rsync_from_ncbi.pl script, as suggested in [this issue](https://github.com/DerrickWood/kraken/issues/114) AND as suggested in [this issue](https://github.com/DerrickWood/kraken/issues/142).
+
+Running the standard library build on kronos didn't work either:
+```{bash, eval=FALSE}
+wget http://github.com/DerrickWood/kraken2/archive/v2.0.8-beta.tar.gz
+tar -xf v2.0.8-beta.tar.gz
+cd kraken2-2.0.8-beta/
+./install_kraken2.sh kraken2_dir
+cp kraken2/kraken2-2.0.8-beta/kraken2_dir/kraken2 anaconda3/bin/
+cp kraken2/kraken2-2.0.8-beta/kraken2_dir/kraken2-build anaconda3/bin/
+cp kraken2/kraken2-2.0.8-beta/kraken2_dir/kraken2-inspect anaconda3/bin/
+kraken2-build --standard --db path_to_folder --protein --threads 24 --use-ftp
+```
+Output (before and after editing the rsync_from_ncbi.pl script, as above):
+```{bash, eval=FALSE}
+Downloading taxonomy tree data... done.
+Untarring taxonomy tree data... done.
+Step 1/2: Performing ftp file transfer of requested files
+Step 2/2: Assigning taxonomic IDs to sequences
+Processed 377 projects (934707 sequences, 269.17 Maa)... done.
+All files processed, cleaning up extra sequence files... done, library complete.
+Masking low-complexity regions of downloaded library... done.
+rsync_from_ncbi.pl: unexpected FTP path (new server?) for na
+```
+
+So I have gone with the non-redundant protein database for now:
+```{bash, eval=FALSE}
+kraken2-build --download-library nr --db bac_protein --use-ftp --protein
+kraken2-build --db bac_protein/ --download-taxonomy --use-ftp
+kraken2-build --build --db bac_protein/ --threads 10
+```
+
+Output:
+```{bash, eval=FALSE}
+Creating sequence ID to taxonomy ID map (step 1)...
+Found 7913/573044508 targets, searched through 753265413 accession IDs, search complete.
+lookup_accession_numbers: 573036595/573044508 accession numbers remain unmapped, see unmapped.txt in DB directory
+Sequence ID to taxonomy ID map complete. [1h31m43.606s]
+Estimating required capacity (step 2)...
+Estimated hash table requirement: 1460 bytes
+Capacity estimation complete. [3m11.010s]
+Building database files (step 3)...
+Taxonomy parsed and converted.
+CHT created with 11 bits reserved for taxid.
+Processed 1311 sequences (377139 bp)...  
+```
+
+I let this run for ~5 days and this is as far as it got. But with the low numbers of classified sequences anyway, maybe this isn't the way to go. Will try putting together a larger database.
+
+Download files (using the scripts at [this repository](https://github.com/fischuu/Kraken_db_install_scripts), edited by me to download '_protein.faa.gz' rather than '_genomic.fna.gz' files):
+```{bash, eval=FALSE}
+kraken2-build --download-taxonomy --db kraken2_protein/ --threads 12 --use-ftp
+bacteria
+archaea
+viral
+human
+fungi
+protozoa
+
+#For each of the domains
+
+perl download_bacteria_faa.pl 
+
+for file in bacteria/*.faa
+do
+    kraken2-build --add-to-library $file --db kraken2_protein
+done
+
+#And then
+
+kraken2-build --build --db kraken2_protein --threads 12 --protein
+```
+
+These each crashed at some point before downloading all files. As I don't know enough perl to accurately change the files.
+
+### Build Kraken2 protein database (successful code)
+
+I wrote a script with the same steps as the perl scripts, but in Python. At the moment I have added only complete genomes, but these could be added to with all genomes at some point if useful. (This is a huge amount more for bacteria, though, but not sure how much this will change species assignments). This script is saved at [this repository](https://github.com/R-Wright-1/peptides). 
+
+And then:
+```{bash, eval=FALSE}
+#For each domain
+for file in bacteria/*.faa
+do
+    kraken2-build --add-to-library $file --db kraken2_protein --threads 12
+done
+mv viral added_kraken2_protein
+
+kraken2-build --build --db kraken2_protein --threads 12 --protein
+```
+
+**So the database includes:**</br>
+- 362 archaea (total available including not complete = 1082)</br>
+- 17,836 bacteria (total available including not complete = 190,989)</br>
+- 11 fungi (total available including not complete = 328)</br>
+- Human genome</br>
+- 4 protozoa (total available including not complete = 94)</br>
+- 9,756 viruses (total available including not complete = 10,153)</br>
+
+## Classify the peptides {.tabset}
+
+### Kraken2
+
+This is the code used to run Kraken2 using the fasta file created above and the protein database constructed above (with and without the confidence parameter).
+```{bash, eval=FALSE}
+kraken2 --use-names --threads 12 --db databases/kraken/kraken2_protein/ --memory-mapping peptides/peptide_sequences.fasta --output peptides/kraken2_out/peptides.kraken --report peptides/kraken2_out/peptides.kreport --confidence 0.1
+```
+
+No hits were found:
+```{bash, eval=FALSE}
+Loading database information... done.
+1286515 sequences (11.99 Mbp) processed in 0.359s (214973.9 Kseq/m, 2002.90 Mbp/m).
+  0 sequences classified (0.00%)
+  1286515 sequences unclassified (100.00%)
+```
+
+### BLASTp-short on all peptides
+
+I have then combined the protein sequences downloaded from NCBI above into one .fasta file and made a BLAST database with them:
+```{bash, eval=FALSE}
+cat fungi/*.faa > combined_fungi.faa
+cat protozoa/*.faa > combined_protozoa.faa
+cat archaea/*.faa > combined_archaea.faa
+cat viral/*.faa > combined_viral.faa
+cat bacteria/*.faa > combined_bacteria.faa
+
+mkdir combined_faa
+mv combined_fungi.faa combined_faa
+mv combined_protozoa.faa combined_faa
+mv combined_archaea.faa combined_faa
+mv combined_bacteria.faa combined_faa
+mv combined_viral.faa combined_faa
+cp vertebrate_mammalian/GCF_000001405.39_GRCh38.p13_protein.tax.faa combined_faa/
+
+cat combined_faa/*.faa > combined_all.faa
+
+makeblastdb -in combined_all.faa -dbtype prot
+```
+
+I am then running blastp (blastp-short - optimized for amino acid residues <30) against this database (copied to ramdisk - this took ~10 days to run):
+```{bash, eval=FALSE}
+sudo mount -t ramfs none /scratch/ramdisk/
+sudo cp -a protein_db_ncbi/ /scratch/ramdisk/
+
+blastp -task blastp-short -query peptide_sequences.fasta -db /scratch/ramdisk/protein_db_ncbi/combined_all.faa -out all_peptides.out -num_threads 12 -outfmt '10 qseqid sseqid pident evalue bitscore  length mismatch positive gaps'
+```
+
+I seem to end up with some kind of a match for ~1 in 10 peptides.
+
+### HMMER with Pfam database
+
+Get Pfam database:
+```{bash, eval=FALSE}
+wget ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz
+gunzip Pfam-A.hmm.gz
+```
+
+Run HMMER:
+```{bash, eval=FALSE}
+hmmsearch --tblout --domtblout Pfam-A.hmm peptide_sequences.fasta > Pfam_hmm.out
+```
+
+## Results {.tabset}
+
+### BLASTp-short (basic processing)
+
+Combine assembly summaries to get NCBI taxon IDs:
+```{python, results='hide',fig.keep='all', eval=FALSE}
+domains = ['archaea', 'bacteria', 'fungi', 'protozoa', 'vertebrate_mammalian', 'viral']
+path = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/download_domain_test/'
+domain_list = []
+for d in range(len(domains)):
+  this_dom = pd.read_csv(path+domains[d]+'/assembly_summary.txt', sep='\t', header=1, index_col=5)
+  cols = list(this_dom.columns)
+  cols.remove('organism_name')
+  this_dom.drop(cols, axis=1, inplace=True)
+  this_dom['domain'] = [domains[d] for x in range(this_dom.shape[0])]
+  print(this_dom)
+  domain_list.append(this_dom)
+all_domains = pd.concat(domain_list)
+all_domains.index = all_domains.index.map(str)
+
+all_domains.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_domains.csv')
+```
+
+Make dictionaries of the peptide and sample names:
+```{python, eval=FALSE}
+used_fasta = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/peptide_sequences_used.fasta'
+used_dict = {}
+
+for record in SeqIO.parse(used_fasta, "fasta"):
+    used_dict[record.id] = [record.description, record.seq]
+
+with open('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/rename_peptides_original.dict', 'wb') as f:
+    pickle.dump(used_dict, f)
+    
+sample_dict = {}
+table = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/wetransfer-6c2cc0/denovo_peptide_bacteria.tsv'
+
+table = pd.read_csv(table, sep='\t', header=0, index_col=0)
+
+rows = table.index.values
+for r in rows:
+    if r in sample_dict: continue
+    sample_dict[r] = table.loc[r, 'Sample Name']
+
+with open('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/sample_dict.dict', 'wb') as f:
+    pickle.dump(sample_dict, f)
+```
+
+Remove peptides for which the matches are below 100% identity:
+```{python, results='hide', eval=FALSE}
+peptides = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_peptides_out.csv', header=0, index_col=0)
+peptides = peptides.loc[peptides["pident "] == 100]
+peptides.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_peptides_out_reduced.csv')
+```
+
+Add taxa assignments to peptides table:
+```{python, results='hide', eval=FALSE}
+all_domains = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_domains.csv', index_col=0, header=0)
+
+peptides = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_peptides_out_reduced.csv', header=0)
+peptides['organism_name'] = ['NA' for x in range(peptides.shape[0])]
+peptides['genus'] = ['NA' for x in range(peptides.shape[0])]
+peptides['domain'] = ['NA' for x in range(peptides.shape[0])]
+peptides['peptide_name'] = ['NA' for x in range(peptides.shape[0])]
+peptides['sample_name'] = ['NA' for x in range(peptides.shape[0])]
+peptides['sequence'] = ['NA' for x in range(peptides.shape[0])]
+
+with open('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/rename_peptides_original.dict', 'rb') as f:
+  used_dict = pickle.load(f)
+  
+table = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/wetransfer-6c2cc0/denovo_peptide_bacteria.tsv'
+sample_names = pd.read_csv(table, sep='\t', header=0, index_col=0)
+sample_names_list = ['sample_name']
+ma = 0
+
+rows = list(peptides.index.values)
+for a in range(len(rows)):
+  if a > 100: continue
+  seq = peptides.loc[rows[a], 'sseqid ']
+  tid = int(seq.split('taxid|')[1])
+  names = all_domains.loc[tid, :].values
+  if not isinstance(names[0], str): 
+      names = names[0]
+  peptides.loc[rows[a], 'organism_name'] = names[0]
+  peptides.loc[rows[a], 'domain'] = names[1]
+  peptides.loc[rows[a], 'genus'] = names[0].split(' ')[0]
+  pep = used_dict[peptides.loc[rows[a], 'qseqid ']]
+  pep_name = pep[0].split(' ')[1]
+  peptides.loc[rows[a], 'peptide_name'] = pep_name
+  samples = sample_names.loc[pep_name, 'Sample Name'].values
+  if len(samples) > ma:
+  prev_ma = int(ma)
+  ma = len(samples)
+  for c in range(prev_ma, ma):
+      sample_names_list.append('sample_name'+str(c+2))
+      peptides['sample_name'+str(c+2)] = ['NA' for x in range(peptides.shape[0])]
+  for b in range(len(samples)):
+      peptides.loc[rows[a], sample_names_list[b]] = samples[b]
+  peptides.loc[rows[a], 'sequence'] = str(pep[1])
+
+    
+peptides.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_peptides_out_taxa_3.csv')
+```
+
+Sort table to taxa assignments of peptides and an abundance table for samples vs peptides (here we check if all classifications of each peptide have the same organism name, or at least the same genus - otherwise these are removed):
+```{python, eval=FALSE}
+
+```
+This reduces us from 42,776 peptides with classifications (of 926,335 unique peptides) to 36,811.
+
+### BLASTp taxa in samples table
+
+```{r, eval=FALSE}
+#8
+py$reads_remain %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "350px", height = "400px")
+```
+
+### BLASTp taxa in samples heatmap
+
+Heatmap? Number of peptides classified to certain taxa per sample

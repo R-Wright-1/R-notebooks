@@ -1,0 +1,620 @@
+---
+title: "Food or just a free ride? A meta-analysis reveals the global diversity of the Plastisphere"
+output:
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: show
+---
+
+This document contains all of the commands necessary for the analyses performed in:
+[Food or just a free ride? A meta-analysis reveals the global diversity of the Plastisphere]()
+
+Please contact [Robyn Wright](mailto:robyn.wright@dal.ca) with any questions.
+
+# 1. Studies included {.tabset}
+
+This provides links to all studies included in this meta-analysis, listed by the names that I have used to refer to them throughout. 
+
+##   
+
+## Studies
+<ul>
+<li>[AmaralZettler2015](doi.org/10.1890/150017)</li>
+<li>[AriasAndres2018](doi.org/10.1016/j.envpol.2018.02.058)</li>
+<li>[Canada2020](doi.org/10.1016/j.aquaculture.2019.734540)</li>
+<li>[Curren2019](doi.org/10.1016/j.scitotenv.2018.11.250)</li>
+<li>[Delacuvellerie2019](doi.org/10.1016/j.jhazmat.2019.120899)</li>
+<li>[DeTender2015](doi.org/10.1021/acs.est.5b01093)</li>
+<li>[DeTender2017](doi.org/10.1021/acs.est.7b00697)</li>
+<li>[DussudHudec2018](doi.org/10.3389/fmicb.2018.01571)</li>
+<li>[DussudMeistertzheim2018](doi.org/10.1016/j.envpol.2017.12.027)</li>
+<li>[ErniCassola2019](doi.org/10.1007/s00248-019-01424-5)</li>
+<li>[Esan2019](doi.org/10.1371/journal.pone.0214376)</li>
+<li>[Frere2018](doi.org/10.1016/j.envpol.2018.07.023)</li>
+<li>[Hoellein2014](doi.org/10.1371/journal.pone.0098485)</li>
+<li>[Hoellein2017](doi.org/10.1086/693012)</li>
+<li>[Jiang2018](doi.org/10.1016/j.scitotenv.2017.12.105)</li>
+<li>[Kesy2019](doi.org/10.3389/fmicb.2019.01665)</li>
+<li>[Kirstein2018](doi.org/10.1016/j.marenvres.2018.09.028)</li>
+<li>[Kirstein2019](doi.org/10.1371/journal.pone.0215859)</li>
+<li>[McCormick2014](doi.org/10.1021/es503610r)</li>
+<li>[McCormick2016](doi.org/10.1002/ecs2.1556)</li>
+<li>[Oberbeckmann2016](doi.org/10.1371/journal.pone.0159289)</li>
+<li>[Oberbeckmann2018](doi.org/10.3389/fmicb.2017.02709)</li>
+<li>[Ogonowski2018](doi.org/10.1111/1462-2920.14120)</li>
+<li>[Parrish2019](doi.org/10.1039/c8ew00712h)</li>
+<li>[Pinto2019](doi.org/10.1371/journal.pone.0217165)</li>
+<li>[Pollet2018](doi.org/10.1093/femsec/fiy083)</li>
+<li>[Rosato2020](doi.org/10.1016/j.scitotenv.2019.135790)</li>
+<li>[Syranidou2019](doi.org/10.1016/j.jhazmat.2019.04.078)</li>
+<li>[SyranidouPE2017](doi.org/10.1371/journal.pone.0183984)</li>
+<li>[SyranidouPS2017](doi.org/10.1038/s41598-017-18366-y)</li>
+<li>[Tagg2019](doi.org/10.1016/j.marpolbul.2019.06.013)</li>
+<li>[Woodall2018](doi.org/10.1371/journal.pone.0206220)</li>
+<li>[Wu2019](doi.org/10.1016/j.watres.2019.114979)</li>
+<li>[Xu2019](doi.org/10.1016/j.marpolbul.2019.05.036)</li>
+<li>[Zhang2019](doi.org/10.1016/j.scitotenv.2019.06.108)</li>
+<br/>
+<br/>
+If you are adding a study then you should add details of this (following the existing formats) to the files in the 'python_analysis_20-04-14' folder:
+- Study_dates.csv<br/>
+- Study_location.csv<br/>
+- metadata.txt<br/>
+
+# 2. Setup environment {.tabset}
+
+If you do not have any of these packages already installed then you will need to install them. If you have problems with R finding Python then it might be worth explicitly telling R where to find the Python version you want to use, as described [here](https://rstudio.github.io/reticulate/reference/use_python.html) or [here](https://rstudio.github.io/reticulate/articles/versions.html) (what worked for me was changing it in my Rprofile - in the folder given by running R.home() in the R studio console).
+I have made this notebook using R studio version 1.3.959 and Python version 3.8.3 and used python in a conda environment named r-reticulate.
+
+## 
+
+## Setup R
+
+```{R, setup_r, results='hide', message=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(exactRankTests)
+library(nlme)
+library(dplyr)
+library(ggplot2)
+library(vegan)
+library(phyloseq)
+library(ape)
+library(compositions)
+```
+
+## Setup Python
+
+I have found conda-forge to be most successful for installing the majority of these packages.
+
+```{python, setup_python, results='hide', message=FALSE}
+import os
+from Bio import SeqIO
+from Bio.Alphabet import IUPAC
+from Bio.Alphabet import generic_dna, generic_protein
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
+#import cartopy.crs as ccrs
+import csv
+from datetime import datetime
+import importlib
+from itertools import chain
+import math
+from matplotlib.lines import Line2D
+import matplotlib as mpl
+import matplotlib.lines as mlines
+from matplotlib.offsetbox import AnchoredText
+from matplotlib.patches import Patch
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+import numpy as np
+from optparse import OptionParser
+import os
+import pandas as pd
+import pickle
+import random
+from scipy.cluster import hierarchy
+from scipy.stats import pearsonr
+from scipy.spatial import distance
+import scipy.spatial.distance as ssd
+import scipy.stats as stats
+from skbio import DistanceMatrix
+from skbio.stats.distance import anosim
+from skbio.stats.distance import permanova
+from skbio.stats.composition import ancom
+from sklearn.cluster import AgglomerativeClustering
+from sklearn import manifold
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn import preprocessing
+```
+
+# 3. Getting data {.tabset}
+
+I have provided all of the data for this study in [this Figshare file](https://doi.org/10.6084/m9.figshare.12217682). These include the deblur outputs for each study as well as the merged QIIME2 representative sequences and feature table. If you want to either add a study to this or recreate the analyses used here, then you can skip ahead to section 3 and use the merged_representative_sequences.qza and merged_table.qza files for this. 
+
+Otherwise, details are given below on how to download the reads for all studies for which data is in the NCBI SRA. Data was provided directly by the authors for Curren2019, Kirstein2018, Kirstein2019 (this is available via NCBI for both Kirstein studies, but I asked for the data without primers removed) and Pollet2018. Frere2018 is available from: VAMPS portal (www.vamps. mbl.edu) under the project name LQM_MPLA_Bv4v5.
+
+## 
+
+## Downloading NCBI reads
+
+Here I use AmaralZettler2015 with accession SRP026054 as an example.
+
+**(I) Get accession list, e.g. download from [this link](https://www.ncbi.nlm.nih.gov/Traces/study/?acc=SRP026054&o=acc_s%3Aa)**
+
+**(II) Use this to download the reads (for this you will need the [SRA toolkit](https://github.com/ncbi/sra-tools/wiki/02.-Installing-SRA-Toolkit)):**
+```{bash, eval=FALSE}
+prefetch --option-file SRR_Acc_List.txt
+```
+These files by default get added to an ncbi/sra/ folder in your home directory and can then be moved wherever you like.
+
+**(III) Convert this to fastq R1 and R2 files:**
+```{bash, eval=FALSE}
+for i in folder_name/* ; do fastq-dump -split-files --gzip $i ; done
+```
+
+**(IV) I then renamed the files using a Python script. If you are not adding many files then this is probably easier to just do manually, but get in touch if you want details of how I did this. I renamed all files to follow this format:**
+AZ2015s001_S001_L001_R1_001.fastq.gz	AZ2015s001_S001_L001_R2_001.fastq.gz
+AZ2015s002_S002_L001_R1_001.fastq.gz	AZ2015s002_S002_L001_R2_001.fastq.gz
+
+**(V) And I added all of the first parts of these names (e.g. AZ2015s001, AZ2015s002) as the names for these samples in my metadata file. The most current version of this is [here](https://github.com/R-Wright-1/Plastisphere-MetaAnalysis/blob/master/python_analysis_20-04-14/metadata.txt). As long as your sample names follow this format (i.e. sample name before the first underscore) then the subsequent parts of this analysis shouldn't struggle even if your naming is different.**
+
+# 4. QIIME2 analysis {.tabset}
+
+I used 12 threads on a server for most of my analyses, but you can change this in these code chunks accordingly if you have less available. I think some parts will probably struggle with so many samples if you try to do this locally. 
+This follows the Microbiome helper tutorial [here](https://github.com/LangilleLab/microbiome_helper/wiki/Amplicon-SOP-v2-(qiime2-2020.2)).
+You can view all of the summary files [here](https://view.qiime2.org/).
+
+Activate the QIIME2 environment (if you do not already have this installed then follow the instructions [here](https://docs.qiime2.org/2020.6/install/):
+```{bash, eval=FALSE}
+conda activate qiime2-2019.10
+```
+
+## 
+
+## A. For each individual study
+
+Note that this uses [Deblur](https://github.com/biocore/deblur). [DADA2](https://benjjneb.github.io/dada2/) could also be used, but given that we didn't know whether all samples from each study came from the same sequencing run, we chose the per sample denoising approach of Deblur. 
+
+**(I) Run quality checks on the data:**
+```{bash, eval=FALSE}
+mkdir fastqc_out
+fastqc -t 12 raw_data/*.fastq.gz -o fastqc_out
+multiqc fastqc_out/
+```
+You should now look at the multiqc_report.html to ensure that everything is high enough quality to proceed.
+
+**(II) Import your data to the QIIME2 format:**
+```{bash, eval=FALSE}
+qiime tools import \
+            --type SampleData[PairedEndSequencesWithQuality] \
+            --input-path raw_data/ \
+            --output-path reads.qza \
+            --input-format CasavaOneEightSingleLanePerSampleDirFmt
+```
+
+**(III) Trim primers (if present) with cutadapt. The primer sequences shown here are for 341F and 802R - these will need changing if you have used different primers:**
+```{bash, eval=FALSE}
+qiime cutadapt trim-paired \
+            --i-demultiplexed-sequences reads.qza \
+            --p-cores 12 \
+            --p-front-f CCTACGGGNGGCWGCAG \
+            --p-front-r GACTACHVGGGTATCTAATCC \
+            --p-discard-untrimmed \
+            --p-no-indels \
+            --o-trimmed-sequences reads_trimmed.qza
+```
+
+**(IV) Summarize the trimmed files:**
+```{bash, eval=FALSE}
+qiime demux summarize \
+            --i-data reads_trimmed.qza \
+            --o-visualization reads_trimmed_summary.qzv
+```
+
+**(V) Join paired ends (if the reads were already trimmed then just use reads.qza as the input here):**
+```{bash, eval=FALSE}
+qiime vsearch join-pairs \
+            --i-demultiplexed-seqs reads_trimmed.qza \
+            --o-joined-sequences reads_joined.qza
+```
+
+**(VI) Summarize the joined pairs (if too many reads were removed then you may need to play around with some of the other options at [here](https://docs.qiime2.org/2020.2/plugins/available/vsearch/join-pairs/)):**
+```{bash, eval=FALSE}
+qiime demux summarize \
+            --i-data reads_joined.qza \
+            --o-visualization reads_joined_summary.qzv
+```
+
+**(VII) Filter out low quality reads:**
+```{bash, eval=FALSE}
+qiime quality-filter q-score-joined \
+            --i-demux reads_joined.qza \
+            --o-filter-stats filt_stats.qza \
+            --o-filtered-sequences reads_joined_filtered.qza
+```
+
+**(VIII) Summarize these reads (and look at where to trim) You should look at the positions where the quality starts to drop below 30 and use these as trim lengths:**
+```{bash, eval=FALSE}
+qiime demux summarize \
+            --i-data reads_joined_filtered.qza \
+            --o-visualization reads_joined_filtered_summary.qzv
+```
+
+**(IX) Run deblur (you can remove the --p-left-trim-len if you don't need to remove any from this end):**
+```{bash, eval=FALSE}
+qiime deblur denoise-16S \
+            --i-demultiplexed-seqs reads_joined_filtered.qza \
+            --p-trim-length 402 \
+            --p-left-trim-len 0 \
+            --p-sample-stats \
+            --p-jobs-to-start 12 \
+            --p-min-reads 1 \
+            --output-dir deblur_output_quality
+```
+
+**(X) Summarize the feature table to see how many reads we now have:**
+```{bash, eval=FALSE}
+qiime feature-table summarize \
+            --i-table deblur_output_quality/table.qza  \
+            --o-visualization deblur_table_summary.qzv
+```
+
+## B. Merge studies
+
+**(I) Rename the current representative sequences and merged tables:**
+```{bash, eval=FALSE}
+mv merged_representative_sequences.qza previous_merged_representative_sequences.qza
+mv merged_table.qza previous_merged_table.qza
+```
+
+**(II) Combine feature tables. You will need to replace 'your_folder_name' with the folder that contains your tables to be added (when I did this for all studies, I just added additional --i-tables table_name.qza lines):**
+```{bash, eval=FALSE}
+qiime feature-table merge \
+            --i-tables your_folder_name/deblur_output_quality/table.qza \
+            --i-tables previous_merged_table.qza \
+            --o-merged-table merged_table.qza
+```
+
+**(III) Combine the sequence objects. You will again need to replace 'your_folder_name' with the folder that contains your sequences to be added (when I did this for all studies, I just added additional --i-data representative_sequences_name.qza lines):**
+```{bash, eval=FALSE}
+qiime feature-table merge-seqs \
+            --i-data your_folder_name/deblur_output/representative_sequences.qza \
+            --i-data previous_merged_representative_sequences.qza \
+            --o-merged-data merged_representative_sequences.qza
+```
+
+## C. Combined processing
+
+Now that all of the samples that we are looking at are combined into the merged sequences and table files, we can classify and analyze them.
+
+**(I) Summarize the combined feature tables (this is to check that everything looks OK after the merges, and can be skipped if not necessary):**
+```{bash, eval=FALSE}
+qiime feature-table summarize \
+            --i-table merged_table.qza  \
+            --o-visualization merged_table_summary.qzv
+```
+
+**(II) Classify the features (this part will probably take the longest - it may take at least a day or so and is the part that may not be possible on a local computer):**
+```{bash, eval=FALSE}
+qiime feature-classifier classify-sklearn \
+            --i-reads merged_representative_sequences.qza \
+            --i-classifier ref_alignments/classifier_silva_132_99_16S.qza \
+            --p-n-jobs 12 \
+            --output-dir taxa
+```
+As these sequences come from different 16S regions, I downloaded the full length 16S classifier from [here](https://docs.qiime2.org/2020.6/data-resources/). There is now an updated SILVA version, but I used the Silva 132 classifier (this can only improve upon classification accuracy, so I recommend using the latest one).
+
+**(III) Export this file to look at the classifications:**
+```{bash, eval=FALSE}
+qiime tools export \
+            --input-path taxa/classification.qza \
+            --output-path taxa
+```
+
+**(IV) Filter low abundance features:**
+```{bash, eval=FALSE}
+qiime feature-table filter-features \
+            --i-table merged_table.qza \
+            --p-min-frequency 10 \
+            --p-min-samples 1 \
+            --o-filtered-table merged_table_filtered.qza
+```
+
+**(V) Filter potential contaminants and those not classified at the kingdom level:**
+```{bash, eval=FALSE}
+qiime taxa filter-table \
+            --i-table merged_table_filtered.qza \
+            --i-taxonomy taxa/classification.qza \
+            --p-include D_1__ \
+            --p-exclude mitochondria,chloroplast \
+            --o-filtered-table merged_table_filtered_contamination.qza
+```
+
+**(VI) Summarize the filtered table:**
+```{bash, eval=FALSE}
+qiime feature-table summarize \
+            --i-table merged_table_filtered_contamination.qza \
+            --o-visualization merged_table_filtered_contamination_summary.qzv
+```
+Now find out how many features you have as well as the maximum sample depth (this is the "Maximum Frequency" in the "Frequency per sample" section).
+
+**(VII) Obtain rarefaction curves for samples:**
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+            --i-table merged_table_filtered_contamination.qza \
+            --p-max-depth 995391 \
+            --p-steps 20 \
+            --p-metrics 'observed_otus' \
+            --o-visualization merged_rarefaction_curves.qzv
+```
+
+**(VIII) Filter samples that have below 2000 reads:**
+```{bash, eval=FALSE}
+qiime feature-table filter-samples \
+            --i-table merged_table_filtered_contamination.qza \
+            --p-min-frequency 2000 \
+            --o-filtered-table  merged_table_final.qza
+```
+
+**(IX) Rarefy remaining samples to 2000:**
+```{bash, eval=FALSE}
+qiime feature-table rarefy \
+            --i-table merged_table_final.qza \
+            --p-sampling-depth 2000 \
+            --o-rarefied-table merged_table_final_rarefied.qza
+```
+
+**(X) Filter the sequences to contain only those that are in the rarefied feature table:**
+```{bash, eval=FALSE}
+qiime feature-table filter-seqs \
+            --i-data merged_representative_sequences.qza \
+            --i-table merged_table_final_rarefied.qza \
+            --o-filtered-data  representative_sequences_final_rarefied.qza
+```
+
+**(XI) Export feature table and sequences:**
+```{bash, eval=FALSE}
+qiime tools export \
+            --input-path representative_sequences_final_rarefied.qza \
+            --output-path exports
+sed -i -e '1 s/Feature/#Feature/' -e '1 s/Taxon/taxonomy/' taxa/taxonomy.tsv
+qiime tools export \
+            --input-path merged_table_final_rarefied.qza \
+            --output-path exports
+biom add-metadata \
+            -i exports/feature-table.biom \
+            -o exports/feature-table_w_tax.biom \
+            --observation-metadata-fp taxa/taxonomy.tsv \
+            --sc-separated taxonomy
+biom convert \
+            -i exports/feature-table_w_tax.biom \
+            -o exports/feature-table_w_tax.txt \
+            --to-tsv \
+            --header-key taxonomy
+```
+
+**(XII) Obtain phylogenetic tree using SEPP fragment insertion and the silva reference database:**
+```{bash, eval=FALSE}
+qiime fragment-insertion sepp \
+            --i-representative-sequences representative_sequences_final_rarefied.qza \
+            --i-reference-database ref_alignments/sepp-refs-silva-128.qza \
+            --o-tree insertion_tree_rarefied.qza \
+            --o-placements insertion_placements_rarefied.qza \
+            --p-threads 12
+```
+You can download the reference file [here](https://docs.qiime2.org/2020.6/data-resources/). At the time of writing, this still used Silva 128, but I would recommend using an updated version if there is one.
+
+**(XIII) Export the resulting insertion tree:**
+```{bash, eval=FALSE}
+qiime tools export \
+            --input-path insertion_tree_rarefied.qza \
+            --output-path exports
+```
+
+**(XIV) The files inside the exports folder should then be copied to the folder that the subsequent analyses will be carried out in, e.g.:**
+```{bash, eval=FALSE}
+for i in exports/* ; cp $i paper_data_20-04-14/qiime_output/; done
+```
+
+**Optional further diversity analyses (these will give some metrics and QIIME2 visualizations that can be viewed on the QIIME2 website, but if you include all samples that we have, then the website won't cope too well with the >2000 samples) To do these, you will need to upload a metadata file containing all samples. You can take the metadata file that I linked to above for this:**
+```{bash, eval=FALSE}
+qiime diversity core-metrics-phylogenetic \
+            --i-table merged_table_final_rarefied.qza \
+            --i-phylogeny insertion_tree_rarefied.qza \
+            --p-sampling-depth 2000 \
+            --m-metadata-file metadata.txt \
+            --p-n-jobs 12 \
+            --output-dir diversity
+qiime tools export \
+            --input-path diversity/weighted_unifrac_distance_matrix.qza \
+            --output-path diversity
+mv diversity/distance-matrix.tsv exports/weighted_unifrac.tsv
+qiime tools export \
+            --input-path diversity/unweighted_unifrac_distance_matrix.qza \
+            --output-path diversity
+mv diversity/distance-matrix.tsv exports/unweighted_unifrac.tsv
+```
+
+# 5. Adding additional genes to PICRUSt2 {.tabset}
+
+In this study, I use [PICRUSt2](https://github.com/picrust/picrust2/wiki) to predict the metagenome content of all Plastisphere samples. As the default reference files that PICRUSt2 uses don't contain some of the genes for PET degradation (*e.g.* PETase), I have added these to the reference database. To do this, I downloaded all genomes that are included in PICRUSt2 (or as many as possible - not quite all are available), made an  HMM for the genes of interest (*i.e.* PETase, tphA, etc.) and then ran this HMM on all PICRUSt2 genomes. I then parse the output to determine how many copies of these genes each genome has, and add this as a column to the default PICRUSt2 reference file.
+
+## 
+
+## A. Get genome files 
+
+The PICRUSt2 genomes will need to be downloaded, decompressed and saved somewhere locally. They can be downloaded from [this Figshare file](https://doi.org/10.6084/m9.figshare.12233192). 
+To decompress:
+```{bash, eval=FALSE}
+tar -xf path_to_file/JGI_PICRUSt_genomes.tar.bz2
+```
+
+## B. Get additional packages and files
+
+- [Conda](https://docs.conda.io/projects/conda/en/latest/commands/install.html)
+- HMM:
+```{bash, eval=FALSE}
+conda install -c biocore hmmer
+```
+- Biopython:
+```{bash, eval=FALSE}
+conda install biopython
+```
+- The [default KEGG ortholog file](https://github.com/picrust/picrust2/blob/master/picrust2/default_files/prokaryotic/ko.txt.gz)
+
+## C. Make HMMs
+
+The HMMs that are currently shown in the HMM/ folder were made from the .fasta files in the 'hmms_to_make' folder. To make these of your own, you can follow these steps.
+
+**(I) Search for the top hits of the gene of interest in [uniprot](https://www.uniprot.org/)**<br/>
+**(II) Click on the genes that you want to include and follow the link for the genomic DNA translation**<br/>
+**(III) Combine all of the DNA sequences into one .fasta file (you can do this using a text editing software)**<br/>
+**(IV) Get a stockholm alignment of the .fasta file. We used https://www.ebi.ac.uk/Tools/msa/clustalo/ (select 'DNA' and the 'STOCKHOLM' alignment option)**<br/>
+**(V) Download this alignment and run: **
+```{bash, eval=FALSE}
+hmmbuild PETase_DNA.hmm PETase_DNA.sto
+```
+**(VI) Move the .hmm file to the 'hmms/' folder**
+
+## D. Run against the reference genomes
+
+**(I) Give the paths to the files that we are using, changing these if necessary:**
+```{python, eval=FALSE}
+picrust_seqs = 'JGI_PICRUSt_genomes.fasta'
+hmms = os.listdir(os.getcwd()+'/hmms/')
+ko = 'ko.txt'
+```
+
+**(II) Open these files and set up the directories that we will save things to:**
+```{python, eval=FALSE}
+os.system('gunzip '+ko+'.gz')
+try: os.mkdir('hmms_out')
+except: didnt_make = True
+ko_data = pd.read_csv(ko, header=0, index_col=0, sep='\t')
+```
+
+**(III) Perform the HMM searches of the PICRUSt2 sequences using your HMMs (this will take a while to run):**
+```{python, eval=FALSE}
+for hmm in hmms:
+    os.system('nhmmer hmms/'+hmm+' '+picrust_seqs+' > hmms_out/'+hmm[:-4]+'.out')
+```
+You can open any of the files in the hmms_out folder if you want to check whether you have any hits that are above the inclusion threshold (and whether this fits what you would have expected)
+
+**(IV) Now take the information from these HMMs and add this to the PICRUSt2 KEGG ortholog information that we already have (this is a bit tedious as the HMM.out files don't use tabs between columns or anything that we could use to separate them, so we just have to read them in as text files and look at each character...)**
+```{python, eval=FALSE}
+hmms_out = os.listdir(os.getcwd()+'/hmms_out')
+main_dir = os.getcwd()
+genomes = list(ko_data.index.values)
+genomes = [str(genomes[i]).replace('-cluster', '') for i in range(len(genomes))]
+for hmm in hmms_out:
+    included_genomes = []
+    with open(main_dir+'/hmms_out/'+hmm, 'rU') as f:
+        contents = f.read()
+    row, rows = '', []
+    for a in range(len(contents)-1):
+        if contents[a:a+1] == '\n':
+            if row == '  ------ inclusion threshold ------':
+                break
+            rows.append(row)
+            row = ''
+        else:
+            row += contents[a]
+    after_start, other_count = False, 0
+    for r in range(len(rows)):
+        if after_start:
+            block = 0
+            this_genome = ''
+            for b in range(1, len(rows[r])):
+                if rows[r][b-1] == ' ' and rows[r][b] != ' ':
+                    block += 1
+                if block == 4 and rows[r][b] != ' ':
+                    this_genome += rows[r][b]
+            if this_genome != '':
+                included_genomes.append(this_genome)
+        count = 0
+        for a in range(len(rows[r])):
+            if rows[r][a] == '-':
+                count += 1
+            if count > 40:
+                after_start = True
+                continue
+    for a in range(len(included_genomes)):
+        if included_genomes[a][-11:] == 'Description':
+            included_genomes[a] = included_genomes[a][:-11]
+    this_col = []
+    for g in genomes:
+        c1 = included_genomes.count(g)
+        c2 = included_genomes.count(g[:-8])
+        this_col.append(c1+c2)
+    ko_data[hmm[:-4]] = this_col
+ko_data.to_csv('ko_all.txt', sep='\t')
+```
+
+You can now check the ko_all.txt file, but there should be new columns titled with your HMM names and counts of how many times these genes are in each of your genomes in the rows. If you want to use these with the rest of the Plastisphere metaanalysis then you should replace the 'ko_all.txt' file in the picrust folders in both of the folders inside the 'all_output_and_recreate' folder (downloaded from [here](https://doi.org/10.6084/m9.figshare.12227303.v3))
+
+# 6. Data and statistical analysis {.tabset}
+
+## 
+
+## A. Introduction
+
+This can be used to recreate all of the analyses found in the Plastisphere meta-analysis paper, or alternatively to re-do these analyses while also incorporating additional data.
+
+## B. Other files needed
+
+These can be found [here](https://github.com/R-Wright-1/Plastisphere-MetaAnalysis/tree/master/files_needed):
+<ul>
+<li>metadata.txt</li>
+<li>Study_dates.csv</li>
+<li>Study_location.csv</li>
+<li>world_map.jpg</li>
+</ul>
+
+This goes through all analyses run, but you can download all of the analysis files used and created from [this Figshare file](https://doi.org/10.6084/m9.figshare.12227303). In particular, taking the random_forest and ancom files will make a very big difference to how long this takes to run. If you just want to re-make the figures (possibly with changes) then you can add all files but remove the figures folder.
+
+It is expected that the base directory contains, at a minimum:
+<ul>
+<li>metadata.txt</li>
+<li>Study_dates.csv</li>
+<li>Study_location.csv</li>
+<li>world_map.jpg</li>
+<li>qiime_output
+<ul>
+<li>dna-sequences.fasta</li>
+<li>feature-table_w_tax.txt</li>
+<li>tree.nwk</li>
+</ul>
+</li>
+<li>picrust
+<ul>
+<li>kegg_list.csv</li>
+<li>ko_all.txt</li>
+</ul>
+</li>
+</ul>
+
+## C. Analysis
+
+The majority of these code chunks contain statements to ensure that they aren't run if the output already exists, but if you want to run them anyway then you should change these/move the files already created to somewhere else. Many steps will rely on the output of previous steps, although I have tried to ensure that once run they will save their output so that they won't need to be re-run multiple times (they are often very time/computationally intensive). 
+
+**(I) Set the base directory for all inputs and outputs and the basic files:**
+```{python, eval=FALSE}
+basedir = '/Users/robynwright/Documents/OneDrive/Papers_writing/Plastisphere Meta-analysis/test_recreate_analyses/recreate_analyses' 
+ft_tax, meta_fn, seqs, study_locs, study_dates = basedir+'qiime_output/feature-table_w_tax.txt', 'metadata.txt', basedir+'qiime_output/dna-sequences.fasta', 'Study_location.csv', 'Study_dates.csv'
+n_jobs, est = 10, 1
+```
+Note: basedir should be the directory containing the files listed above and you should also change n_jobs to be the number of processors that you want to use (this will affect the speed with which many functions run) and est to the number of estimators that you want to use for the random forest sections. 1 will run very quickly but will not be robust - the analyses in the paper used 10,000.
+
+**(II) Make empty folder, if they don't already exist:**
+```{python, eval=FALSE}
+folder_names = ["agglom", "picrust", "figures", "ancom", "figures/ancom", "figures/metacoder", "random_forest", "random_forest/single_environment", "random_forest/leave_one_dataset_out", "figures/random_forest", "figures/random_forest/single_environment", "figures/random_forest/leave_one_dataset_out"]
+for fn in folder_names:
+    if not os.path.exists(basedir+"/"+fn):
+       os.system("mkdir "+basedir+"/"+fn)
+```

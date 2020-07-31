@@ -21,6 +21,7 @@ library(compositions)
 library(vegan)
 library(phyloseq)
 library(ape)
+library(data.table)
 
 opts_knit$set(root.dir = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/')
 #reticulate::py_config()
@@ -57,7 +58,9 @@ def get_colors(num):
     return colors_40+colors_40+colors_40+colors_40
 ```
 
-## Analysis and commands run {.tabset}
+## Commands run, reads remaining and domain-level classifications {.tabset}
+
+### <br/>
 
 ### Initial preparation
 
@@ -112,7 +115,7 @@ parallel -j 1 'kneaddata -i {} -o kneaddata_out_W0/ \
  for i in kneaddata_out_W12/*kneaddata.fastq ; do mv $i W12_decontaminated ; done
 ```
 
-```{python}
+```{python, echo=FALSE}
 reads_W0  = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W0_kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
 reads_W06 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W06_kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
 reads_W12 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W12_kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
@@ -212,19 +215,19 @@ sudo mount -t ramfs none /scratch/ramdisk/
 sudo cp -a /home/shared/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ /scratch/ramdisk/
 mkdir W0_kraken2_out
 mkdir W0_kraken2_kreport
-parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output W0_kraken2_out/{/.}.kraken.txt --report W0_kraken2_kreport/{/.}.kreport --confidence 0.1' ::: W0_decontaminated/*.fastq
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output W0_kraken2_out/{/.}.kraken --report W0_kraken2_kreport/{/.}.kreport --confidence 0.1' ::: W0_decontaminated/*.fastq
 
 parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: W0_kraken2_kreport/*.kreport
 
 mkdir W06_kraken2_out
 mkdir W06_kraken2_kreport
-parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output W06_kraken2_out/{/.}.kraken.txt --report W06_kraken2_kreport/{/.}.kreport --confidence 0.1' ::: W06_decontaminated/*.fastq
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output W06_kraken2_out/{/.}.kraken --report W06_kraken2_kreport/{/.}.kreport --confidence 0.1' ::: W06_decontaminated/*.fastq
 
 parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: W06_kraken2_kreport/*.kreport
 
 mkdir W12_kraken2_out
 mkdir W12_kraken2_kreport
-parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output W12_kraken2_out/{/.}.kraken.txt --report W12_kraken2_kreport/{/.}.kreport --confidence 0.1' ::: W12_decontaminated/*.fastq
+parallel -j 1 'kraken2 --use-names --threads 4 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output W12_kraken2_out/{/.}.kraken --report W12_kraken2_kreport/{/.}.kreport --confidence 0.1' ::: W12_decontaminated/*.fastq
 
 parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: W12_kraken2_kreport/*.kreport
 ```
@@ -250,7 +253,7 @@ def get_kraken_bracken(fol):
             for row in csv.reader(f, delimiter='\t'):
                 bk.append(row)
                 row[5] = row[5].lstrip()
-                if row[3] == 'K':
+                if row[3] == 'K' or 'D' in row[3]:
                     if domain_name != '':
                         domains[domain_name] = this_domain
                     this_domain, domain_name = [], row[5]
@@ -356,18 +359,32 @@ def plot_domain(kraken_reads, kraken_percent):
   return
 ```
 
+```{python, echo=FALSE}
+def remove_symbol(df):
+  ind = list(df.index.values)
+  ind_dict = {}
+  for i in ind:
+    if '[' in i:
+      ind_dict[i] = i.replace('[', '').replace(']', '')
+  df = df.rename(index=ind_dict)
+  df = df.groupby(by=df.index, axis=0).sum()
+  return df
+```
+
 **W0 domain level:**
 ```{python, W0_domain, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
 fol = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W0_kraken2_kreport/'
 bracken, kraken, bracken_kreport, kraken_reads, kraken_percent, bracken_fungi, bracken_fungi_ra = get_kraken_bracken(fol)
+
+bracken, kraken, kraken_percent, bracken_fungi, bracken_fungi_ra = remove_symbol(bracken), remove_symbol(kraken), remove_symbol(kraken_percent), remove_symbol(bracken_fungi), remove_symbol(bracken_fungi_ra)
 
 kraken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_kraken.csv')
 bracken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_full_species.csv')
 bracken_fungi.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_bracken_fungi.csv')
 bracken_fungi_ra.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_bracken_fungi_relabun.csv')
 
-
 plot_domain(kraken_reads, kraken_percent)
+kraken_reads_W0 = pd.DataFrame(kraken_reads.sum(axis=0)).transpose()
 plt.tight_layout()
 plt.show()
 ```
@@ -377,12 +394,15 @@ plt.show()
 fol = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W06_kraken2_kreport/'
 bracken, kraken, bracken_kreport, kraken_reads, kraken_percent, bracken_fungi, bracken_fungi_ra = get_kraken_bracken(fol)
 
+bracken, kraken, kraken_percent, bracken_fungi, bracken_fungi_ra = remove_symbol(bracken), remove_symbol(kraken), remove_symbol(kraken_percent), remove_symbol(bracken_fungi), remove_symbol(bracken_fungi_ra)
+
 kraken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_kraken.csv')
 bracken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_full_species.csv')
 bracken_fungi.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_bracken_fungi.csv')
 bracken_fungi_ra.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_bracken_fungi_relabun.csv')
 
 plot_domain(kraken_reads, kraken_percent)
+kraken_reads_W06 = pd.DataFrame(kraken_reads.sum(axis=0)).transpose()
 plt.tight_layout()
 plt.show()
 ```
@@ -392,19 +412,22 @@ plt.show()
 fol = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/W12_kraken2_kreport/'
 bracken, kraken, bracken_kreport, kraken_reads, kraken_percent, bracken_fungi, bracken_fungi_ra = get_kraken_bracken(fol)
 
+bracken, kraken, kraken_percent, bracken_fungi, bracken_fungi_ra = remove_symbol(bracken), remove_symbol(kraken), remove_symbol(kraken_percent), remove_symbol(bracken_fungi), remove_symbol(bracken_fungi_ra)
+
 kraken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_kraken.csv')
 bracken.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_full_species.csv')
 bracken_fungi.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_bracken_fungi.csv')
 bracken_fungi_ra.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_bracken_fungi_relabun.csv')
 
 plot_domain(kraken_reads, kraken_percent)
+kraken_reads_W12 = pd.DataFrame(kraken_reads.sum(axis=0)).transpose()
 plt.tight_layout()
 plt.show()
 ```
 
 ### Get fungal reads
 
-Using [KrakenTools](https://github.com/jenniferlu717/KrakenTools.git) - this searches based on the NCBI fungal taxon ID ([4751](https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=4751&lvl=0)) and then also takes all lower classifications (because we have used the --include-children).
+Using [KrakenTools](https://github.com/jenniferlu717/KrakenTools.git) - this searches based on the NCBI fungal taxon ID ([4751](https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=4751&lvl=0)) and then also takes all lower classifications.
 ```{bash, eval=FALSE}
 git clone https://github.com/jenniferlu717/KrakenTools.git
 
@@ -418,9 +441,9 @@ for i in * ; do mv $i ${i%.*} ; done
 cd ..
 parallel -j 1 'python KrakenTools/extract_kraken_reads.py -k {} -s W06_decontaminated/{/.}.fastq -o W06_fungi/{/.}.fastq -t 4751 --include-children -r W06_kraken2_kreport/{/.}.kreport' ::: W06_kraken2_out/*.kraken
 
-cd W12_kraken2_out
-for i in * ; do mv $i ${i%.*} ; done
-cd ..
+#cd W12_kraken2_out
+#for i in * ; do mv $i ${i%.*} ; done
+#cd ..
 parallel -j 1 'python KrakenTools/extract_kraken_reads.py -k {} -s W12_decontaminated/{/.}.fastq -o W12_fungi/{/.}.fastq -t 4751 --include-children -r W12_kraken2_kreport/{/.}.kreport' ::: W12_kraken2_out/*.kraken
 ```
 
@@ -428,23 +451,124 @@ parallel -j 1 'python KrakenTools/extract_kraken_reads.py -k {} -s W12_decontami
 
 **Run using Uniref90 and Uniref50 databases:**
 ```{bash, eval=FALSE}
-parallel -j 1 'humann --input {} --output W0_fungi_humann/ --threads 12 --nucleotide-database /home/robyn/databases/humann/humann3_databases/' ::: W0_fungi/*.fastq
+parallel -j 1 'humann --input {} --output W0_fungi_humann/ --threads 12' ::: W0_fungi/*.fastq
+
+parallel -j 1 'humann --input {} --output W06_fungi_humann/ --threads 12' ::: W06_fungi/*.fastq
+
+parallel -j 1 'humann --input {} --output W12_fungi_humann/ --threads 8' ::: W12_fungi/*.fastq
 ```
 
 **Combine output files:**
 ```{bash, eval=FALSE}
+humann_join_tables -s --input W0_fungi_humann/ --file_name pathabundance --output W0_fungi_humann/humann_pathabundance.tsv
+humann_join_tables -s --input W0_fungi_humann/ --file_name pathcoverage --output W0_fungi_humann/humann_pathcoverage.tsv
+humann_join_tables -s --input W0_fungi_humann/ --file_name genefamilies --output W0_fungi_humann/humann_genefamilies.tsv
 
+humann_join_tables -s --input W06_fungi_humann/ --file_name pathabundance --output W06_fungi_humann/humann_pathabundance.tsv
+humann_join_tables -s --input W06_fungi_humann/ --file_name pathcoverage --output W06_fungi_humann/humann_pathcoverage.tsv
+humann_join_tables -s --input W06_fungi_humann/ --file_name genefamilies --output W06_fungi_humann/humann_genefamilies.tsv
+
+humann_join_tables -s --input W12_fungi_humann/ --file_name pathabundance --output W12_fungi_humann/humann_pathabundance.tsv
+humann_join_tables -s --input W12_fungi_humann/ --file_name pathcoverage --output W12_fungi_humann/humann_pathcoverage.tsv
+humann_join_tables -s --input W12_fungi_humann/ --file_name genefamilies --output W12_fungi_humann/humann_genefamilies.tsv
 ```
 
 **Renormalise output files:**
 ```{bash, eval=FALSE}
+humann_renorm_table --input W0_fungi_humann/humann_pathabundance.tsv --units relab --output W0_fungi_humann/humann_pathabundance_relab.tsv
+humann_split_stratified_table --input W0_fungi_humann/humann_pathabundance_relab.tsv --output ./
+humann_renorm_table --input W0_fungi_humann/humann_genefamilies.tsv --units relab --output W0_fungi_humann/humann_genefamilies_relab.tsv
+humann_split_stratified_table --input W0_fungi_humann/humann_genefamilies_relab.tsv --output ./
+humann_renorm_table --input W0_fungi_humann/humann_genefamilies.tsv --output W0_fungi_humann/humann_genefamilies_cpm.tsv --units cpm --update-snames
 
+humann_renorm_table --input W06_fungi_humann/humann_pathabundance.tsv --units relab --output W06_fungi_humann/humann_pathabundance_relab.tsv
+humann_split_stratified_table --input W06_fungi_humann/humann_pathabundance_relab.tsv --output ./
+humann_renorm_table --input W06_fungi_humann/humann_genefamilies.tsv --units relab --output W06_fungi_humann/humann_genefamilies_relab.tsv
+humann_split_stratified_table --input W06_fungi_humann/humann_genefamilies_relab.tsv --output ./
+humann_renorm_table --input W06_fungi_humann/humann_genefamilies.tsv --output W06_fungi_humann/humann_genefamilies_cpm.tsv --units cpm --update-snames
+
+humann_renorm_table --input W12_fungi_humann/humann_pathabundance.tsv --units relab --output W12_fungi_humann/humann_pathabundance_relab.tsv
+humann_split_stratified_table --input W12_fungi_humann/humann_pathabundance_relab.tsv --output ./
+humann_renorm_table --input W12_fungi_humann/humann_genefamilies.tsv --units relab --output W12_fungi_humann/humann_genefamilies_relab.tsv
+humann_split_stratified_table --input W12_fungi_humann/humann_genefamilies_relab.tsv --output ./
+humann_renorm_table --input W12_fungi_humann/humann_genefamilies.tsv --output W12_fungi_humann/humann_genefamilies_cpm.tsv --units cpm --update-snames
 ```
 
 **Regroup output to other functional categories:**
 ```{bash, eval=FALSE}
+humann_regroup_table --input W0_fungi_humann/humann_genefamilies_cpm.tsv --output W0_fungi_humann/humann_genefamilies_cpm_ko50.tsv --groups uniref50_ko
+humann_regroup_table --input W0_fungi_humann/humann_genefamilies_cpm.tsv --output W0_fungi_humann/humann_genefamilies_cpm_ko90.tsv --groups uniref90_ko
 
+humann_regroup_table --input W06_fungi_humann/humann_genefamilies_cpm.tsv --output W06_fungi_humann/humann_genefamilies_cpm_ko50.tsv --groups uniref50_ko
+humann_regroup_table --input W06_fungi_humann/humann_genefamilies_cpm.tsv --output W06_fungi_humann/humann_genefamilies_cpm_ko90.tsv --groups uniref90_ko
+
+humann_regroup_table --input W12_fungi_humann/humann_genefamilies_cpm.tsv --output W12_fungi_humann/humann_genefamilies_cpm_ko50.tsv --groups uniref50_ko
+humann_regroup_table --input W12_fungi_humann/humann_genefamilies_cpm.tsv --output W12_fungi_humann/humann_genefamilies_cpm_ko90.tsv --groups uniref90_ko
 ```
+
+### Output files
+
+**Kneaddata read counts**:
+<ul>
+<li>W0_kneaddata_read_counts.txt
+<li>W06_kneaddata_read_counts.txt
+<li>W12_kneaddata_read_counts.txt
+</ul>
+
+**Domain-level taxonomy (number of reads and relative abundance):**
+<ul>
+<li>W0_kraken.csv
+<li>W06_kraken.csv
+<li>W12_kraken.csv
+</ul>
+
+**All domains taxonomy tables (number of reads):**
+<ul>
+<li>W0_full_species.csv
+<li>W06_full_species.csv
+<li>W12_full_species.csv
+</ul>
+
+**Fungal taxonomy tables (number of reads):**
+<ul>
+<li>W0_bracken_fungi.csv
+<li>W06_bracken_fungi.csv
+<li>W12_bracken_fungi.csv
+</ul>
+
+**Fungal taxonomy tables (relative abundance):**
+<ul>
+<li>W0_bracken_fungi_relabun.csv
+<li>W06_bracken_fungi_relabun.csv
+<li>W12_bracken_fungi_relabun.csv
+</ul>
+
+**HUMAnN output:**
+<ul>
+<li>*Gene families (cpm)*
+<ul>
+<li>W0/humann_genefamilies_cpm.tsv
+<li>W06/humann_genefamilies_cpm.tsv
+<li>W12/humann_genefamilies_cpm.tsv
+</ul>
+<li>*KEGG orthologs (Uniref50 mapping)*
+<ul>
+<li>W0/humann_genefamilies_cpm_ko50.tsv
+<li>W06/humann_genefamilies_cpm_ko50.tsv
+<li>W12/humann_genefamilies_cpm_ko50.tsv
+</ul>
+<li>*KEGG orthologs (Uniref90 mapping)*
+<ul>
+<li>W0/humann_genefamilies_cpm_ko90.tsv
+<li>W06/humann_genefamilies_cpm_ko90.tsv
+<li>W12/humann_genefamilies_cpm_ko90.tsv
+</ul>
+<li>*Pathways*
+<ul>
+<li>W0/humann_pathabundance_relab.tsv
+<li>W06/humann_pathabundance_relab.tsv
+<li>W12/humann_pathabundance_relab.tsv
+</ul></ul>
 
 ## Taxonomic analysis {.tabset}
 
@@ -546,9 +670,9 @@ plt.tight_layout()
 plt.show()
 ```
 
-### Stacked bar fungi (genus)
+### Stacked bar fungi (genus, relative abundance)
 
-Here all fungi have been grouped to the genus level and this shows all genera that are above 2% abundance in at least one sample. Note that these colours are not unique, but are cycled and the genera are plotted in order, so as e.g. Acanthamoeba (where present) is plotted at 0 and Other is always plotted at 100.
+Here all fungi have been grouped to the genus level and this shows all genera that are above 2% abundance in at least one sample. Note that these colours are not unique, but are cycled and the genera are plotted in order, so as e.g. Acaromyces (where present) is plotted at 0 and Other is always plotted at 100.
 
 ```{python, all_genus, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
 fungi_ra_W0 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_bracken_fungi_relabun.csv', header=0, index_col=0)
@@ -582,13 +706,13 @@ def get_stacked_bar(ra, ax, color_dict):
       this_gen = ra.loc[g, s]
       ax.bar(pltx[sn], this_gen, bottom=bottom, color=color_dict[g], edgecolor='k', width=0.8)
       bottom += this_gen
-    ax.bar(pltx[sn], 100, bottom=bottom, color=color_dict['Other (<1%)'], edgecolor='k', width=0.8)
+    ax.bar(pltx[sn], 100, bottom=bottom, color=color_dict['Other (<2%)'], edgecolor='k', width=0.8)
   ax.set_xlim([-0.7, all_x[-1]+0.5])
   ax.set_ylim([0, 100])
   return
 
 all_genera = sorted(list(set(list(genus_W0.index.values)+list(genus_W06.index.values)+list(genus_W12.index.values))))
-all_genera.append('Other (<1%)')
+all_genera.append('Other (<2%)')
 tax_colors = get_colors(len(all_genera))
 color_dict = {}
 handles = []
@@ -609,16 +733,289 @@ plt.ylabel('Week 6\nRelative abundance (%)')
 plt.sca(ax3)
 plt.ylabel('Week 12\nRelative abundance (%)')
 plt.xticks(all_x, all_samples, rotation=90, fontsize=8)
-ax3.legend(handles=handles, loc='upper left', bbox_to_anchor=(-0.02,-0.2), ncol=7, fontsize=6)
+ax3.legend(handles=handles, loc='upper left', bbox_to_anchor=(-0.02,-0.2), ncol=8, fontsize=6)
 plt.tight_layout()
 plt.show()
+```
 
+```{python, echo=FALSE, results='hide', cache=TRUE}
+def add_week(df, week):
+  ind = list(df.index.values)
+  ind_dict = {}
+  sn = list(df.columns)
+  sn_dict = {}
+  for i in ind:
+    ind_dict[i] = i+' '+week
+  for s in sn:
+    sn_dict[s] = s.split('-')[0]
+  df = df.rename(index=ind_dict, columns=sn_dict)
+  return df
+new_genus_W0 = add_week(pd.DataFrame(genus_W0), 'W0')
+new_genus_W06 = add_week(pd.DataFrame(genus_W06), 'W06')
+new_genus_W12 = add_week(pd.DataFrame(genus_W12), 'W12')
+
+genus = pd.concat([new_genus_W0, new_genus_W06, new_genus_W12]).fillna(0)
+genus = genus.round(1).sort_values(by=['name'])
+```
+
+### Fungi table
+```{R, fungi_table, cache=TRUE, echo=FALSE}
+genus = setDT(py$genus, keep.rownames = "Genus")[]
+genus %>%
+  mutate_if(is.numeric, function(x) {
+    cell_spec(x, color=ifelse(x > 5, "white", "black"), bold=TRUE, background = spec_color(x, option = "A", end = 1, direction=-1))
+  }) %>% 
+  kable(format = "html", escape = F) %>%
+  kable_styling() %>%
+  scroll_box(width = "800px", height = "500px")
+```
+
+### Stacked bar fungi (genus, overall abundance)
+
+Here all fungi have again been grouped to the genus level and this again shows all genera that are above 2% relative abundance (as calculated above), but the values shown are normalised to the number of reads in each sample (reads per million). Note that these colours are again not unique (but are the same as above), but are cycled and the genera are plotted in order, so as e.g. Acaromyces (where present) is plotted at 0 and Other is always plotted at the top.
+
+```{python, all_genus_aba, results='hide', fig.keep='all', cache=TRUE, echo=FALSE}
+fungi_ra_W0 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W0_bracken_fungi.csv', header=0, index_col=0)
+fungi_ra_W06 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W06_bracken_fungi.csv', header=0, index_col=0)
+fungi_ra_W12 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/summary_files/W12_bracken_fungi.csv', header=0, index_col=0)
+
+fungi_ra_W0 = fungi_ra_W0.divide(kraken_reads_W0.values).multiply(1000000)
+fungi_ra_W06 = fungi_ra_W06.divide(kraken_reads_W06.values).multiply(1000000)
+fungi_ra_W12 = fungi_ra_W12.divide(kraken_reads_W12.values).multiply(1000000)
+
+def get_genus(fungi_ra):
+  genus = {}
+  for f in fungi_ra.index.values:
+    genus[f] = f.split(' ')[0]
+  genus = fungi_ra.rename(index=genus)
+  genus = genus.groupby(by=genus.index, axis=0).sum()
+  return genus
+
+genus_W0 = get_genus(fungi_ra_W0)
+genus_W06 = get_genus(fungi_ra_W06)
+genus_W12 = get_genus(fungi_ra_W12)
+
+plt.figure(figsize=(10,14))
+ax1 = plt.subplot(311)
+ax2 = plt.subplot(312)
+ax3 = plt.subplot(313)
+
+def get_stacked_bar(ra, ax, color_dict):
+  genera = list(ra.index.values)
+  for s in ra.columns:
+    sn = s.split('-')[0]
+    bottom = 0
+    other = []
+    for g in genera:
+      this_gen = ra.loc[g, s]
+      if g not in all_genera:
+        other.append(this_gen)
+        continue
+      ax.bar(pltx[sn], this_gen, bottom=bottom, color=color_dict[g], edgecolor='k', width=0.8)
+      bottom += this_gen
+    ax.bar(pltx[sn], other, bottom=bottom, color=color_dict['Other (<2%)'], edgecolor='k', width=0.8)
+  ax.set_xlim([-0.7, all_x[-1]+0.5])
+  plt.sca(ax)
+  plt.semilogy()
+  return
+
+get_stacked_bar(genus_W0, ax1, color_dict)
+get_stacked_bar(genus_W06, ax2, color_dict)
+get_stacked_bar(genus_W12, ax3, color_dict)
+
+plt.sca(ax1)
+plt.xticks([])
+plt.ylabel('Week 0\nRelative abundance (%)')
+plt.sca(ax2)
+plt.xticks([])
+plt.ylabel('Week 6\nRelative abundance (%)')
+plt.sca(ax3)
+plt.ylabel('Week 12\nRelative abundance (%)')
+plt.xticks(all_x, all_samples, rotation=90, fontsize=8)
+ax3.legend(handles=handles, loc='upper left', bbox_to_anchor=(-0.02,-0.2), ncol=8, fontsize=6)
+plt.tight_layout()
+plt.show()
+```
+
+```{python, echo=FALSE, results='hide', cache=TRUE}
+def add_week(df, week):
+  keeping, not_keeping = [], []
+  ind = list(df.index.values)
+  for i in ind:
+    if i in all_genera:
+      keeping.append(True), not_keeping.append(False)
+    else:
+      keeping.append(False), not_keeping.append(True)
+  all_keeping = pd.DataFrame(df.loc[keeping, :])
+  all_others = pd.DataFrame(df.loc[not_keeping, :])
+  all_others = pd.DataFrame(all_others.sum(axis=0)).transpose().rename(index={0:'Other <2%'})
+  df = pd.concat([all_keeping, all_others])
+  ind = list(df.index.values)
+  ind_dict = {}
+  sn = list(df.columns)
+  sn_dict = {}
+  for i in ind:
+    ind_dict[i] = i+' '+week
+  for s in sn:
+    sn_dict[s] = s.split('-')[0]
+  df = df.rename(index=ind_dict, columns=sn_dict)
+  return df
+new_genus_W0 = add_week(pd.DataFrame(genus_W0), 'W0')
+new_genus_W06 = add_week(pd.DataFrame(genus_W06), 'W06')
+new_genus_W12 = add_week(pd.DataFrame(genus_W12), 'W12')
+
+genus = pd.concat([new_genus_W0, new_genus_W06, new_genus_W12]).fillna(0)
+genus = genus.round(1).sort_index(axis=0)
+print(genus)
+```
+
+### Fungi table (overall abundance)
+```{R, fungi_table_aba, cache=TRUE, echo=FALSE}
+genus = setDT(py$genus, keep.rownames = "Genus")[]
+genus %>%
+  mutate_if(is.numeric, function(x) {
+    cell_spec(x, color=ifelse(x > 5, "white", "black"), bold=TRUE, background = spec_color(x, option = "A", end = 1, direction=-1))
+  }) %>% 
+  kable(format = "html", escape = F) %>%
+  kable_styling() %>%
+  scroll_box(width = "800px", height = "500px")
 ```
 
 ## Functional analysis {.tabset}
 
-### NMDS plots
+This has been carried out using HUMAnN3 with only the reads that were classified as fungal using Kraken2. There are not many classified functions though, probably due to the low numbers of fungal reads (usually in the order of tens to hundreds).
+
+```{python, echo=FALSE, results='hide'}
+pway = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/fungal_metagenome/humann_out/'
+W0_genes = pd.read_csv(pway+'W0/humann_genefamilies_cpm.tsv', header=0, index_col=0, sep='\t')
+W0_ko50 = pd.read_csv(pway+'W0/humann_genefamilies_cpm_ko50.tsv', header=0, index_col=0, sep='\t')
+W0_ko90 = pd.read_csv(pway+'W0/humann_genefamilies_cpm_ko90.tsv', header=0, index_col=0, sep='\t')
+W0_pathway = pd.read_csv(pway+'W0/humann_pathabundance_relab.tsv', header=0, index_col=0, sep='\t')
+
+W06_genes = pd.read_csv(pway+'W06/humann_genefamilies_cpm.tsv', header=0, index_col=0, sep='\t')
+W06_ko50 = pd.read_csv(pway+'W06/humann_genefamilies_cpm_ko50.tsv', header=0, index_col=0, sep='\t')
+W06_ko90 = pd.read_csv(pway+'W06/humann_genefamilies_cpm_ko90.tsv', header=0, index_col=0, sep='\t')
+W06_pathway = pd.read_csv(pway+'W06/humann_pathabundance_relab.tsv', header=0, index_col=0, sep='\t')
+
+W12_genes = pd.read_csv(pway+'W12/humann_genefamilies_cpm.tsv', header=0, index_col=0, sep='\t')
+W12_ko50 = pd.read_csv(pway+'W12/humann_genefamilies_cpm_ko50.tsv', header=0, index_col=0, sep='\t')
+W12_ko90 = pd.read_csv(pway+'W12/humann_genefamilies_cpm_ko90.tsv', header=0, index_col=0, sep='\t')
+W12_pathway = pd.read_csv(pway+'W12/humann_pathabundance_relab.tsv', header=0, index_col=0, sep='\t')
+
+dropping = [W0_ko50, W0_ko90, W0_genes, W0_pathway, W06_ko50, W06_ko90, W06_genes, W06_pathway, W12_ko50, W12_ko90, W12_genes, W12_pathway]
+for a in range(len(dropping)):
+  drop = []
+  for b in dropping[a].index.values:
+    if 'unclassified' in b:
+      drop.append(False)
+    else:
+      drop.append(True)
+  dropping[a] = dropping[a].loc[drop, :]
+W0_ko50, W0_ko90, W0_genes, W0_pathway, W06_ko50, W06_ko90, W06_genes, W06_pathway, W12_ko50, W12_ko90, W12_genes, W12_pathway = dropping
+
+def combine(ko50, ko90):
+  combined = pd.concat([ko50, ko90])
+  combined = combined.drop(['UNGROUPED', 'UNMAPPED'], axis=0)
+  combined = combined.groupby(combined.index.values).sum()
+  combined = combined.append(1000000-combined.sum(axis=0), ignore_index=True)
+  combined = combined.rename(index={combined.index.values[-1]:'Ungrouped'})
+  return combined
+  
+W0_ko = combine(W0_ko50, W0_ko90)
+W06_ko = combine(W06_ko50, W06_ko90)
+W12_ko = combine(W12_ko50, W12_ko90)
+
+W0_genes.drop(['UNMAPPED'], axis=0, inplace=True)
+W06_genes.drop(['UNMAPPED'], axis=0, inplace=True)
+W12_genes.drop(['UNMAPPED'], axis=0, inplace=True)
+W0_pathway.drop(['UNMAPPED'], axis=0, inplace=True)
+W06_pathway.drop(['UNMAPPED'], axis=0, inplace=True)
+W12_pathway.drop(['UNMAPPED'], axis=0, inplace=True)
+W0_ko.drop(['Ungrouped'], axis=0, inplace=True)
+W06_ko.drop(['Ungrouped'], axis=0, inplace=True)
+W12_ko.drop(['Ungrouped'], axis=0, inplace=True)
+
+```
+
+```{python, echo=FALSE}
+def get_richness_plot(data):
+  richness = []
+  x = []
+  for s in range(len(all_samples)):
+    x.append(s)
+    for sam in data.columns:
+      if all_samples[s] in sam:
+        one_sample = pd.DataFrame(data.loc[:, sam])
+        one_sample = one_sample[one_sample.max(axis=1) > 0]
+        richness.append(one_sample.shape[0])
+  plt.figure(figsize=(10,4))
+  ax1 = plt.subplot(111)
+  for a in range(len(richness)):
+    ax1.bar(x[a], richness[a], width=0.8, color='#8E0145', edgecolor='k')
+  plt.xticks(x, all_samples, rotation=90, fontsize=8)
+  plt.xlim([-0.7, x[-1]+0.5])
+  if max(richness) > 10:
+    plt.semilogy()
+  plt.ylabel('Richness')
+  plt.tight_layout()
+```
 
 ### Gene family richness
 
+**W0:**
+```{python, echo=FALSE}
+get_richness_plot(W0_genes)
+plt.show()
+```
+
+**W06:**
+```{python, echo=FALSE}
+get_richness_plot(W06_genes)
+plt.show()
+```
+
+**W12:**
+```{python, echo=FALSE}
+get_richness_plot(W12_genes)
+plt.show()
+```
+
+### KO richness
+
+**W0:**
+```{python, echo=FALSE}
+get_richness_plot(W0_ko)
+plt.show()
+```
+
+**W06:**
+```{python, echo=FALSE}
+get_richness_plot(W06_ko)
+plt.show()
+```
+
+**W12:**
+```{python, echo=FALSE}
+get_richness_plot(W12_ko)
+plt.show()
+```
+
 ### Pathway richness
+
+**W0:**
+```{python, echo=FALSE}
+get_richness_plot(W0_pathway)
+plt.show()
+```
+
+**W06:**
+```{python, echo=FALSE}
+get_richness_plot(W06_pathway)
+plt.show()
+```
+
+**W12:**
+```{python, echo=FALSE}
+get_richness_plot(W12_pathway)
+plt.show()
+```

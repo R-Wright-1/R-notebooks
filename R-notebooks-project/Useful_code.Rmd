@@ -13,10 +13,52 @@ library(knitr)
 
 # Terminal/bash and other programmes
 
-## Using rsync to copy files
+## Basic command line
 
+Count number of files in directory:
+```{bash, eval=FALSE}
+ls -1 | wc -l
+```
+
+Show certain number of files in directory (default is 10):
+```{bash, eval=FALSE}
+ls | head
+ls | head -n 20
+```
+
+List size of files:
+```{bash, eval=FALSE}
+du -h | sort -h
+su -sh
+```
+
+Unzip files:
+```{bash, eval=FALSE}
+gunzip raw_data/*gz
+tar -xf filename
+```
+
+Using rsync to copy files:
 ```{bash, eval=FALSE}
 rsync --partial --progress W0.tar.bz2 robyn@vulcan.pharmacology.dal.ca:/home/robyn/
+```
+
+Connect to server:
+```{bash, eval=FALSE}
+ssh robyn@kronos.pharmacology.dal.ca
+ssh robyn@vulcan.pharmacology.dal.ca
+
+#pwd = standard ZA no !, private = standard Malay no !
+```
+
+Combine fasta files:
+```{bash, eval=FALSE}
+cat folder/*.fasta > combined.fasta
+```
+
+[Server backup](https://github.com/LangilleLab/lab_information/wiki/Backups-and-Extra-Storage):
+```{bash, eval=FALSE}
+ln -s fungi_metagenome/processing/ robyn_backup/fungi_metagenome/
 ```
 
 ## PICRUSt2
@@ -49,15 +91,6 @@ raxml-ng --evaluate --msa $REF_MSA --tree $TREE --prefix info --model GTR+G —t
 #first align sequence file using https://www.ebi.ac.uk/Tools/msa/clustalo/ (choose stockholm alignment)
 hmmbuild output_file.hmm input_aligned_sequences.sto
 hmmer hmm_file.hmm fasta_input.fa > output_file.out
-```
-
-## Connect to server
-
-```{bash, eval=FALSE}
-ssh robyn@kronos.pharmacology.dal.ca
-ssh robyn@vulcan.pharmacology.dal.ca
-
-#pwd = standard ZA no !, private = standard Malay no !
 ```
 
 ## Install Anaconda and QIIME2 on Linux server
@@ -387,20 +420,6 @@ checkm
 checkm lineage_wf -t 8 -x fa bin_folder output_folder
 ```
 
-## List size of files
-
-```{bash, eval=FALSE}
-du -h | sort -h
-su -sh
-```
-
-## Unzip files
-
-```{bash, eval=FALSE}
-gunzip raw_data/*gz
-tar -xf filename
-```
-
 ## Kneaddata
 
 ```{bash, eval=FALSE}
@@ -490,9 +509,10 @@ Install and get databases (note that conda didn't work):
 pip install humann
 pip install metaphlan
 
-humann_databases --download chocophlan full humann_databases/humann3_databases/ --update-config yes
-humann_databases --download uniref uniref90_diamond humann_databases/humann3_databases/ --update-config yes
-humann_databases --download utility_mapping full humann_databases/humann3_databases/ --update-config yes
+humann_databases --download chocophlan full humann_databases/ --update-config yes
+humann_databases --download uniref uniref90_diamond humann_databases/ --update-config yes
+humann_databases --download uniref uniref50_diamond humann_databases/ --update-config yes
+humann_databases --download utility_mapping full humann_databases/ --update-config yes
 ```
 
 Get the correct DIAMOND version:
@@ -974,6 +994,46 @@ diff = c2-c1
 if diff < 1 and diff > 0: diff = -(1/diff)
 ```
 
+## SeqIO
+
+Import packages:
+```{python, eval=FALSE}
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
+from Bio.Alphabet import IUPAC
+```
+
+Make a sequence record:
+```{python, eval=FALSE}
+record = SeqRecord(Seq(sequence, IUPAC.protein),id='name', description='description')
+```
+
+Write a sequence file:
+```{python, eval=FALSE}
+SeqIO.write(list_of_sequences, "file_name.fasta", "fasta")
+```
+
+Read a sequence file (sequence by sequence, in this case adding to a dictionary):
+```{python, eval=FALSE}
+for record in SeqIO.parse('file_name.fasta', "fasta"):
+    sequence_dict[record.id] = [record.description, record.seq]
+```
+
+## Pickle
+
+Save a file:
+```{python, eval=FALSE}
+with open('file_name.dict', 'wb') as f:
+    pickle.dump(dictionary, f)
+```
+
+Read a file:
+```{python, eval=FALSE}
+with open('file_name.dict', 'rb') as f:
+    dictionary = pickle.load(f)
+```
+
 ## Basic python functions
 
 Get the names of the 3 largest scores
@@ -995,4 +1055,14 @@ os.path.isdir()
 os.chdir()
 os.listdir()
 os.system()
+os.getcwd()
+os.isdir()
+```
+
+Time a script:
+```{python, eval=FALSE}
+from datetime import datetime
+startTime = datetime.now()
+
+print(datetime.now() - startTime)
 ```

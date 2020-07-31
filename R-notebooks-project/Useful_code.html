@@ -1515,9 +1515,30 @@ div.tocify {
 
 <div id="terminalbash-and-other-programmes" class="section level1">
 <h1>Terminal/bash and other programmes</h1>
-<div id="using-rsync-to-copy-files" class="section level2">
-<h2>Using rsync to copy files</h2>
+<div id="basic-command-line" class="section level2">
+<h2>Basic command line</h2>
+<p>Count number of files in directory:</p>
+<pre class="bash"><code>ls -1 | wc -l</code></pre>
+<p>Show certain number of files in directory (default is 10):</p>
+<pre class="bash"><code>ls | head
+ls | head -n 20</code></pre>
+<p>List size of files:</p>
+<pre class="bash"><code>du -h | sort -h
+su -sh</code></pre>
+<p>Unzip files:</p>
+<pre class="bash"><code>gunzip raw_data/*gz
+tar -xf filename</code></pre>
+<p>Using rsync to copy files:</p>
 <pre class="bash"><code>rsync --partial --progress W0.tar.bz2 robyn@vulcan.pharmacology.dal.ca:/home/robyn/</code></pre>
+<p>Connect to server:</p>
+<pre class="bash"><code>ssh robyn@kronos.pharmacology.dal.ca
+ssh robyn@vulcan.pharmacology.dal.ca
+
+#pwd = standard ZA no !, private = standard Malay no !</code></pre>
+<p>Combine fasta files:</p>
+<pre class="bash"><code>cat folder/*.fasta &gt; combined.fasta</code></pre>
+<p><a href="https://github.com/LangilleLab/lab_information/wiki/Backups-and-Extra-Storage">Server backup</a>:</p>
+<pre class="bash"><code>ln -s fungi_metagenome/processing/ robyn_backup/fungi_metagenome/</code></pre>
 </div>
 <div id="picrust2" class="section level2">
 <h2>PICRUSt2</h2>
@@ -1542,13 +1563,6 @@ raxml-ng --evaluate --msa $REF_MSA --tree $TREE --prefix info --model GTR+G —t
 <pre class="bash"><code>#first align sequence file using https://www.ebi.ac.uk/Tools/msa/clustalo/ (choose stockholm alignment)
 hmmbuild output_file.hmm input_aligned_sequences.sto
 hmmer hmm_file.hmm fasta_input.fa &gt; output_file.out</code></pre>
-</div>
-<div id="connect-to-server" class="section level2">
-<h2>Connect to server</h2>
-<pre class="bash"><code>ssh robyn@kronos.pharmacology.dal.ca
-ssh robyn@vulcan.pharmacology.dal.ca
-
-#pwd = standard ZA no !, private = standard Malay no !</code></pre>
 </div>
 <div id="install-anaconda-and-qiime2-on-linux-server" class="section level2">
 <h2>Install Anaconda and QIIME2 on Linux server</h2>
@@ -1803,16 +1817,6 @@ checkm
 
 checkm lineage_wf -t 8 -x fa bin_folder output_folder</code></pre>
 </div>
-<div id="list-size-of-files" class="section level2">
-<h2>List size of files</h2>
-<pre class="bash"><code>du -h | sort -h
-su -sh</code></pre>
-</div>
-<div id="unzip-files" class="section level2">
-<h2>Unzip files</h2>
-<pre class="bash"><code>gunzip raw_data/*gz
-tar -xf filename</code></pre>
-</div>
 <div id="kneaddata" class="section level2">
 <h2>Kneaddata</h2>
 <pre class="bash"><code>pip install kneaddata
@@ -1880,9 +1884,10 @@ rm -r humann2_final_out_50/bugs_lists</code></pre>
 <pre class="bash"><code>pip install humann
 pip install metaphlan
 
-humann_databases --download chocophlan full humann_databases/humann3_databases/ --update-config yes
-humann_databases --download uniref uniref90_diamond humann_databases/humann3_databases/ --update-config yes
-humann_databases --download utility_mapping full humann_databases/humann3_databases/ --update-config yes</code></pre>
+humann_databases --download chocophlan full humann_databases/ --update-config yes
+humann_databases --download uniref uniref90_diamond humann_databases/ --update-config yes
+humann_databases --download uniref uniref50_diamond humann_databases/ --update-config yes
+humann_databases --download utility_mapping full humann_databases/ --update-config yes</code></pre>
 <p>Get the correct DIAMOND version:</p>
 <pre class="bash"><code>wget https://github.com/bbuchfink/diamond/releases/download/v0.9.24/diamond-linux64.tar.gz
 tar xvf diamond-linux64.tar.gz</code></pre>
@@ -1952,6 +1957,24 @@ sh install_bracken.sh
 #Move all executables and source to bin</code></pre>
 <p>Run bracken:</p>
 <pre class="bash"><code>parallel -j 1 &#39;bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150&#39; ::: kraken2_refseq/kraken2_kreport_conf/*.kreport</code></pre>
+</div>
+<div id="add-existing-folder-to-github" class="section level2">
+<h2>Add existing folder to Github</h2>
+<ol style="list-style-type: decimal">
+<li>Create a new repository on Github</li>
+<li></li>
+</ol>
+<pre class="bash"><code>cd folder_you_want
+git init
+git add .
+git commit -m &quot;First commit&quot;</code></pre>
+<ol start="3" style="list-style-type: decimal">
+<li>Copy the URL for the Github repository (on the Github page)</li>
+<li></li>
+</ol>
+<pre class="bash"><code>git remote add origin &lt;repository_url&gt;
+git remote -v
+git push -u origin master</code></pre>
 </div>
 </div>
 <div id="genbank-uploads" class="section level1">
@@ -2157,10 +2180,10 @@ rows = list(df.index.values)</code></pre>
 <pre class="python"><code>genus = genus.groupby(by=genus.index, axis=0).sum()</code></pre>
 <p>Add together dataframes, filling unknown values with 0:</p>
 <pre class="python"><code>all_genus = pd.concat(all_genus, axis=1, join=&#39;outer&#39;).fillna(value=0)</code></pre>
-<p>Get relative abundance:</p>
-<pre class="python"><code>db = db.divide(sums, axis=1).multiply(100)</code></pre>
 <p>Get sum (of columns):</p>
 <pre class="python"><code>sums = db.sum(axis=0)</code></pre>
+<p>Get relative abundance:</p>
+<pre class="python"><code>db = db.divide(db.sum(axis=0), axis=1).multiply(100)</code></pre>
 </div>
 <div id="stats" class="section level2">
 <h2>Stats</h2>
@@ -2176,6 +2199,21 @@ r2 = r_value**2</code></pre>
 diff = c2-c1
 if diff &lt; 1 and diff &gt; 0: diff = -(1/diff)</code></pre>
 </div>
+<div id="seqio" class="section level2">
+<h2>SeqIO</h2>
+<p>Import packages:</p>
+<pre class="python"><code>from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
+from Bio.Alphabet import IUPAC</code></pre>
+<p>Make a sequence record:</p>
+<pre class="python"><code>record = SeqRecord(Seq(sequence, IUPAC.protein),id=&#39;name&#39;, description=&#39;description&#39;)</code></pre>
+<p>Write a sequence file:</p>
+<pre class="python"><code>SeqIO.write(list_of_sequences, &quot;file_name.fasta&quot;, &quot;fasta&quot;)</code></pre>
+<p>Read a sequence file (sequence by sequence, in this case adding to a dictionary):</p>
+<pre class="python"><code>for record in SeqIO.parse(&#39;file_name.fasta&#39;, &quot;fasta&quot;):
+    sequence_dict[record.id] = [record.description, record.seq]</code></pre>
+</div>
 <div id="basic-python-functions" class="section level2">
 <h2>Basic python functions</h2>
 <p>Get the names of the 3 largest scores</p>
@@ -2189,7 +2227,14 @@ elem = &#39;two&#39; if &#39;two&#39; in my_list else None
 <pre class="python"><code>os.path.isdir()
 os.chdir()
 os.listdir()
-os.system()</code></pre>
+os.system()
+os.getcwd()
+os.isdir()</code></pre>
+<p>Time a script:</p>
+<pre class="python"><code>from datetime import datetime
+startTime = datetime.now()
+
+print(datetime.now() - startTime)</code></pre>
 </div>
 </div>
 

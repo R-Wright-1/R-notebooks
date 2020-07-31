@@ -1584,9 +1584,13 @@ div.tocify {
 </div>
 
 
+<p>This document contains all code that I’ve used to classify the peptide sequences given in the denovo_peptide_bacteria.tsv file. I’ve taken several approaches - because these sequences are very short, I want to be really sure that I’m not making mistakes with classifying them. Therefore I am using both the peptides as they are, and <em>the peptides assembled into contigs</em>. I am also using both Kraken2 and BLASTp for classification, both with all complete genomes from the NCBI RefSeq database. I could add in incomplete genomes also, but I’m not sure how much difference this will make, and it means a <strong>much</strong> bigger database.</p>
 <div id="initial-setup" class="section level2 tabset">
 <h2>Initial setup</h2>
-<p>These lines of code just take the protein sequences from the supplied .tsv file and convert them to a .fasta file that contains each peptide names with a number and the description taken from the previous sample name.</p>
+<p>These tabs are really just so I can keep a record of what I did (and what didn’t work when I was building the kraken2 database).</p>
+<div id="setup" class="section level3">
+<h3>Setup</h3>
+<p>These lines of code take the protein sequences from the supplied .tsv file and convert them to a .fasta file that contains each peptide, names the peptides with a number and adds the description, taken from the previous sample name. It can also make individual .fasta files with each sequence, so as these can be easily used for BLAST searches (but I found that having almost 1,000,000 individual sequence files was a bit overwhelming).</p>
 <pre class="python"><code>peptides = pd.read_csv(&#39;/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/wetransfer-6c2cc0/denovo_peptide_bacteria.tsv&#39;, header=0, index_col=0, sep=&#39;\t&#39;)</code></pre>
 <pre class="python"><code>names = list(peptides.index.values)
 pep_list = list(peptides.loc[:, &#39;peptide&#39;].values)
@@ -1594,13 +1598,11 @@ sequences = []
 for n in range(len(names)):
   record = SeqRecord(Seq(pep_list[n], IUPAC.protein),id=&#39;peptide&#39;+str(n+1), description=names[n])
   sequences.append(record)
+  #SeqIO.write(record, &quot;/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_peptides/peptide&quot;+str(n+1)+&quot;.fasta&quot;, &quot;fasta&quot;)
 SeqIO.write(sequences, &quot;/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/peptide_sequences.fasta&quot;, &quot;fasta&quot;)</code></pre>
-<div id="more-information-on-initial-setup" class="section level3">
-<h3>More information on initial setup</h3>
-<p>These tabs are really so I can keep a record of what I did, and only of interest if you like reading about installation issues.</p>
 </div>
-<div id="build-kraken2-protein-database" class="section level3">
-<h3>Build Kraken2 protein database</h3>
+<div id="build-kraken2-protein-database-unsuccessful-attempts" class="section level3">
+<h3>Build Kraken2 protein database (unsuccessful attempts)</h3>
 <p>Note that these were run on a server and not locally, I just have these lines here to save the code used. I’ve had problems downloading the standard kraken2 database, and I think this seems to be linked to having NA’s in the NCBI taxonomy, but I get the error:</p>
 <pre class="bash"><code>kraken2-build --download-library bacteria --db bac_protein --use-ftp #didn&#39;t work
 Step 1/2: Performing ftp file transfer of requested files
@@ -1625,13 +1627,115 @@ All files processed, cleaning up extra sequence files... done, library complete.
 Masking low-complexity regions of downloaded library... done.
 rsync_from_ncbi.pl: unexpected FTP path (new server?) for na</code></pre>
 <p>So I have gone with the non-redundant protein database for now:</p>
-<pre class="bash"><code>kraken2-build --download-taxonomy --db bac_protein --use-ftp
-kraken2-build --download-library nr --db bac_protein --use-ftp --protein
+<pre class="bash"><code>kraken2-build --download-library nr --db bac_protein --use-ftp --protein
+kraken2-build --db bac_protein/ --download-taxonomy --use-ftp
 kraken2-build --build --db bac_protein/ --threads 10</code></pre>
+<p>Output:</p>
+<pre class="bash"><code>Creating sequence ID to taxonomy ID map (step 1)...
+Found 7913/573044508 targets, searched through 753265413 accession IDs, search complete.
+lookup_accession_numbers: 573036595/573044508 accession numbers remain unmapped, see unmapped.txt in DB directory
+Sequence ID to taxonomy ID map complete. [1h31m43.606s]
+Estimating required capacity (step 2)...
+Estimated hash table requirement: 1460 bytes
+Capacity estimation complete. [3m11.010s]
+Building database files (step 3)...
+Taxonomy parsed and converted.
+CHT created with 11 bits reserved for taxid.
+Processed 1311 sequences (377139 bp)...  </code></pre>
+<p>I let this run for ~5 days and this is as far as it got. But with the low numbers of classified sequences anyway, maybe this isn’t the way to go. Will try putting together a larger database.</p>
+<p>Download files (using the scripts at <a href="https://github.com/fischuu/Kraken_db_install_scripts">this repository</a>, edited by me to download ’_protein.faa.gz’ rather than ’_genomic.fna.gz’ files):</p>
+<pre class="bash"><code>kraken2-build --download-taxonomy --db kraken2_protein/ --threads 12 --use-ftp
+bacteria
+archaea
+viral
+human
+fungi
+protozoa
+
+#For each of the domains
+
+perl download_bacteria_faa.pl 
+
+for file in bacteria/*.faa
+do
+    kraken2-build --add-to-library $file --db kraken2_protein
+done
+
+#And then
+
+kraken2-build --build --db kraken2_protein --threads 12 --protein</code></pre>
+<p>These each crashed at some point before downloading all files. As I don’t know enough perl to accurately change the files.</p>
 </div>
-<div id="run-kraken2" class="section level3">
-<h3>Run Kraken2</h3>
-<pre class="bash"><code>kraken2 --db bac_protein peptides/peptide_sequences.fasta --threads 10 --confidence 0.1 --output peptides/kraken2_out/peptide_sequences.out</code></pre>
+<div id="build-kraken2-protein-database-successful-code" class="section level3">
+<h3>Build Kraken2 protein database (successful code)</h3>
+<p>I wrote a script with the same steps as the perl scripts, but in Python. At the moment I have added only complete genomes, but these could be added to with all genomes at some point if useful. (This is a huge amount more for bacteria, though, but not sure how much this will change species assignments). This script is saved at <a href="https://github.com/R-Wright-1/peptides">this repository</a>. Also the non-redundant protein database (in case this gives anything different).</p>
+<pre class="bash"><code>wget ftp://ftp.ncbi.nlm.nih.gov/blast/db/FASTA/nr.gz
+gunzip nr.gz</code></pre>
+<p>And then:</p>
+<pre class="bash"><code>#For each domain
+for file in bacteria/*.faa
+do
+    kraken2-build --add-to-library $file --db kraken2_protein --threads 12
+done
+mv viral added_kraken2_protein
+
+kraken2-build --build --db kraken2_protein --threads 12 --protein</code></pre>
+<p><strong>So the database includes:</strong></br> - 362 archaea (total available including not complete = 1082)</br> - 17,836 bacteria (total available including not complete = 190,989)</br> - 11 fungi (total available including not complete = 328)</br> - Human genome</br> - 4 protozoa (total available including not complete = 94)</br> - 9,756 viruses (total available including not complete = 10,153)</br></p>
+</div>
+</div>
+<div id="classify-the-peptides" class="section level2 tabset">
+<h2>Classify the peptides</h2>
+<div id="kraken2" class="section level3">
+<h3>Kraken2</h3>
+<p>This is the code used to run Kraken2 using the fasta file created above and the protein database constructed above (with and without the confidence parameter).</p>
+<pre class="bash"><code>kraken2 --use-names --threads 12 --db databases/kraken/kraken2_protein/ --memory-mapping peptides/peptide_sequences.fasta --output peptides/kraken2_out/peptides.kraken --report peptides/kraken2_out/peptides.kreport --confidence 0.1</code></pre>
+<p>No hits were found:</p>
+<pre class="bash"><code>Loading database information... done.
+1286515 sequences (11.99 Mbp) processed in 0.359s (214973.9 Kseq/m, 2002.90 Mbp/m).
+  0 sequences classified (0.00%)
+  1286515 sequences unclassified (100.00%)</code></pre>
+</div>
+<div id="blastp-short-on-all-peptides" class="section level3">
+<h3>BLASTp-short on all peptides</h3>
+<p>I have then combined the protein sequences downloaded from NCBI above into one .fasta file and made a BLAST database with them:</p>
+<pre class="bash"><code>cat fungi/*.faa &gt; combined_fungi.faa
+cat protozoa/*.faa &gt; combined_protozoa.faa
+cat archaea/*.faa &gt; combined_archaea.faa
+cat viral/*.faa &gt; combined_viral.faa
+cat bacteria/*.faa &gt; combined_bacteria.faa
+
+mkdir combined_faa
+mv combined_fungi.faa combined_faa
+mv combined_protozoa.faa combined_faa
+mv combined_archaea.faa combined_faa
+mv combined_bacteria.faa combined_faa
+mv combined_viral.faa combined_faa
+cp vertebrate_mammalian/GCF_000001405.39_GRCh38.p13_protein.tax.faa combined_faa/
+
+cat combined_faa/*.faa &gt; combined_all.faa
+
+makeblastdb -in combined_all.faa -dbtype prot</code></pre>
+<p>I am then running blastp (blastp-short - optimized for amino acid residues &lt;30) against this database (copied to ramdisk):</p>
+<pre class="bash"><code>sudo mount -t ramfs none /scratch/ramdisk/
+sudo cp -a protein_db_ncbi/ /scratch/ramdisk/
+
+blastp -task blastp-short -query peptide_sequences.fasta -db /scratch/ramdisk/protein_db_ncbi/combined_all.faa -out all_peptides.out -num_threads 12 -outfmt &#39;10 qseqid sseqid pident evalue bitscore  length mismatch positive gaps&#39;</code></pre>
+</div>
+<div id="proteomapper" class="section level3">
+<h3>ProteoMapper</h3>
+<p><a href="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6438762/">ProteoMapper</a></p>
+</div>
+</div>
+<div id="results" class="section level2 tabset">
+<h2>Results</h2>
+<div id="blastp-taxa-found" class="section level3">
+<h3>BLASTp taxa found</h3>
+<p>KableTable - peptide, sequence, taxa, percent ID, e value</p>
+<p>Heatmap (maybe as table) of taxa with one column showing number of peptides that map to that taxa</p>
+</div>
+<div id="blastp-taxa-in-samples" class="section level3">
+<h3>BLASTp taxa in samples</h3>
+<p>Heatmap? Number of peptides classified to certain taxa per sample</p>
 </div>
 </div>
 
