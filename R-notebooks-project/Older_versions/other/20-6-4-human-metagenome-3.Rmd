@@ -1,0 +1,32 @@
+---
+title: "Impact of DNA source on genetic variant detection from human whole-genome sequencing data"
+subtitle: "Microbiome analysis"
+output:
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{r setup}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+
+opts_knit$set(root.dir = '/Users/robynwright/Documents/OneDrive/Github/Human_metagenome/')
+conda_create("r-reticulate")
+reticulate::use_python("/Users/robynwright/opt/miniconda3/envs/r-reticulate/bin/python")
+
+#conda install pandas
+#conda install matplotlib
+#conda install scikit-bio
+#conda install scikit-learn
+#conda install scipy
+#conda install statsmodels
+```
+
+```{python setup_py}
+import os
+import pandas as pd
+
+```

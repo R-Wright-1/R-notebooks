@@ -843,6 +843,11 @@ Plot text:
 ax1.text(0.5, 0.5, sample_names[x], color=colors[x], rotation=90, va='top', ha='center', transform=ax1.transAxes)
 ```
 
+Put the ticks on top of the axis:
+```{python, eval=FALSE}
+ax1.xaxis.tick_top()
+```
+
 ## Numbers and text
 
 Get a number to a specific number of decimal places:
@@ -1065,4 +1070,15 @@ from datetime import datetime
 startTime = datetime.now()
 
 print(datetime.now() - startTime)
+```
+
+# Markdown/R notebooks
+
+Kable table:
+```{r, eval=FALSE}
+#8
+py$reads_remain %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "350px", height = "400px")
 ```

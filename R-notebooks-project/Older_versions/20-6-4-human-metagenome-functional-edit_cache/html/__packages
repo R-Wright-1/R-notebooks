@@ -1,0 +1,12 @@
+base
+reticulate
+kableExtra
+knitr
+exactRankTests
+nlme
+dplyr
+ggplot2
+tensorA
+robustbase
+bayesm
+compositions

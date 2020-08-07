@@ -40,14 +40,27 @@ from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
 import pickle
 import random
+from scipy.cluster import hierarchy
 from scipy.spatial import distance
 from scipy import stats
 from sklearn import manifold
 from sklearn.decomposition import PCA
 import statsmodels.stats.multitest as sm
+
+def get_cols(num):
+    colormap_20, colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20', 256), mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+    norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+    m1, m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_20), mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+    colors_20 = [m1.to_rgba(a) for a in range(20)]
+    colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+    if num < 21: return colors_20
+    elif num < 41: return colors_40
+    else: return colors_40+colors_40+colors_40+colors_40
 ```
 
-This document contains all code that I've used to classify the peptide sequences given in the denovo_peptide_bacteria.tsv file. 
+This document contains all code that I've used to classify the peptide sequences given in the denovo_peptide_bacteria.tsv file. Unless you are interested in the methods used, feel free to skip ahead to the results.
+
+# Processing
 
 ## Initial setup {.tabset}
 
@@ -67,8 +80,6 @@ for n in range(len(names)):
   #SeqIO.write(record, "/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_peptides/peptide"+str(n+1)+".fasta", "fasta")
 SeqIO.write(sequences, "/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/peptide_sequences.fasta", "fasta")
 ```
-
-Note that the .fasta file that I made for some reason ended up with more sequences (some as duplicates) than were in the input, but the output is fixed to take this into account. 
 
 ### Build Kraken2 protein database (unsuccessful attempts)
 
@@ -226,22 +237,7 @@ sudo cp -a protein_db_ncbi/ /scratch/ramdisk/
 blastp -task blastp-short -query peptide_sequences.fasta -db /scratch/ramdisk/protein_db_ncbi/combined_all.faa -out all_peptides.out -num_threads 12 -outfmt '10 qseqid sseqid pident evalue bitscore  length mismatch positive gaps'
 ```
 
-I seem to end up with some kind of a match for ~1 in 10 peptides.
-
-### HMMER with Pfam database
-
-Get Pfam database:
-```{bash, eval=FALSE}
-wget ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz
-gunzip Pfam-A.hmm.gz
-```
-
-Run HMMER:
-```{bash, eval=FALSE}
-hmmsearch --tblout --domtblout Pfam-A.hmm peptide_sequences.fasta > Pfam_hmm.out
-```
-
-## Results {.tabset}
+I seem to end up with some kind of a match for ~1 in 10 peptides. Note that these all have high E values (even when the identity is 100%), but I assume that this is just because the peptides are too short for this to be calculated properly.
 
 ### BLASTp-short (basic processing)
 
@@ -311,14 +307,14 @@ peptides['sequence'] = ['NA' for x in range(peptides.shape[0])]
 with open('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/rename_peptides_original.dict', 'rb') as f:
   used_dict = pickle.load(f)
   
-table = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/wetransfer-6c2cc0/denovo_peptide_bacteria.tsv'
+table = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/wetransfer-6c2cc0 2/denovo_peptide_bacteria.tsv'
 sample_names = pd.read_csv(table, sep='\t', header=0, index_col=0)
+sample_names_peptide = pd.read_csv(table, sep='\t', header=0, index_col=1)
 sample_names_list = ['sample_name']
 ma = 0
 
 rows = list(peptides.index.values)
 for a in range(len(rows)):
-  if a > 100: continue
   seq = peptides.loc[rows[a], 'sseqid ']
   tid = int(seq.split('taxid|')[1])
   names = all_domains.loc[tid, :].values
@@ -330,11 +326,11 @@ for a in range(len(rows)):
   pep = used_dict[peptides.loc[rows[a], 'qseqid ']]
   pep_name = pep[0].split(' ')[1]
   peptides.loc[rows[a], 'peptide_name'] = pep_name
-  samples = sample_names.loc[pep_name, 'Sample Name'].values
+  samples = sample_names_peptide.loc[pep_name, 'Sample Name'].values
   if len(samples) > ma:
-  prev_ma = int(ma)
-  ma = len(samples)
-  for c in range(prev_ma, ma):
+    prev_ma = int(ma)
+    ma = len(samples)
+    for c in range(prev_ma, ma):
       sample_names_list.append('sample_name'+str(c+2))
       peptides['sample_name'+str(c+2)] = ['NA' for x in range(peptides.shape[0])]
   for b in range(len(samples)):
@@ -347,20 +343,1282 @@ peptides.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Pept
 
 Sort table to taxa assignments of peptides and an abundance table for samples vs peptides (here we check if all classifications of each peptide have the same organism name, or at least the same genus - otherwise these are removed):
 ```{python, eval=FALSE}
+taxa = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/all_peptides_out_taxa_4.csv', header=0, index_col=13)
+taxa.drop(['qseqid ', 'Unnamed: 0.1'], axis=1, inplace=True)
+taxa.drop_duplicates(keep='first', inplace=True)
+
+unique_taxa_dict = {}
+unique_taxa = list(set(taxa.index.values))
+samples_all = []
+all_samples_table = []
+unique_taxa_added = []
+domain_dict = {}
+
+count = 0
+for ut in unique_taxa:
+    count += 1
+    adding = False
+    #if count > 200: continue
+    if isinstance(taxa.loc[ut, 'organism_name'], str):
+        genus_adding = taxa.loc[ut, 'organism_name']
+        domain_dict[genus_adding] = taxa.loc[ut, 'domain']
+        adding = True
+    else:
+        this_tax = taxa.loc[ut, 'organism_name'].values
+        domain = taxa.loc[ut, 'domain'].values
+        if len(list(set(this_tax))) == 1:
+            genus_adding = list(set(this_tax))[0]
+            domain_dict[genus_adding] = domain[0]
+            adding = True
+        else:
+            this_genus = taxa.loc[ut, 'genus'].values
+            if len(list(set(this_genus))) == 1:
+                genus_adding = list(set(this_genus))[0]
+                domain_dict[genus_adding] = domain[0]
+                adding = True
+    if adding:
+        samples = list(taxa.loc[ut, :].values)
+        this_peptide_samples = []
+        if isinstance(samples[0], np.int64):
+            for a in range(len(samples)):
+                if isinstance(samples[a], str):
+                    if 'sample' in samples[a]:
+                        this_peptide_samples.append(samples[a])
+        else:
+            for b in range(len(samples)):
+                if isinstance(samples[0], str):
+                    if isinstance(samples[b], str):
+                        if 'sample' in samples[b]:
+                            this_peptide_samples.append(samples[b])
+                else:
+                    for c in range(len(samples[b])):
+                        if isinstance(samples[b][c], str):
+                            if 'sample' in samples[b][c]:
+                                this_peptide_samples.append(samples[b][c])
+        if this_peptide_samples == []:
+            adding = False
+    if adding:
+        samples_all.append([ut, this_peptide_samples])
+        unique_taxa_dict[ut] = genus_adding
+        for a in range(len(this_peptide_samples)):
+            if this_peptide_samples[a] not in all_samples_table:
+                all_samples_table.append(this_peptide_samples[a])
+        unique_taxa_added.append(ut)
+
+print(len(unique_taxa_dict), len(samples_all))
+
+feat_table = pd.DataFrame(columns=all_samples_table, index=unique_taxa_added).fillna(0)
+
+for a in range(len(samples_all)):
+    for b in range(len(samples_all[a][1])):
+        feat_table.loc[samples_all[a][0], samples_all[a][1][b]] = feat_table.loc[samples_all[a][0], samples_all[a][1][b]] + 1
+
+feat_table.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table.csv')
+feat_table.insert(0, 'taxa', ['NA' for x in range(feat_table.shape[0])])
+feat_table.insert(1, 'domain', ['NA' for x in range(feat_table.shape[0])])
+for pep in feat_table.index.values:
+    feat_table.loc[pep, 'taxa'] = unique_taxa_dict[pep]
+    feat_table.loc[pep, 'domain'] = domain_dict[unique_taxa_dict[pep]]
+feat_table.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_full_w_tax.csv')
+ft_grouped = feat_table.rename(index=unique_taxa_dict)
+ft_grouped = ft_grouped.drop(['domain', 'taxa'], axis=1)
+ft_grouped = ft_grouped.groupby(by=ft_grouped.index, axis=0).sum()
+ft_grouped.insert(0, 'domain', ['NA' for x in range(ft_grouped.shape[0])])
+for tax in ft_grouped.index.values:
+    ft_grouped.loc[tax, 'domain'] = domain_dict[tax]
+ft_grouped.to_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv')
+```
+This reduces us from 42,776 peptides with classifications (of 1,286,515 original peptides) to 36,811, and gives an average of 214 peptides classified per sample.
+
+### HMMER with Pfam database
+
+Get Pfam database:
+```{bash, eval=FALSE}
+wget ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz
+gunzip Pfam-A.hmm.gz
+```
+
+Run HMMER:
+```{bash, eval=FALSE}
+hmmsearch --tblout --domtblout Pfam-A.hmm peptide_sequences.fasta > Pfam_hmm.out
+```
+
+This gives hits (although probably not any that are over the inclusion threshold - they all have very high E values, likely because they are very short), but I haven't looked at them yet. Waiting to see if this is something that we are interested in first.
+
+# Basic results {.tabset}
+
+Prior to this, we have:
+<ul>
+<li>Classified all peptides using BLASTp-short with a protein database made with all complete genomes in the NCBI reference database. This gives classifications for 42,776 peptides (of the original 1,286,515 peptides)</li>
+<li>Removed classifications that match with below 100% identity (note that all E values are very high, even when they have 100% identity - I think the E values are just not meant for peptides this short)</li>
+<li>Removed classifications where multiple hits for the same peptide come back with different taxa (I have classified to genus where multiple hits are for the same genus)</li>
+</ul>
+
+This leaves us with 36,811 unique peptides (an average of 214 per sample) classified to six domains (*i.e.* bacteria, fungi, archaea, viral, protozoa and vertebrate mammalian (human)) with 6180 lowest classifications (genera or species) or 1770 genera.
+
+## Taxa classified
+
+The overall proportions of taxa classified to domains, genera and species. Here we have removed those genera with <0.2% relative abundance and those species (also includes genera as this is just the lowest possible classification) with <0.15% abundance. 
+Note that this choice of 0.2%/0.15% is arbitrary, and is based on giving good visualisation results - it may be a result in itself that there are no genera that have a large number of classifications belonging to them, *e.g.* removing all genera with <1% relative abundance leaves us with only 6 genera: *Aspergillus* (2%), *Bacillus* (1.2%), *Streptomyces* (2.4%), *Pseudomonas* (2.4%), *Homo* (4.6%) and *Paenibacillus* (1.3%).
+
+Colors are cycled, but labels that appear at the top in the legend are plotted at 0, while those that appear last are at the top. 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+feat_table_full = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_full_w_tax.csv', header=0, index_col=0)
+species = list(feat_table_full.loc[:, 'taxa'].values)
+domain = list(feat_table_full.loc[:, 'domain'].values)
+genera = list(feat_table_full.loc[:, 'taxa'].values)
+for g in range(len(genera)):
+  try:
+    genera[g] = genera[g].split(' ')[0]
+  except:
+    genera[g] = genera[g]
+
+domain_unique, species_unique, genera_unique = list(set(domain)), list(set(species)), list(set(genera))
+
+fig = plt.figure(figsize=(15,20))
+ax1 = plt.subplot(291)
+ax2 = plt.subplot(293)
+ax3 = plt.subplot(297)
+
+domain_plot = []
+for a in domain_unique:
+  domain_plot.append(domain.count(a))
+total = sum(domain_plot)
+domain_plot = [(a/total)*100 for a in domain_plot]
+
+genera_plot = []
+for a in genera_unique:
+  genera_plot.append(genera.count(a))
+total = sum(genera_plot)
+genera_plot = [(a/total)*100 for a in genera_plot]
+
+species_plot = []
+for a in species_unique:
+  species_plot.append(species.count(a))
+total = sum(species_plot)
+species_plot = [(a/total)*100 for a in species_plot]
+
+for a in range(len(genera_plot)):
+  genera_plot[a] = [genera_unique[a], genera_plot[a]]
+
+for a in range(len(species_plot)):
+  species_plot[a] = [species_unique[a], species_plot[a]]
+
+genera = pd.DataFrame(genera_plot, columns=['Genus', 'Count'])
+genera.set_index('Genus', inplace=True)
+genera = genera[genera.max(axis=1) > 0.2]
+genera.sort_values(by='Count', ascending=False, inplace=True)
+
+species = pd.DataFrame(species_plot, columns=['Species', 'Count'])
+species.set_index('Species', inplace=True)
+species = species[species.max(axis=1) > 0.15]
+species.sort_values(by='Count', ascending=False, inplace=True)
+print(species)
+
+domain_colors = get_cols(len(domain_plot))
+bottom=0
+for a in range(len(domain_plot)):
+  ax1.bar(1, domain_plot[a], bottom=bottom, color=domain_colors[a], label=domain_unique[a].split('_')[0], edgecolor='k')
+  bottom += domain_plot[a]
+ax1.legend(loc='upper left', bbox_to_anchor=(1, 1.02))
+ax1.set_ylim([0, 100])
+ax1.set_ylabel('Relative abundance (%)')
+ax1.set_xticklabels([])
+
+genera_colors = get_cols(genera.shape[0])
+bottom=0
+for a in range(len(list(genera.index.values))):
+  name = list(genera.index.values)[a]
+  ax2.bar(1, genera.loc[name, 'Count'], bottom=bottom, color=genera_colors[a], label=name, edgecolor='k')
+  bottom += genera.loc[name, 'Count']
+ax2.legend(loc='upper left', bbox_to_anchor=(1, 1.02), ncol=2)
+ax2.set_ylim([0, 43])
+ax2.set_xticklabels([])
+
+species_colors = get_cols(species.shape[0])
+bottom=0
+for a in range(len(list(species.index.values))):
+  name = list(species.index.values)[a]
+  ax3.bar(1, species.loc[name, 'Count'], bottom=bottom, color=species_colors[a], label=name, edgecolor='k')
+  bottom += species.loc[name, 'Count']
+ax3.legend(loc='upper left', bbox_to_anchor=(1, 1.02))
+ax3.set_ylim([0, 14.5])
+ax3.set_xticklabels([])
+
+ax1.set_title('Domain')
+ax2.set_title('Genus')
+ax3.set_title('Species')
+
+plt.subplots_adjust(wspace=0.5)
+plt.show()
+```
+
+## NMDS (all taxa, lowest classification)
+
+All taxa classified to species where possible (genus if not). This NMDS is calculated based on Bray-Curtis distance between samples. Note that some samples did not appear in the 'sample_centered_table.tsv' and therefore have been classified as 'Unknown' in the plots.
+These samples haven't been normalised in any way.
+
+```{python, include=FALSE}
+treatments = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/wetransfer-6c2cc0 2/sample_centered_table.tsv', sep='\t', header=0, index_col=0)
+
+sample_type, sample_treat, sample_disease = {}, {}, {}
+
+for a in treatments.index.values:
+  sample_type[a] = treatments.loc[a, 'Sample Type']
+  sample_treat[a] = treatments.loc[a, 'Treatment']
+  sample_disease[a] = treatments.loc[a, 'Disease']
+  
+treat_colors, disease_colors = {}, {}
+unique_treats, unique_diseases = list(set(treatments.loc[:, 'Treatment'].values)), list(set(treatments.loc[:, 'Disease'].values))
+treat_colors_list, disease_colors_list = get_cols(len(unique_treats)), get_cols(len(unique_diseases))
+for a in range(len(unique_treats)):
+  treat_colors[unique_treats[a]] = treat_colors_list[a]
+for a in range(len(unique_diseases)):
+  disease_colors[unique_diseases[a]] = disease_colors_list[a]
+  
+type_markers = {'patient':'o', 'cell line':'*', 'patient pool':'^'}
+unique_types = ['patient', 'patient pool', 'cell line']
+
+treat_colors_samples, disease_colors_samples, type_markers_samples = {}, {}, {}
+
+for a in treatments.index.values:
+  treat_colors_samples[a] = treat_colors[sample_treat[a]]
+  disease_colors_samples[a] = disease_colors[sample_disease[a]]
+  type_markers_samples[a] = type_markers[sample_type[a]]
+
+handles_treat = [Patch(facecolor=treat_colors[color], label=color) for color in unique_treats]
+handles_disease = [Patch(facecolor=disease_colors[color], label=color) for color in unique_diseases]
+handles_type = [Line2D([0], [0], marker=type_markers[shape], color='w', label=shape, markerfacecolor='k', markersize=15) for shape in unique_types]
+handles_type.append(Line2D([0], [0], marker='s', color='w', label='Unknown', markerfacecolor='gray', markersize=15))
+handles_treat.append(Patch(facecolor='gray', label='Unknown'))
+handles_disease.append(Patch(facecolor='gray', label='Unknown'))
+```
+
+```{python, include=FALSE}
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    similarities = np.nan_to_num(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+```
+
+```{python, fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.transpose()
+
+pos, npos, stress = transform_for_NMDS(ft)
+```
+
+Colored by disease:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+sample_names = list(ft.index.values)
+sample_colors, sample_markers = [], []
+for a in sample_names:
+  if a in disease_colors_samples:
+    sample_colors.append(disease_colors_samples[a])
+  else:
+    sample_colors.append('gray')
+  if a in type_markers_samples:
+    sample_markers.append(type_markers_samples[a])
+  else:
+    sample_markers.append('s')
+
+plt.figure(figsize=(25,12))
+ax1 = plt.subplot(121)
+for a in range(len(npos)):
+  ax1.scatter(npos[a,0], npos[a,1], color=sample_colors[a], marker=sample_markers[a], s=100)
+ax1.legend(handles=handles_type+handles_disease, loc='upper left', bbox_to_anchor=(1,1))
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+Colored by treatment:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+sample_names = list(ft.index.values)
+sample_colors, sample_markers = [], []
+for a in sample_names:
+  if a in disease_colors_samples:
+    sample_colors.append(treat_colors_samples[a])
+  else:
+    sample_colors.append('gray')
+  if a in type_markers_samples:
+    sample_markers.append(type_markers_samples[a])
+  else:
+    sample_markers.append('s')
+
+plt.figure(figsize=(25,12))
+ax1 = plt.subplot(121)
+for a in range(len(npos)):
+  ax1.scatter(npos[a,0], npos[a,1], color=sample_colors[a], marker=sample_markers[a], s=100)
+ax1.legend(handles=handles_type+handles_treat, loc='upper left', bbox_to_anchor=(1,1))
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+## NMDS (all taxa, genus level)
+
+All taxa classified to genus. This NMDS is calculated based on Bray-Curtis distance between samples. Note that some samples did not appear in the 'sample_centered_table.tsv' and therefore have been classified as 'Unknown' in the plots.
+These samples haven't been normalised in any way.
+
+```{python, fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+
+ft = ft.transpose()
+
+pos, npos, stress = transform_for_NMDS(ft)
+```
+
+Colored by disease:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+sample_names = list(ft.index.values)
+sample_colors, sample_markers = [], []
+for a in sample_names:
+  if a in disease_colors_samples:
+    sample_colors.append(disease_colors_samples[a])
+  else:
+    sample_colors.append('gray')
+  if a in type_markers_samples:
+    sample_markers.append(type_markers_samples[a])
+  else:
+    sample_markers.append('s')
+
+plt.figure(figsize=(25,12))
+ax1 = plt.subplot(121)
+for a in range(len(npos)):
+  ax1.scatter(npos[a,0], npos[a,1], color=sample_colors[a], marker=sample_markers[a], s=100)
+ax1.legend(handles=handles_type+handles_disease, loc='upper left', bbox_to_anchor=(1,1))
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+Colored by treatment:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+sample_names = list(ft.index.values)
+sample_colors, sample_markers = [], []
+for a in sample_names:
+  if a in disease_colors_samples:
+    sample_colors.append(treat_colors_samples[a])
+  else:
+    sample_colors.append('gray')
+  if a in type_markers_samples:
+    sample_markers.append(type_markers_samples[a])
+  else:
+    sample_markers.append('s')
+
+plt.figure(figsize=(25,12))
+ax1 = plt.subplot(121)
+for a in range(len(npos)):
+  ax1.scatter(npos[a,0], npos[a,1], color=sample_colors[a], marker=sample_markers[a], s=100)
+ax1.legend(handles=handles_type+handles_treat, loc='upper left', bbox_to_anchor=(1,1))
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+## NMDS (bacteria only, lowest classification)
+
+All taxa classified to species where possible (genus if not). Any that are not classified as bacteria are removed. This NMDS is calculated based on Bray-Curtis distance between samples. Note that some samples did not appear in the 'sample_centered_table.tsv' and therefore have been classified as 'Unknown' in the plots.
+These samples haven't been normalised in any way.
+
+```{python, fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft = ft.loc[ft['domain'] == 'bacteria'].fillna(value=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.transpose()
+
+pos, npos, stress = transform_for_NMDS(ft)
+```
+
+Colored by disease:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+sample_names = list(ft.index.values)
+sample_colors, sample_markers = [], []
+for a in sample_names:
+  if a in disease_colors_samples:
+    sample_colors.append(disease_colors_samples[a])
+  else:
+    sample_colors.append('gray')
+  if a in type_markers_samples:
+    sample_markers.append(type_markers_samples[a])
+  else:
+    sample_markers.append('s')
+
+plt.figure(figsize=(25,12))
+ax1 = plt.subplot(121)
+for a in range(len(npos)):
+  ax1.scatter(npos[a,0], npos[a,1], color=sample_colors[a], marker=sample_markers[a], s=100)
+ax1.legend(handles=handles_type+handles_disease, loc='upper left', bbox_to_anchor=(1,1))
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+Colored by treatment:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+sample_names = list(ft.index.values)
+sample_colors, sample_markers = [], []
+for a in sample_names:
+  if a in disease_colors_samples:
+    sample_colors.append(treat_colors_samples[a])
+  else:
+    sample_colors.append('gray')
+  if a in type_markers_samples:
+    sample_markers.append(type_markers_samples[a])
+  else:
+    sample_markers.append('s')
+
+plt.figure(figsize=(25,12))
+ax1 = plt.subplot(121)
+for a in range(len(npos)):
+  ax1.scatter(npos[a,0], npos[a,1], color=sample_colors[a], marker=sample_markers[a], s=100)
+ax1.legend(handles=handles_type+handles_treat, loc='upper left', bbox_to_anchor=(1,1))
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+## NMDS (bacteria only, genus level)
+
+All taxa classified to genus. Any that are not classified as bacteria are removed. This NMDS is calculated based on Bray-Curtis distance between samples. Note that some samples did not appear in the 'sample_centered_table.tsv' and therefore have been classified as 'Unknown' in the plots.
+These samples haven't been normalised in any way.
+
+```{python, fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft = ft.loc[ft['domain'] == 'bacteria'].fillna(value=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+
+ft = ft.transpose()
+
+pos, npos, stress = transform_for_NMDS(ft)
+```
+
+Colored by disease:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+sample_names = list(ft.index.values)
+sample_colors, sample_markers = [], []
+for a in sample_names:
+  if a in disease_colors_samples:
+    sample_colors.append(disease_colors_samples[a])
+  else:
+    sample_colors.append('gray')
+  if a in type_markers_samples:
+    sample_markers.append(type_markers_samples[a])
+  else:
+    sample_markers.append('s')
+
+plt.figure(figsize=(25,12))
+ax1 = plt.subplot(121)
+for a in range(len(npos)):
+  ax1.scatter(npos[a,0], npos[a,1], color=sample_colors[a], marker=sample_markers[a], s=100)
+ax1.legend(handles=handles_type+handles_disease, loc='upper left', bbox_to_anchor=(1,1))
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+Colored by treatment:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+sample_names = list(ft.index.values)
+sample_colors, sample_markers = [], []
+for a in sample_names:
+  if a in disease_colors_samples:
+    sample_colors.append(treat_colors_samples[a])
+  else:
+    sample_colors.append('gray')
+  if a in type_markers_samples:
+    sample_markers.append(type_markers_samples[a])
+  else:
+    sample_markers.append('s')
+
+plt.figure(figsize=(25,12))
+ax1 = plt.subplot(121)
+for a in range(len(npos)):
+  ax1.scatter(npos[a,0], npos[a,1], color=sample_colors[a], marker=sample_markers[a], s=100)
+ax1.legend(handles=handles_type+handles_treat, loc='upper left', bbox_to_anchor=(1,1))
+ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+plt.tight_layout()
+plt.show()
+```
+
+# Abundance heatmaps
+
+## Genus heatmaps grouped by treatment {.tabset}
+
+### Unclustered
+
+Here I have transformed samples to relative abundance, grouped them by treatment type (taken the mean of each sample grouping) and plotted the abundance of all genera above 0.5% relative abundance. I have removed samples that didn't appear in the 'sample_centered_table.tsv' file. Note that I haven't sorted anything for those genera that aren't a standard binomial *Genus species* name. If a genus is present in that sample grouping, the relative abundance is shown in the cell. 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.divide(ft.sum(axis=0), axis=1).multiply(100)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+ft.rename(columns=sample_treat, inplace=True)
+ft = ft.transpose()
+ft = ft.groupby(ft.index.values).mean()
+ft = ft.transpose()
+
+keeping = []
+for col in ft.columns:
+  if 'sample' in col:
+    keeping.append(False)
+  else:
+    keeping.append(True)
+
+ft = ft.loc[:, keeping]
+ft = ft[ft.max(axis=1) > 0.5]
+ft = ft.iloc[::-1]
+
+plt.figure(figsize=(10,40))
+ax1 = plt.subplot(111)
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=5)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+y = [1 for x in ft.columns]
+bottom = [0 for x in ft.columns]
+x = [x for x in range(len(ft.columns))]
+all_y = []
+for a in ft.index.values:
+  row = ft.loc[a, :].values
+  whole = list(row)
+  strings = [str(round(b, 1)) for b in row]
+  #ma = max(row)
+  row = [m.to_rgba(b) for b in row]
+  ax1.bar(x, y, color=row, bottom=bottom, edgecolor='k', width=1)
+  for b in range(len(strings)):
+    if whole[b] == 0: continue
+    if whole[b] > 2.5: color='k'
+    else: color='w'
+    ax1.text(x[b], bottom[0]+0.5, strings[b], color=color, ha='center', va='center')
+  bottom = [x+1 for x in bottom]
+  all_y.append(bottom[0]-0.5)
+
+ax1.set_xlim([x[0]-0.5, x[-1]+0.5])
+ax1.set_ylim([0, bottom[0]])
+plt.yticks(all_y, ft.index.values)
+plt.xticks(x, ft.columns, rotation=90)
+ax1.xaxis.tick_top()
+
+plt.tight_layout()
+plt.show()
+```
+
+### Genus and treatment clustered
+
+This shows the same as the previous heatmap grouped by treatment, but here the treatment groupings as well as the genera have been hierarchically clustered (using Bray-Curtis distance). 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.divide(ft.sum(axis=0), axis=1).multiply(100)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+ft.rename(columns=sample_treat, inplace=True)
+ft = ft.transpose()
+ft = ft.groupby(ft.index.values).mean()
+ft = ft.transpose()
+
+keeping = []
+for col in ft.columns:
+  if 'sample' in col:
+    keeping.append(False)
+  else:
+    keeping.append(True)
+
+ft = ft.loc[:, keeping]
+ft = ft[ft.max(axis=1) > 0.5]
+ft = ft.iloc[::-1]
+
+plt.figure(figsize=(20,50))
+ax1 = plt.subplot2grid((50,4), (10,1), rowspan=40, colspan=2)
+ax2 = plt.subplot2grid((50,4), (0,1), rowspan=6, colspan=2, frameon=False)
+ax3 = plt.subplot2grid((50,4), (10,0), rowspan=40, frameon=False)
+plt.sca(ax2)
+
+Z = hierarchy.linkage(ft.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(ax2.get_xticklabels()), list(ax2.get_xticks()), list(ax2.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(ft.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+ft = ft[plot_labels]
+
+plt.sca(ax3)
+
+Z = hierarchy.linkage(ft, 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='left')
+
+y_labels, locs, xlocs, labels = list(ax3.get_yticklabels()), list(ax3.get_yticks()), list(ax3.get_xticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(ft.index.values)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+
+plt.sca(ax1)
+ft = ft.reindex(plot_labels)
+
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=5)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+y = [1 for x in ft.columns]
+bottom = [0 for x in ft.columns]
+x = [x for x in range(len(ft.columns))]
+all_y = []
+for a in ft.index.values:
+  row = ft.loc[a, :].values
+  whole = list(row)
+  strings = [str(round(b, 1)) for b in row]
+  #ma = max(row)
+  row = [m.to_rgba(b) for b in row]
+  ax1.bar(x, y, color=row, bottom=bottom, edgecolor='k', width=1)
+  for b in range(len(strings)):
+    if whole[b] == 0: continue
+    if whole[b] > 2.5: color='k'
+    else: color='w'
+    ax1.text(x[b], bottom[0]+0.5, strings[b], color=color, ha='center', va='center')
+  bottom = [x+1 for x in bottom]
+  all_y.append(bottom[0]-0.5)
+
+ax1.set_xlim([x[0]-0.5, x[-1]+0.5])
+ax1.set_ylim([0, bottom[0]])
+plt.yticks(all_y, ft.index.values)
+plt.xticks(x, ft.columns, rotation=90)
+ax1.xaxis.tick_top()
+ax1.yaxis.tick_right()
+
+plt.subplots_adjust(wspace=0.05)
+plt.tight_layout()
+plt.show()
 
 ```
-This reduces us from 42,776 peptides with classifications (of 926,335 unique peptides) to 36,811.
 
-### BLASTp taxa in samples table
+### Genus sorted by prevalence
 
-```{r, eval=FALSE}
-#8
-py$reads_remain %>%
-  kable() %>%
-  kable_styling() %>%
-  scroll_box(width = "350px", height = "400px")
+This shows the same as the first heatmap grouped by treatment, but here the treatment groupings have been hierarchically clustered (using Bray-Curtis distance) and the genera sorted by prevalence. 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.divide(ft.sum(axis=0), axis=1).multiply(100)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+ft.rename(columns=sample_treat, inplace=True)
+ft = ft.transpose()
+ft = ft.groupby(ft.index.values).mean()
+ft = ft.transpose()
+
+keeping = []
+for col in ft.columns:
+  if 'sample' in col:
+    keeping.append(False)
+  else:
+    keeping.append(True)
+
+ft = ft.loc[:, keeping]
+ft = ft[ft.max(axis=1) > 0.5]
+ft = ft.iloc[::-1]
+
+plt.figure(figsize=(20,50))
+ax1 = plt.subplot2grid((50,4), (10,1), rowspan=40, colspan=2)
+ax2 = plt.subplot2grid((50,4), (0,1), rowspan=6, colspan=2, frameon=False)
+#ax3 = plt.subplot2grid((50,4), (10,0), rowspan=40, frameon=False)
+plt.sca(ax2)
+
+Z = hierarchy.linkage(ft.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(ax2.get_xticklabels()), list(ax2.get_xticks()), list(ax2.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(ft.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+ft = ft[plot_labels]
+
+plt.sca(ax1)
+
+pres_abs = ft.copy()
+for i in pres_abs.columns:
+  for j in pres_abs.index.values:
+    if pres_abs.loc[j, i] > 0: pres_abs.loc[j, i] = 1
+ft['prevalence'] = pres_abs.mean(axis=1)
+ft = ft.sort_values(by='prevalence')
+ft = ft.drop(['prevalence'], axis=1)
+
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=5)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+y = [1 for x in ft.columns]
+bottom = [0 for x in ft.columns]
+x = [x for x in range(len(ft.columns))]
+all_y = []
+for a in ft.index.values:
+  row = ft.loc[a, :].values
+  whole = list(row)
+  strings = [str(round(b, 1)) for b in row]
+  #ma = max(row)
+  row = [m.to_rgba(b) for b in row]
+  ax1.bar(x, y, color=row, bottom=bottom, edgecolor='k', width=1)
+  for b in range(len(strings)):
+    if whole[b] == 0: continue
+    if whole[b] > 2.5: color='k'
+    else: color='w'
+    ax1.text(x[b], bottom[0]+0.5, strings[b], color=color, ha='center', va='center')
+  bottom = [x+1 for x in bottom]
+  all_y.append(bottom[0]-0.5)
+
+ax1.set_xlim([x[0]-0.5, x[-1]+0.5])
+ax1.set_ylim([0, bottom[0]])
+plt.yticks(all_y, ft.index.values)
+plt.xticks(x, ft.columns, rotation=90)
+ax1.xaxis.tick_top()
+ax1.yaxis.tick_right()
+
+plt.subplots_adjust(wspace=0.05)
+plt.show()
+
 ```
 
-### BLASTp taxa in samples heatmap
+### Genus sorted by abundance
 
-Heatmap? Number of peptides classified to certain taxa per sample
+This shows the same as the first heatmap grouped by treatment, but here the treatment groupings have been hierarchically clustered (using Bray-Curtis distance) and the genera sorted by abundance. 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.divide(ft.sum(axis=0), axis=1).multiply(100)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+ft.rename(columns=sample_treat, inplace=True)
+ft = ft.transpose()
+ft = ft.groupby(ft.index.values).mean()
+ft = ft.transpose()
+
+keeping = []
+for col in ft.columns:
+  if 'sample' in col:
+    keeping.append(False)
+  else:
+    keeping.append(True)
+
+ft = ft.loc[:, keeping]
+ft = ft[ft.max(axis=1) > 0.5]
+ft = ft.iloc[::-1]
+
+plt.figure(figsize=(20,50))
+ax1 = plt.subplot2grid((50,4), (10,1), rowspan=40, colspan=2)
+ax2 = plt.subplot2grid((50,4), (0,1), rowspan=6, colspan=2, frameon=False)
+#ax3 = plt.subplot2grid((50,4), (10,0), rowspan=40, frameon=False)
+plt.sca(ax2)
+
+Z = hierarchy.linkage(ft.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(ax2.get_xticklabels()), list(ax2.get_xticks()), list(ax2.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(ft.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+ft = ft[plot_labels]
+
+plt.sca(ax1)
+
+ft['total'] = ft.mean(axis=1)
+ft = ft.sort_values(by='total')
+ft = ft.drop(['total'], axis=1)
+
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=5)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+y = [1 for x in ft.columns]
+bottom = [0 for x in ft.columns]
+x = [x for x in range(len(ft.columns))]
+all_y = []
+for a in ft.index.values:
+  row = ft.loc[a, :].values
+  whole = list(row)
+  strings = [str(round(b, 1)) for b in row]
+  #ma = max(row)
+  row = [m.to_rgba(b) for b in row]
+  ax1.bar(x, y, color=row, bottom=bottom, edgecolor='k', width=1)
+  for b in range(len(strings)):
+    if whole[b] == 0: continue
+    if whole[b] > 2.5: color='k'
+    else: color='w'
+    ax1.text(x[b], bottom[0]+0.5, strings[b], color=color, ha='center', va='center')
+  bottom = [x+1 for x in bottom]
+  all_y.append(bottom[0]-0.5)
+
+ax1.set_xlim([x[0]-0.5, x[-1]+0.5])
+ax1.set_ylim([0, bottom[0]])
+plt.yticks(all_y, ft.index.values)
+plt.xticks(x, ft.columns, rotation=90)
+ax1.xaxis.tick_top()
+ax1.yaxis.tick_right()
+
+plt.subplots_adjust(wspace=0.05)
+plt.show()
+
+```
+
+## Genus heatmaps grouped by treatment {.tabset}
+
+### Unclustered
+
+Here I have transformed samples to relative abundance, grouped them by disease type (taken the mean of each sample grouping) and plotted the abundance of all genera above 0.5% relative abundance. I have removed samples that didn't appear in the 'sample_centered_table.tsv' file. Note that I haven't sorted anything for those genera that aren't a standard binomial *Genus species* name. If a genus is present in that sample grouping, the relative abundance is shown in the cell. 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.divide(ft.sum(axis=0), axis=1).multiply(100)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+ft.rename(columns=sample_disease, inplace=True)
+ft = ft.transpose()
+ft = ft.groupby(ft.index.values).mean()
+ft = ft.transpose()
+
+keeping = []
+for col in ft.columns:
+  if 'sample' in col:
+    keeping.append(False)
+  else:
+    keeping.append(True)
+
+ft = ft.loc[:, keeping]
+ft = ft[ft.max(axis=1) > 0.5]
+ft = ft.iloc[::-1]
+
+print(ft)
+
+plt.figure(figsize=(15,60))
+ax1 = plt.subplot(111)
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=5)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+y = [1 for x in ft.columns]
+bottom = [0 for x in ft.columns]
+x = [x for x in range(len(ft.columns))]
+all_y = []
+for a in ft.index.values:
+  row = ft.loc[a, :].values
+  whole = list(row)
+  strings = [str(round(b, 1)) for b in row]
+  #ma = max(row)
+  row = [m.to_rgba(b) for b in row]
+  ax1.bar(x, y, color=row, bottom=bottom, edgecolor='k', width=1)
+  for b in range(len(strings)):
+    if whole[b] == 0: continue
+    if whole[b] > 2.5: color='k'
+    else: color='w'
+    ax1.text(x[b], bottom[0]+0.5, strings[b], color=color, ha='center', va='center')
+  bottom = [x+1 for x in bottom]
+  all_y.append(bottom[0]-0.5)
+
+ax1.set_xlim([x[0]-0.5, x[-1]+0.5])
+ax1.set_ylim([0, bottom[0]])
+plt.yticks(all_y, ft.index.values)
+plt.xticks(x, ft.columns, rotation=90)
+ax1.xaxis.tick_top()
+
+plt.tight_layout()
+plt.show()
+```
+
+### Genus and disease clustered
+
+This shows the same as the previous heatmap grouped by disease, but here the disease groupings as well as the genera have been hierarchically clustered (using Bray-Curtis distance). 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.divide(ft.sum(axis=0), axis=1).multiply(100)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+ft.rename(columns=sample_disease, inplace=True)
+ft = ft.transpose()
+ft = ft.groupby(ft.index.values).mean()
+ft = ft.transpose()
+
+keeping = []
+for col in ft.columns:
+  if 'sample' in col:
+    keeping.append(False)
+  else:
+    keeping.append(True)
+
+ft = ft.loc[:, keeping]
+ft = ft[ft.max(axis=1) > 0.5]
+ft = ft.iloc[::-1]
+
+plt.figure(figsize=(25,70))
+ax1 = plt.subplot2grid((70,5), (10,1), rowspan=60, colspan=3)
+ax2 = plt.subplot2grid((70,5), (0,1), rowspan=5, colspan=3, frameon=False)
+ax3 = plt.subplot2grid((70,5), (10,0), rowspan=60, frameon=False)
+plt.sca(ax2)
+
+Z = hierarchy.linkage(ft.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(ax2.get_xticklabels()), list(ax2.get_xticks()), list(ax2.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(ft.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+ft = ft[plot_labels]
+
+plt.sca(ax3)
+
+Z = hierarchy.linkage(ft, 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='left')
+
+y_labels, locs, xlocs, labels = list(ax3.get_yticklabels()), list(ax3.get_yticks()), list(ax3.get_xticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(ft.index.values)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+
+plt.sca(ax1)
+ft = ft.reindex(plot_labels)
+
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=5)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+y = [1 for x in ft.columns]
+bottom = [0 for x in ft.columns]
+x = [x for x in range(len(ft.columns))]
+all_y = []
+for a in ft.index.values:
+  row = ft.loc[a, :].values
+  whole = list(row)
+  strings = [str(round(b, 1)) for b in row]
+  #ma = max(row)
+  row = [m.to_rgba(b) for b in row]
+  ax1.bar(x, y, color=row, bottom=bottom, edgecolor='k', width=1)
+  for b in range(len(strings)):
+    if whole[b] == 0: continue
+    if whole[b] > 2.5: color='k'
+    else: color='w'
+    ax1.text(x[b], bottom[0]+0.5, strings[b], color=color, ha='center', va='center')
+  bottom = [x+1 for x in bottom]
+  all_y.append(bottom[0]-0.5)
+
+ax1.set_xlim([x[0]-0.5, x[-1]+0.5])
+ax1.set_ylim([0, bottom[0]])
+plt.yticks(all_y, ft.index.values)
+plt.xticks(x, ft.columns, rotation=90)
+ax1.xaxis.tick_top()
+ax1.yaxis.tick_right()
+
+plt.subplots_adjust(wspace=0.05)
+plt.show()
+```
+
+### Genus sorted by prevalence
+
+This shows the same as the first heatmap grouped by disease, but here the disease groupings have been hierarchically clustered (using Bray-Curtis distance) and the genera sorted by prevalence. 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.divide(ft.sum(axis=0), axis=1).multiply(100)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+ft.rename(columns=sample_disease, inplace=True)
+ft = ft.transpose()
+ft = ft.groupby(ft.index.values).mean()
+ft = ft.transpose()
+
+keeping = []
+for col in ft.columns:
+  if 'sample' in col:
+    keeping.append(False)
+  else:
+    keeping.append(True)
+
+ft = ft.loc[:, keeping]
+ft = ft[ft.max(axis=1) > 0.5]
+ft = ft.iloc[::-1]
+
+plt.figure(figsize=(25,70))
+ax1 = plt.subplot2grid((70,5), (10,1), rowspan=60, colspan=3)
+ax2 = plt.subplot2grid((70,5), (0,1), rowspan=5, colspan=3, frameon=False)
+#ax3 = plt.subplot2grid((70,5), (10,0), rowspan=60, frameon=False)
+plt.sca(ax2)
+
+Z = hierarchy.linkage(ft.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(ax2.get_xticklabels()), list(ax2.get_xticks()), list(ax2.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(ft.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+ft = ft[plot_labels]
+
+
+plt.sca(ax1)
+
+pres_abs = ft.copy()
+for i in pres_abs.columns:
+  for j in pres_abs.index.values:
+    if pres_abs.loc[j, i] > 0: pres_abs.loc[j, i] = 1
+ft['prevalence'] = pres_abs.mean(axis=1)
+ft = ft.sort_values(by='prevalence')
+ft = ft.drop(['prevalence'], axis=1)
+
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=5)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+y = [1 for x in ft.columns]
+bottom = [0 for x in ft.columns]
+x = [x for x in range(len(ft.columns))]
+all_y = []
+for a in ft.index.values:
+  row = ft.loc[a, :].values
+  whole = list(row)
+  strings = [str(round(b, 1)) for b in row]
+  #ma = max(row)
+  row = [m.to_rgba(b) for b in row]
+  ax1.bar(x, y, color=row, bottom=bottom, edgecolor='k', width=1)
+  for b in range(len(strings)):
+    if whole[b] == 0: continue
+    if whole[b] > 2.5: color='k'
+    else: color='w'
+    ax1.text(x[b], bottom[0]+0.5, strings[b], color=color, ha='center', va='center')
+  bottom = [x+1 for x in bottom]
+  all_y.append(bottom[0]-0.5)
+
+ax1.set_xlim([x[0]-0.5, x[-1]+0.5])
+ax1.set_ylim([0, bottom[0]])
+plt.yticks(all_y, ft.index.values)
+plt.xticks(x, ft.columns, rotation=90)
+ax1.xaxis.tick_top()
+ax1.yaxis.tick_right()
+
+plt.subplots_adjust(wspace=0.05)
+plt.show()
+```
+
+### Genus sorted by abundance
+
+This shows the same as the first heatmap grouped by disease, but here the disease groupings have been hierarchically clustered (using Bray-Curtis distance) and the genera sorted by abundance. 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Peptides/feature_table_tax.csv', index_col=0, header=0)
+
+ft.drop(['domain'], axis=1, inplace=True)
+ft = ft.divide(ft.sum(axis=0), axis=1).multiply(100)
+genus = {}
+
+for a in ft.index.values:
+  genus[a] = a.split(' ')[0]
+
+ft.rename(index=genus, inplace=True)
+ft = ft.groupby(ft.index.values).sum()
+ft.rename(columns=sample_disease, inplace=True)
+ft = ft.transpose()
+ft = ft.groupby(ft.index.values).mean()
+ft = ft.transpose()
+
+keeping = []
+for col in ft.columns:
+  if 'sample' in col:
+    keeping.append(False)
+  else:
+    keeping.append(True)
+
+ft = ft.loc[:, keeping]
+ft = ft[ft.max(axis=1) > 0.5]
+ft = ft.iloc[::-1]
+
+plt.figure(figsize=(25,70))
+ax1 = plt.subplot2grid((70,5), (10,1), rowspan=60, colspan=3)
+ax2 = plt.subplot2grid((70,5), (0,1), rowspan=5, colspan=3, frameon=False)
+#ax3 = plt.subplot2grid((70,5), (10,0), rowspan=60, frameon=False)
+plt.sca(ax2)
+
+Z = hierarchy.linkage(ft.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(ax2.get_xticklabels()), list(ax2.get_xticks()), list(ax2.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(ft.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+ft = ft[plot_labels]
+
+
+plt.sca(ax1)
+
+ft['total'] = ft.mean(axis=1)
+ft = ft.sort_values(by='total')
+ft = ft.drop(['total'], axis=1)
+
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=5)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+y = [1 for x in ft.columns]
+bottom = [0 for x in ft.columns]
+x = [x for x in range(len(ft.columns))]
+all_y = []
+for a in ft.index.values:
+  row = ft.loc[a, :].values
+  whole = list(row)
+  strings = [str(round(b, 1)) for b in row]
+  #ma = max(row)
+  row = [m.to_rgba(b) for b in row]
+  ax1.bar(x, y, color=row, bottom=bottom, edgecolor='k', width=1)
+  for b in range(len(strings)):
+    if whole[b] == 0: continue
+    if whole[b] > 2.5: color='k'
+    else: color='w'
+    ax1.text(x[b], bottom[0]+0.5, strings[b], color=color, ha='center', va='center')
+  bottom = [x+1 for x in bottom]
+  all_y.append(bottom[0]-0.5)
+
+ax1.set_xlim([x[0]-0.5, x[-1]+0.5])
+ax1.set_ylim([0, bottom[0]])
+plt.yticks(all_y, ft.index.values)
+plt.xticks(x, ft.columns, rotation=90)
+ax1.xaxis.tick_top()
+ax1.yaxis.tick_right()
+
+plt.subplots_adjust(wspace=0.05)
+plt.show()
+```
