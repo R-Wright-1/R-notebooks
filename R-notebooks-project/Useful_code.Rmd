@@ -51,6 +51,12 @@ ssh robyn@vulcan.pharmacology.dal.ca
 #pwd = standard ZA no !, private = standard Malay no !
 ```
 
+Connect RStudio to server:
+```{bash, eval=FALSE}
+ ssh -N -L 8787:vulcan.pharmacology.dal.ca:8787 robyn@vulcan.pharmacology.dal.ca
+```
+Go to [this link](http://localhost:8787/). Login details are robyn and server password
+
 Combine fasta files:
 ```{bash, eval=FALSE}
 cat folder/*.fasta > combined.fasta

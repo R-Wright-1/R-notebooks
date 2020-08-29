@@ -1,0 +1,127 @@
+---
+title: "Add additional genes to PICRUSt2"
+output:
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+In this study, I use [PICRUSt2](https://github.com/picrust/picrust2/wiki) to predict the metagenome content of all Plastisphere samples. As the default reference files that PICRUSt2 uses don't contain some of the genes for PET degradation (*e.g.* PETase), I have added these to the reference database. To do this, I downloaded all genomes that are included in PICRUSt2 (or as many as possible - not quite all are available), made an  HMM for the genes of interest (*i.e.* PETase, tphA, etc.) and then ran this HMM on all PICRUSt2 genomes. I then parse the output to determine how many copies of these genes each genome has, and add this as a column to the default PICRUSt2 reference file.
+
+## 
+
+## 1. Get genome files 
+
+The PICRUSt2 genomes will need to be downloaded, decompressed and saved somewhere locally. They can be downloaded from [this Figshare file](https://doi.org/10.6084/m9.figshare.12233192). 
+To decompress:
+```{bash, eval=FALSE}
+tar -xf path_to_file/JGI_PICRUSt_genomes.tar.bz2
+```
+
+## 2. Get additional packages and files
+
+- [Conda](https://docs.conda.io/projects/conda/en/latest/commands/install.html)
+- HMM:
+```{bash, eval=FALSE}
+conda install -c biocore hmmer
+```
+- Biopython:
+```{bash, eval=FALSE}
+conda install biopython
+```
+- The [default KEGG ortholog file](https://github.com/picrust/picrust2/blob/master/picrust2/default_files/prokaryotic/ko.txt.gz)
+
+## 3. Make HMMs
+
+The HMMs that are currently shown in the HMM/ folder were made from the .fasta files in the 'hmms_to_make' folder. To make these of your own, you can follow these steps.
+
+### (A) Search for the top hits of the gene of interest in [uniprot](https://www.uniprot.org/)
+
+### (B) Click on the genes that you want to include and follow the link for the genomic DNA translation
+
+### (C) Combine all of the DNA sequences into one .fasta file (you can do this using a text editing software)
+
+### (D) Get a stockholm alignment of the .fasta file. We used https://www.ebi.ac.uk/Tools/msa/clustalo/ (select 'DNA' and the 'STOCKHOLM' alignment option)
+
+### (E) Download this alignment and run: 
+```{bash, eval=FALSE}
+hmmbuild PETase_DNA.hmm PETase_DNA.sto
+```
+**(F) Move the .hmm file to the 'hmms/' folder**
+
+## 4. Run against the reference genomes
+
+### (A) Give the paths to the files that we are using, changing these if necessary:
+```{python, eval=FALSE}
+picrust_seqs = 'JGI_PICRUSt_genomes.fasta'
+hmms = os.listdir(os.getcwd()+'/hmms/')
+ko = 'ko.txt'
+```
+
+### (B) Open these files and set up the directories that we will save things to:
+```{python, eval=FALSE}
+os.system('gunzip '+ko+'.gz')
+try: os.mkdir('hmms_out')
+except: didnt_make = True
+ko_data = pd.read_csv(ko, header=0, index_col=0, sep='\t')
+```
+
+### (C) Perform the HMM searches of the PICRUSt2 sequences using your HMMs (this will take a while to run):
+```{python, eval=FALSE}
+for hmm in hmms:
+    os.system('nhmmer hmms/'+hmm+' '+picrust_seqs+' > hmms_out/'+hmm[:-4]+'.out')
+```
+You can open any of the files in the hmms_out folder if you want to check whether you have any hits that are above the inclusion threshold (and whether this fits what you would have expected)
+
+### (D) Now take the information from these HMMs and add this to the PICRUSt2 KEGG ortholog information that we already have (this is a bit tedious as the HMM.out files don't use tabs between columns or anything that we could use to separate them, so we just have to read them in as text files and look at each character...)
+```{python, eval=FALSE}
+hmms_out = os.listdir(os.getcwd()+'/hmms_out')
+main_dir = os.getcwd()
+genomes = list(ko_data.index.values)
+genomes = [str(genomes[i]).replace('-cluster', '') for i in range(len(genomes))]
+for hmm in hmms_out:
+    included_genomes = []
+    with open(main_dir+'/hmms_out/'+hmm, 'rU') as f:
+        contents = f.read()
+    row, rows = '', []
+    for a in range(len(contents)-1):
+        if contents[a:a+1] == '\n':
+            if row == '  ------ inclusion threshold ------':
+                break
+            rows.append(row)
+            row = ''
+        else:
+            row += contents[a]
+    after_start, other_count = False, 0
+    for r in range(len(rows)):
+        if after_start:
+            block = 0
+            this_genome = ''
+            for b in range(1, len(rows[r])):
+                if rows[r][b-1] == ' ' and rows[r][b] != ' ':
+                    block += 1
+                if block == 4 and rows[r][b] != ' ':
+                    this_genome += rows[r][b]
+            if this_genome != '':
+                included_genomes.append(this_genome)
+        count = 0
+        for a in range(len(rows[r])):
+            if rows[r][a] == '-':
+                count += 1
+            if count > 40:
+                after_start = True
+                continue
+    for a in range(len(included_genomes)):
+        if included_genomes[a][-11:] == 'Description':
+            included_genomes[a] = included_genomes[a][:-11]
+    this_col = []
+    for g in genomes:
+        c1 = included_genomes.count(g)
+        c2 = included_genomes.count(g[:-8])
+        this_col.append(c1+c2)
+    ko_data[hmm[:-4]] = this_col
+ko_data.to_csv('ko_all.txt', sep='\t')
+```
+
+You can now check the ko_all.txt file, but there should be new columns titled with your HMM names and counts of how many times these genes are in each of your genomes in the rows. If you want to use these with the rest of the Plastisphere metaanalysis then you should replace the 'ko_all.txt' file in the picrust folders in both of the folders inside the 'all_output_and_recreate' folder (downloaded from [here](https://doi.org/10.6084/m9.figshare.12227303.v3))

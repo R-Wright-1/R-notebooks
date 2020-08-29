@@ -1535,6 +1535,9 @@ tar -xf filename</code></pre>
 ssh robyn@vulcan.pharmacology.dal.ca
 
 #pwd = standard ZA no !, private = standard Malay no !</code></pre>
+<p>Connect RStudio to server:</p>
+<pre class="bash"><code> ssh -N -L 8787:vulcan.pharmacology.dal.ca:8787 robyn@vulcan.pharmacology.dal.ca</code></pre>
+<p>Go to <a href="http://localhost:8787/">this link</a>. Login details are robyn and server password</p>
 <p>Combine fasta files:</p>
 <pre class="bash"><code>cat folder/*.fasta &gt; combined.fasta</code></pre>
 <p><a href="https://github.com/LangilleLab/lab_information/wiki/Backups-and-Extra-Storage">Server backup</a>:</p>
@@ -2121,6 +2124,8 @@ ax1.scatter(strain_npos[a,0], strain_npos[a,1], marker=shapes[a], color=colors[a
     else: return colors_40+colors_40+colors_40</code></pre>
 <p>Plot text:</p>
 <pre class="python"><code>ax1.text(0.5, 0.5, sample_names[x], color=colors[x], rotation=90, va=&#39;top&#39;, ha=&#39;center&#39;, transform=ax1.transAxes)</code></pre>
+<p>Put the ticks on top of the axis:</p>
+<pre class="python"><code>ax1.xaxis.tick_top()</code></pre>
 </div>
 <div id="numbers-and-text" class="section level2">
 <h2>Numbers and text</h2>
@@ -2214,6 +2219,15 @@ from Bio.Alphabet import IUPAC</code></pre>
 <pre class="python"><code>for record in SeqIO.parse(&#39;file_name.fasta&#39;, &quot;fasta&quot;):
     sequence_dict[record.id] = [record.description, record.seq]</code></pre>
 </div>
+<div id="pickle" class="section level2">
+<h2>Pickle</h2>
+<p>Save a file:</p>
+<pre class="python"><code>with open(&#39;file_name.dict&#39;, &#39;wb&#39;) as f:
+    pickle.dump(dictionary, f)</code></pre>
+<p>Read a file:</p>
+<pre class="python"><code>with open(&#39;file_name.dict&#39;, &#39;rb&#39;) as f:
+    dictionary = pickle.load(f)</code></pre>
+</div>
 <div id="basic-python-functions" class="section level2">
 <h2>Basic python functions</h2>
 <p>Get the names of the 3 largest scores</p>
@@ -2236,6 +2250,15 @@ startTime = datetime.now()
 
 print(datetime.now() - startTime)</code></pre>
 </div>
+</div>
+<div id="markdownr-notebooks" class="section level1">
+<h1>Markdown/R notebooks</h1>
+<p>Kable table:</p>
+<pre class="r"><code>#8
+py$reads_remain %&gt;%
+  kable() %&gt;%
+  kable_styling() %&gt;%
+  scroll_box(width = &quot;350px&quot;, height = &quot;400px&quot;)</code></pre>
 </div>
 
 
