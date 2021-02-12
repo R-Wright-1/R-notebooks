@@ -1,0 +1,501 @@
+---
+title: Compute Canada
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+# Login information
+
+**UserID:** 3106879</br>
+**Username:** rwright</br>
+</br>
+**There are several general purpose clusters:**</br>
+beluga.computecanada.ca</br>
+cedar.computecanada.ca</br>
+graham.computecanada.ca</br>
+
+**Logon beluga:**
+```{bash, eval=FALSE}
+ssh rwright@beluga.computecanada.ca
+htop
+```
+![](/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Compute_Canada/resources/htop_beluga.png)
+
+**Logon cedar:**
+```{bash, eval=FALSE}
+ssh rwright@cedar.computecanada.ca
+htop
+```
+![](/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Compute_Canada/resources/htop_cedar.png)
+
+**Logon graham:**
+```{bash, eval=FALSE}
+ssh rwright@graham.computecanada.ca
+htop
+```
+![](/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Compute_Canada/resources/htop_graham.png)
+
+# Setup
+
+## Install Anaconda
+
+```{bash, eval=FALSE}
+wget https://repo.anaconda.com/archive/Anaconda3-2020.11-Linux-x86_64.sh
+bash Anaconda3-2020.11-Linux-x86_64.sh
+export PATH=$PATH:/home/rwright/anaconda3/bin
+```
+
+## Create conda environment
+
+```{bash, eval=FALSE}
+conda create --name kneaddata python=3.8.0 ipython
+conda activate kneaddata
+conda config --add channels defaults
+conda config --add channels bioconda
+conda config --add channels conda-forge
+```
+
+Remove conda environment:
+```{bash, eval=FALSE}
+conda remove --name kneaddata --all
+```
+
+## Install kneaddata packages
+
+```{bash, eval=FALSE}
+#pip install kneaddata
+conda install -c bioconda kneaddata
+#all others included in installing kneaddata
+#conda install bowtie2
+#conda install -c bioconda trf
+#conda install -c cyclus java-jre
+#conda install -c bioconda fastqc
+#conda install -c bioconda samtools
+```
+
+## Download trimmomatic
+
+Using the binary link [here](http://www.usadellab.org/cms/?page=trimmomatic)
+
+```{bash, eval=FALSE}
+mkdir tools
+cd tools
+wget http://www.usadellab.org/cms/uploads/supplementary/Trimmomatic/Trimmomatic-0.39.zip
+unzip Trimmomatic-0.39.zip
+rm Trimmomatic-0.39.zip 
+```
+
+## Install python packages
+
+```{bash, eval=FALSE}
+conda install -c jmcmurray os
+conda install -c omnia subprocess32
+conda install -c conda-forge pickle5
+conda install numpy
+conda install -c conda-forge biopython
+conda install -c trentonoliphant datetime
+conda install sys
+```
+
+# Run file
+
+Initially tried on beluga but ran out of space, so have requested access to Niagara instead:
+`rwright@niagara.computecanada.ca`</br>
+Misunderstood how to use beluga, I think it will have enough space to run things, just need to understand how to submit jobs (using sbatch).</br>
+</br>
+- Get bowtie2 database onto beluga - copy from vulcan using scp on vulcan</br>
+- Rewrite run_participant script to work with an input of the participant number</br>
+- Write a script that will submit a separate job for each </br>
+- Test memory usage of kneaddata</br>
+- Use of sbatch</br>
+
+## Test memory usage
+
+**Run kneaddata on single lane (vulcan):**
+```{bash, eval=FALSE}
+(/usr/bin/time -v kneaddata -i PGPC_0014_S8_L008_R1.fastq -i PGPC_0014_S8_L008_R2.fastq -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 40 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output) 2> time.txt
+```
+
+**Output:**
+```{bash, eval=FALSE}
+Command being timed: "kneaddata -i PGPC_0014_S8_L008_R1.fastq -i PGPC_0014_S8_L008_R2.fastq -o kneaddata_out/ -db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ -t 40 --trimmomatic-options SLIDINGWINDOW:4:20 MINLEN:50 --bowtie2-options --very-sensitive --dovetail --remove-intermediate-output"
+        User time (seconds): 137957.97
+        System time (seconds): 934.70
+        Percent of CPU this job got: 1952%
+        Elapsed (wall clock) time (h:mm:ss or m:ss): 1:58:34
+        Average shared text size (kbytes): 0
+        Average unshared data size (kbytes): 0
+        Average stack size (kbytes): 0
+        Average total size (kbytes): 0
+        Maximum resident set size (kbytes): 20127516
+        Average resident set size (kbytes): 0
+        Major (requiring I/O) page faults: 0
+        Minor (reclaiming a frame) page faults: 90714006
+        Voluntary context switches: 1302969
+        Involuntary context switches: 1034430
+        Swaps: 0
+        File system inputs: 949624263
+        File system outputs: 450967953
+        Socket messages sent: 0
+        Socket messages received: 0
+        Signals delivered: 0
+        Page size (bytes): 4096
+        Exit status: 0
+```
+
+So maximum resident set size = 20127516 KB = 20.12GB</br>
+So setting maximum memory as 50GB</br>
+
+## Using sbatch and slurm
+
+**Submit job:** `sbatch $job_file.sh`</br>
+</br>
+**Check status of jobs:** `sq` (only for this user)</br>
+*Example output:*
+```{eval=FALSE}
+JOBID     USER      ACCOUNT           NAME  ST  TIME_LEFT NODES CPUS TRES_PER_N MIN_MEM NODELIST (REASON) 
+15017983  rwright def-mlangill  PGPC_0015.job  PD 1-00:00:00     1   40        N/A     50G  (Priority) 
+15017984  rwright def-mlangill  PGPC_0016.job  PD 1-00:00:00     1   40        N/A     50G  (Priority) 
+```
+**Check status of jobs:** `squeue` (all users)</br>
+</br>
+**Check output from a completed job:** `seff $JOBID`</br>
+*Example output:*
+```{eval=FALSE}
+(base) [rwright@beluga2 scratch]$ seff 15016870
+Job ID: 15016870
+Cluster: beluga
+User/Group: rwright/rwright
+State: FAILED (exit code 1)
+Nodes: 1
+Cores per node: 40
+CPU Utilized: 00:00:00
+CPU Efficiency: 0.00% of 00:02:00 core-walltime
+Job Wall-clock time: 00:00:03
+Memory Utilized: 319.00 KB
+Memory Efficiency: 0.00% of 50.00 GB
+```
+</br>
+**Cancel a job:** `scancel $JOBID` (If you asked for emails when things happened then this will send you an email saying the job got cancelled)
+
+## Write a script that will submit a separate job for each
+
+First:
+```{bash, eval=FALSE}
+#!/bin/bash
+
+job_directory=$PWD
+participants=("PGPC_0015" "PGPC_0016")
+
+for participant in ${participants[@]}; do
+
+    job_file="${job_directory}/${participant}.job"
+
+    echo "#!/bin/bash
+#SBATCH --job-name=${participant}.job
+#SBATCH --output=$PWD/out/${participant}.out
+#SBATCH --error=$PWD/out/${participant}.err
+#SBATCH --time=1-00:00
+#SBATCH --mem=50G
+#SBATCH --cpus-per-task=40
+#SBATCH --mail-user=robyn.wright@dal.ca
+#SBATCH --mail-type=ALL
+python run_single_participant.py ${participant}" > $job_file
+    sbatch $job_file
+
+done
+```
+This is in the file `run_all_jobs.sh`</br>
+</br>
+
+Second/final (switched to python):
+```{python, eval=FALSE}
+import os
+import subprocess
+import pickle
+import numpy as np
+from Bio import SeqIO
+from datetime import datetime
+import sys
+
+job_directory = '/home/rwright/scratch/'
+#participant_names = ['PGPC_0015', 'PGPC_0016', 'PGPC_0017', 'PGPC_0018', 'PGPC_0019', 'PGPC_0020', 'PGPC_0021', 'PGPC_0022', 'PGPC_0023', 'PGPC_0024', 'PGPC_0025', 'PGPC_0026', 'PGPC_0027', 'PGPC_0028', 'PGPC_0029', 'PGPC_0030', 'PGPC_0031', 'PGPC_0032', 'PGPC_0033', 'PGPC_0034', 'PGPC_0035', 'PGPC_0036', 'PGPC_0037', 'PGPC_0038', 'PGPC_0039', 'PGPC_0040', 'PGPC_0041', 'PGPC_0042', 'PGPC_0043', 'PGPC_0044', 'PGPC_0045', 'PGPC_0046', 'PGPC_0047', 'PGPC_0048', 'PGPC_0049', 'PGPC_0050', 'PGPC_0051', 'PGPC_0052', 'PGPC_0053', 'PGPC_0054', 'PGPC_0055', 'PGPC_0056', 'PGPC_0057', 'PGPC_0059', 'PGPC_0061', 'PGPC_0062', 'PGPC_0067', 'PGPC_0069', 'PGPC_0070', 'PGPC_0071', 'PGPC_0072', 'PGPC_0073', 'PGPC_0074', 'PGPC_0076', 'PGPC_0077', 'PGPC_0078', 'PGPC_0082', 'PGPC_0087']
+participant_names = ['PGPC_0015', 'PGPC_0016', 'PGPC_0017', 'PGPC_0018', 'PGPC_0019', 'PGPC_0020']
+direc = '/home/rwright/scratch/'
+
+with open(direc+'participant_links.dict', 'rb') as f:
+    participants = pickle.load(f)
+
+with open(direc+'file_names.dict', 'rb') as f:
+    file_names = pickle.load(f)
+
+for participant in participant_names:
+    if participant != 'PGPC_0015': continue
+    str = '#!/bin/bash\n'
+    str += '#SBATCH --job-name='+participant+'.job\n'
+    str += '#SBATCH --output='+job_directory+'out/'+participant+'.out\n'
+    str += '#SBATCH --error='+job_directory+'out/'+participant+'.err\n'
+    str += '#SBATCH --time=1-00:00\n'
+    str += '#SBATCH --mem=50G\n'
+    str += '#SBATCH --cpus-per-task=40\n'
+    str += '#SBATCH --mail-user=robyn.wright@dal.ca\n'
+    str += '#SBATCH --mail-type=ALL\n'
+    str += 'source /home/rwright/.bashrc\n'
+    str += 'conda activate kneaddata\n'
+    str += 'source activate kneaddata\n'
+    os.system('mkdir '+direc+participant)
+    for link in participants[participant]:
+        if not os.path.exists(direc+participant+'/'+file_names[link].replace('_001.', '.')):
+            os.system('wget '+link+' -O '+direc+participant+'/'+file_names[link].replace('_001.', '.'))
+    str += 'python run_single_participant.py '+participant+'\n'
+    with open(participant+'.job', 'w') as f:
+        f.write(str)
+    os.system('sbatch '+participant+'.job')
+```
+
+This is in the file `run_all_jobs.py`</br>
+
+### Problems
+
+Initially had trouble because wget doesn't work within the sbatch script - "connection refused" error. It's the same if I call it from python or use alternative python packages for download.</br>
+So I switched to downloading from the initial python script used to generate the sbatch files and then submitting the job after all files are downloaded, but now I'm having issues with kneaddata:
+```{}
+Traceback (most recent call last):
+  File "/home/rwright/anaconda3/envs/kneaddata/bin/kneaddata", line 8, in <module>
+    sys.exit(main())
+  File "/home/rwright/anaconda3/envs/kneaddata/lib/python3.8/site-packages/kneaddata/knead_data.py", line 427, in main
+    args.input[index]=utilities.get_reformatted_identifiers(args.input[index],args.output_dir, temp_output_files)
+  File "/home/rwright/anaconda3/envs/kneaddata/lib/python3.8/site-packages/kneaddata/utilities.py", line 258, in get_reformatted_identifiers
+    os.write(file_out, "".join(lines))
+TypeError: a bytes-like object is required, not 'str'
+```
+
+Test kneaddata:
+```{bash, eval=FALSE}
+kneaddata -i PGPC_0015_S1_L003_R1.fastq -i PGPC_0015_S1_L003_R2.fastq -o kneaddata_out/ \
+-db /home/rwright/scratch/bowtie_db/GRCh38_PhiX --trimmomatic /home/rwright/tools/Trimmomatic-0.39/ \
+-t 20 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-fast --dovetail" --remove-intermediate-output
+```
+
+Get the same problem.</br></br>
+
+Test same on vulcan (using the same files but copied across):
+```{bash, eval=FALSE}
+kneaddata -i PGPC_0015_S1_L003_R1.fastq -i PGPC_0015_S1_L003_R2.fastq -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/
+```
+Works fine</br>
+</br>
+So trying out an interactive job:
+```{bash, eval=FALSE}
+(kneaddata) [rwright@beluga1 scratch]$ salloc --time=1:0:0 --ntasks=20 --mem-per-cpu 50G
+salloc: Pending job allocation 15038192
+salloc: job 15038192 queued and waiting for resources
+```
+Same error.</br>
+Reinstalled kneaddata using conda (initially had only used pip):
+```{bash, eval=FALSE}
+(kneaddata) [rwright@blg6150 PGPC_0015]$ kneaddata -i PGPC_0015_S1_L003_R1.fastq -i PGPC_0015_S1_L003_R2.fastq -o kneaddata_out/ -db /home/rwright/scratch/bowtie_db/GRCh38_PhiX --trimmomatic /home/rwright/tools/Trimmomatic-0.39/ -t 20 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" --bowtie2-options "--very-fast --dovetail" --remove-intermediate-output
+Reformatting file sequence identifiers ...
+
+Reformatting file sequence identifiers ...
+
+Initial number of reads ( /lustre04/scratch/rwright/PGPC_0015/kneaddata_out/reformatted_identifiers7yj6vsd3_PGPC_0015_S1_L003_R1 ): 41149022.0
+```
+And then I stopped it. Going to retry now within the script.</br>
+</br>
+And exit the `salloc` interactive job: `exit`</br>
+</br>
+And then I tried submitting the job again, but this time I get this error:
+```{bash, eval=FALSE}
+Error message returned from Trimmomatic :
+<JAVA_HOME>/lib/ext exists, extensions mechanism no longer supported; Use -classpath instead.
+.Error: Could not create the Java Virtual Machine.
+Error: A fatal exception has occurred. Program will exit.
+```
+</br>
+So I'm going to remove the conda environment and start again - maybe there was a problem from having installed kneaddata more than once and what is used as default etc.</br>
+</br>
+Removed and reinstalled everything. Added python packages to initial script to make sure that they import fine.</br>
+This ran and all lanes from that participant ran. Output:
+```{}
+(base) [rwright@beluga2 scratch]$ seff 15043042
+Job ID: 15043042
+Cluster: beluga
+User/Group: rwright/rwright
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 40
+CPU Utilized: 9-03:04:38
+CPU Efficiency: 40.63% of 22-11:14:40 core-walltime
+Job Wall-clock time: 13:28:52
+Memory Utilized: 14.69 GB
+Memory Efficiency: 29.39% of 50.00 GB
+```
+Lowered the maximum time from 1 day to 16 hours and the maximum memory from 50GB to 25GB and set participants 16-25 to run. </br>
+I set all to run over the weekend and on Monday 11th many of the samples with only one R1 and R2 for each had run out of memory (100GB wasn't enough) and several that had 6 lanes instead of 8 had either run out of memory or time. Several with 8 lanes had also run out of time. Below shows the state of all samples, including those that have been copied across to Vulcan. I'm testing 500GB memory with a single sample to see what the maximum used is and then I can set the maximum on all jobs to closer to this. Approximate ratio between .fastq and .fastq.gz is 3.5, so ~40GB files should be ~140GB. </br>
+PGPC_0020 - original files were 35GB and 39GB, expanded files are 135GB each.
+
+## Jobs/participants run
+
+Left to run 14/01/2021:
+*PGPC_0015 - copied 11/01/2021
+*PGPC_0016 - copied 11/01/2021
+*PGPC_0017 - copied 11/01/2021
+*PGPC_0018 - copied 11/01/2021
+*PGPC_0019 - copied 11/01/2021
+*PGPC_0020 - memory 100G - completed and copied 12/01/2021
+*PGPC_0021 - memory 100G - completed and copied 12/01/2021
+PGPC_0022 - missing
+*PGPC_0023 - memory 100G - completed and copied 13/01/2021
+*PGPC_0024 - memory 100G - completed and copied 13/01/2021
+*PGPC_0025 - memory 100G - completed and copied 13/01/2021
+*PGPC_0026 - time 16h - completed and copied 20/01/2021
+*PGPC_0027 - memory 100G - timed out 16h - completed and copied 19/01/2021
+*PGPC_0028 - memory 100G - completed and copied 14/01/2021
+*PGPC_0029 - memory 100G - completed and copied 19/01/2021
+*PGPC_0030 - memory 100G - completed and copied 14/01/2021
+*PGPC_0031 - memory 100G - completed and copied 19/01/2021
+*PGPC_0032 - memory 100G - completed and copied 15/01/2021
+*PGPC_0033 - memory 100G - completed and copied 15/01/2021
+*PGPC_0034 - time 16h - completed and copied 20/01/2021
+*PGPC_0035 - copied 11/01/2021
+*PGPC_0036 - time 16h - completed and copied 20/01/2021
+*PGPC_0037 - time 16h - completed and copied 20/01/2021
+*PGPC_0038 - time 16h - completed and copied 20/01/2021
+*PGPC_0039 - copied 11/01/2021
+*PGPC_0040 - copied 11/01/2021
+*PGPC_0041 - copied 11/01/2021
+*PGPC_0042 - rerun 100G - completed and copied 20/01/2021
+*PGPC_0043 - rerun 100G - completed and copied 20/01/2021
+*PGPC_0044 - rerun 100G - completed and copied 20/01/2021
+*PGPC_0045 - time 16h - completed and copied 20/01/2021
+*PGPC_0046 - copied 11/01/2021
+*PGPC_0047 - copied 11/01/2021
+*PGPC_0048 - copied 11/01/2021
+*PGPC_0049 - copied 11/01/2021
+*PGPC_0050 - copied 11/01/2021
+*PGPC_0051 - time 16h - completed and copied 20/01/2021
+*PGPC_0052 - time 16h - completed and copied 20/01/2021*
+*PGPC_0053 - memory 100G - completed and copied 20/01/2021
+*PGPC_0054 - memory 100G - completed and copied 20/01/2021*
+*PGPC_0055 - memory 100G - completed and copied 20/01/2021*
+*PGPC_0056 - memory 100G - completed and copied 20/01/2021*
+*PGPC_0057 - memory 100G - completed and copied 15/01/2021
+
+*PGPC_0059 - memory 100G - node fail - completed and copied 19/01/2021
+
+*PGPC_0061 - memory 100G - completed and copied 16/01/2021
+*PGPC_0062 - memory 100G - completed and copied 16/01/2021
+
+*PGPC_0067 - memory 100G - completed and copied 16/01/2021
+*PGPC_0069 - memory 100G - completed and copied 18/01/2021
+*PGPC_0070 - completed and copied 18/01/2021
+*PGPC_0071 - completed and copied 18/01/2021
+*PGPC_0072 - completed and copied 18/01/2021
+*PGPC_0073 - completed and copied 18/01/2021
+*PGPC_0074 - completed and copied 18/01/2021
+
+*PGPC_0076 - completed and copied 18/01/2021
+*PGPC_0077 - completed and copied 12/01/2021
+*PGPC_0078 - completed and copied 12/01/2021
+
+*PGPC_0082 - something happened - completed and copied 20/01/2021
+*PGPC_0087 - completed and copied 19/01/2021
+
+Remaining to run:
+PGPC_0022 - missing
+
+Lots seem to be queued but not starting and I'm not sure why? Going to try on another server - cedar seems to have some scratch issues so starting the jobs on graham. The ~20 finished overnight.
+
+### Checking for files 20/01/21
+
+Have all files apart from PGPC_0022
+
+PGPC_0001 - sensitivity
+PGPC_0002 - 8 pairs*
+PGPC_0003 - 8 pairs*
+PGPC_0004 - 8 pairs*
+PGPC_0005 - 8 pairs*
+PGPC_0006 - 8 pairs*
+PGPC_0007 - 8 pairs*
+PGPC_0008 - 8 pairs*
+PGPC_0009 - 8 pairs*
+PGPC_0010 - 8 pairs*
+PGPC_0011 - 8 pairs*
+PGPC_0012 - 8 pairs*
+PGPC_0013 - 8 pairs*
+PGPC_0014 - 8 pairs*
+PGPC_0015 - 8 pairs*
+PGPC_0016 - 8 pairs*
+PGPC_0017 - 8 pairs*
+PGPC_0018 - 8 pairs*
+PGPC_0019 - 8 pairs*
+PGPC_0020 - 1 pair*
+PGPC_0021 - 1 pair*
+PGPC_0022 - missing
+PGPC_0023 - 1 pair*
+PGPC_0024 - 1 pair*
+PGPC_0025 - 1 pair*
+PGPC_0026 - 8 pairs*
+PGPC_0027 - 1 pair*
+PGPC_0028 - 1 pair*
+PGPC_0029 - 1 pair*
+PGPC_0030 - 1 pair*
+PGPC_0031 - 1 pair*
+PGPC_0032 - 1 pair*
+PGPC_0033 - 1 pair*
+PGPC_0034 - 8 pairs*
+PGPC_0035 - 8 pairs*
+PGPC_0036 - 8 pairs*
+PGPC_0037 - 8 pairs*
+PGPC_0038 - 8 pairs*
+PGPC_0039 - 8 pairs*
+PGPC_0040 - 8 pairs*
+PGPC_0041 - 8 pairs*
+PGPC_0042 - 6 pairs*
+PGPC_0043 - 6 pairs*
+PGPC_0044 - 6 pairs*
+PGPC_0045 - 8 pairs*
+PGPC_0046 - 8 pairs*
+PGPC_0047 - 8 pairs*
+PGPC_0048 - 8 pairs*
+PGPC_0049 - 8 pairs*
+PGPC_0050 - 8 pairs*
+PGPC_0051 - 6 pairs***
+PGPC_0052 - 8 pairs*
+PGPC_0053 - 4 pairs***
+PGPC_0054 - 4 pairs***
+PGPC_0055 - 4 pairs***
+PGPC_0056 - 4 pairs***
+PGPC_0057 - 1 pair***
+
+PGPC_0059 - 1 pair***
+
+PGPC_0061 - 1 pair***
+PGPC_0062 - 1 pair***
+
+PGPC_0067 - 1 pair***
+
+PGPC_0069 - 1 pair***
+PGPC_0070 - 1 pair***
+PGPC_0071 - 1 pair***
+PGPC_0072 - 1 pair***
+PGPC_0073 - 1 pair***
+PGPC_0074 - 1 pair***
+
+PGPC_0076 - 1 pair***
+PGPC_0077 - 1 pair***
+PGPC_0078 - 1 pair***
+
+PGPC_0082 - 1 pair***
+
+PGPC_0087 - 1 pair***

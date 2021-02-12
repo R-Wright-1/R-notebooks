@@ -1,0 +1,15 @@
+INFO [2020-09-10 12:10:39] $x
+INFO [2020-09-10 12:10:39] list(py$positive, py$negative)
+INFO [2020-09-10 12:10:39] 
+INFO [2020-09-10 12:10:39] $category.names
+INFO [2020-09-10 12:10:39] c("Positive", "Negative")
+INFO [2020-09-10 12:10:39] 
+INFO [2020-09-10 12:10:39] $filename
+INFO [2020-09-10 12:10:39] [1] "venn_diagram.png"
+INFO [2020-09-10 12:10:39] 
+INFO [2020-09-10 12:10:39] $output
+INFO [2020-09-10 12:10:39] [1] TRUE
+INFO [2020-09-10 12:10:39] 
+INFO [2020-09-10 12:10:39] $fill
+INFO [2020-09-10 12:10:39] myCol[2:1]
+INFO [2020-09-10 12:10:39] 

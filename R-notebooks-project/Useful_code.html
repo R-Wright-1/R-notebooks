@@ -1520,8 +1520,7 @@ div.tocify {
 <p>Count number of files in directory:</p>
 <pre class="bash"><code>ls -1 | wc -l</code></pre>
 <p>Show certain number of files in directory (default is 10):</p>
-<pre class="bash"><code>ls | head
-ls | head -n 20</code></pre>
+<pre class="bash"><code>ls | head -20</code></pre>
 <p>List size of files:</p>
 <pre class="bash"><code>du -h | sort -h
 su -sh</code></pre>
@@ -1529,14 +1528,14 @@ su -sh</code></pre>
 <pre class="bash"><code>gunzip raw_data/*gz
 tar -xf filename</code></pre>
 <p>Using rsync to copy files:</p>
-<pre class="bash"><code>rsync --partial --progress W0.tar.bz2 robyn@vulcan.pharmacology.dal.ca:/home/robyn/</code></pre>
+<pre class="bash"><code>rsync --partial --progress W0.tar.bz2 user@server.address</code></pre>
 <p>Connect to server:</p>
 <pre class="bash"><code>ssh robyn@kronos.pharmacology.dal.ca
 ssh robyn@vulcan.pharmacology.dal.ca
 
 #pwd = standard ZA no !, private = standard Malay no !</code></pre>
 <p>Connect RStudio to server:</p>
-<pre class="bash"><code> ssh -N -L 8787:vulcan.pharmacology.dal.ca:8787 robyn@vulcan.pharmacology.dal.ca</code></pre>
+<pre class="bash"><code> ssh -N -L 8787:server.address:8787 user@server.address</code></pre>
 <p>Go to <a href="http://localhost:8787/">this link</a>. Login details are robyn and server password</p>
 <p>Combine fasta files:</p>
 <pre class="bash"><code>cat folder/*.fasta &gt; combined.fasta</code></pre>
@@ -1582,6 +1581,7 @@ rm qiime2-2020.2-py36-linux-conda.yml</code></pre>
 </div>
 <div id="qiime2amplicon-standard-analysis" class="section level2 tabset">
 <h2>QIIME2/amplicon standard analysis</h2>
+<p>Based on the <a href="https://github.com/LangilleLab/microbiome_helper/wiki/Amplicon-SOP-v2-(qiime2-2020.2)">standard workflow here</a>.</p>
 <div id="quality-control-of-reads" class="section level3">
 <h3>Quality control of reads</h3>
 <pre class="bash"><code>mkdir fastqc
@@ -1803,6 +1803,31 @@ export PATH=$PATH:/Users/robynwright/Documents/OneDrive/ACU_meta-analysis/sratoo
 <pre class="bash"><code>prefetch --option-file Dussud\ Hudec\ et\ al.\ 2018/SRR_Acc_List.txt #adding the -X option allows adding a maximum file size (in kb) - this will be important for metagenomes
 #these files by default get added to an ncbi/sra/ folder in your home directory and can then be moved wherever you like
 for i in SRA/* ; do fastq-dump -split-files --gzip $i ; done</code></pre>
+</div>
+<div id="downloading-from-anywhere" class="section level2">
+<h2>Downloading from anywhere</h2>
+<pre class="bash"><code>wget link_to_reads</code></pre>
+<p>Downloading from PGPC with check to see what kind of file it is first (and whether it already is downloaded):</p>
+<pre class="python"><code>import os
+import subprocess
+
+participants = [&#39;PGPC_0001&#39;, &#39;PGPC_0002&#39;, &#39;PGPC_0003&#39;, &#39;PGPC_0004&#39;, &#39;PGPC_0005&#39;]
+
+for a in range(0, 250):
+    try:
+        output = subprocess.check_output(&quot;wget --spider --server-response https://personalgenomes.ca/v1/public/files/&quot;+str(a)+&quot;/download 2&gt;&amp;1 | grep -i content-disposition&quot;, shell=True)
+        output = str(output)
+        fn = output.split(&#39;&quot;&#39;)[1]
+        print(fn)
+        if &#39;md5sum&#39; not in output and &#39;fastq.gz&#39; in output:
+            for participant in participants:
+                if participant in output:
+                    if not os.path.exists(fn):
+                        os.system(&quot;wget --content-disposition https://personalgenomes.ca/v1/public/files/&quot;+str(a)+&quot;/download&quot;)
+                    else:
+                        print(&#39;Already had &#39;+fn)
+    except:
+        print(&#39;Didnt work &#39;+str(a))</code></pre>
 </div>
 <div id="prokka" class="section level2">
 <h2>Prokka</h2>
@@ -2168,6 +2193,8 @@ with open(file_name, &#39;w&#39;) as f:
 <pre class="python"><code>df.rename(columns=col_dict, index=ind_dict, inplace=True)</code></pre>
 <p>Get rows or columns with only those above a certain value included:</p>
 <pre class="python"><code>df = df[df.max(axis=1) &gt; 1]</code></pre>
+<p>Replace all numbers above a certain value:</p>
+<pre class="python"><code>df[df &gt; 9] = 11</code></pre>
 <p>Get a list of column or index names:</p>
 <pre class="python"><code>columns = list(df.columns)
 rows = list(df.index.values)</code></pre>
@@ -2189,6 +2216,7 @@ rows = list(df.index.values)</code></pre>
 <pre class="python"><code>sums = db.sum(axis=0)</code></pre>
 <p>Get relative abundance:</p>
 <pre class="python"><code>db = db.divide(db.sum(axis=0), axis=1).multiply(100)</code></pre>
+<p>Sort by the value in a row:</p>
 </div>
 <div id="stats" class="section level2">
 <h2>Stats</h2>
@@ -2311,7 +2339,7 @@ $(document).ready(function ()  {
       theme: "bootstrap3",
       context: '.toc-content',
       hashGenerator: function (text) {
-        return text.replace(/[.\\/?&!#<>]/g, '').replace(/\s/g, '_').toLowerCase();
+        return text.replace(/[.\\/?&!#<>]/g, '').replace(/\s/g, '_');
       },
       ignoreSelector: ".toc-ignore",
       scrollTo: 0

@@ -1,0 +1,3524 @@
+---
+title: "PGPC blood microbiome check confidence"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+# Testing parameters {.tabset}
+
+## Get files from PGPC website
+Used this script:
+(Change the participants within the participants list to download a different set of files, and increase the 250 in range to make sure that all possible files are checked - the maximum necessary will be ~3000 for the genomes numbered up to 86 that are currently on the website, 20 November 2020)
+```{python, eval=FALSE}
+import os
+import subprocess
+
+participants = ['PGPC_0001', 'PGPC_0002', 'PGPC_0003', 'PGPC_0004', 'PGPC_0005']
+
+for a in range(0, 250):
+    try:
+        output = subprocess.check_output("wget --spider --server-response https://personalgenomes.ca/v1/public/files/"+str(a)+"/download 2>&1 | grep -i content-disposition", shell=True)
+        output = str(output)
+        fn = output.split('"')[1]
+        print(fn)
+        if 'md5sum' not in output and 'fastq.gz' in output:
+            for participant in participants:
+                if participant in output:
+                    if not os.path.exists(fn):
+                        os.system("wget --content-disposition https://personalgenomes.ca/v1/public/files/"+str(a)+"/download")
+                    else:
+                        print('Already had '+fn)
+    except:
+        print('Didnt work '+str(a))
+```
+
+## Kneaddata parameters {.tabset}
+
+### Methods
+
+**Bowtie2 options:**</br>
+`--very-fast`</br>
+`--fast`</br>
+`--sensitive`</br>
+`--very-sensitive`</br>
+</br>
+**Running:**
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'kneaddata -i {1} -i {2} -o kneaddata_out/{3}/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 40 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--{3} --dovetail" --remove-intermediate-output' \
+ ::: cat_lanes/*_R1.fastq.gz ::: cat_lanes/*_R2.fastq.gz ::: very-fast fast sensitive very-sensitive
+ 
+kneaddata_read_count_table --input very-fast --output kneaddata_read_counts_very_fast.txt
+```
+ 
+Tried to run this for all Bowtie2 options, but ran out of space with the intermediates (~1.5TB) after the `--very-fast` option had been run, so running the other tests like this, with the lanes still separated:
+```{bash, eval=FALSE}
+ parallel -j 1 --link --progress 'kneaddata -i raw_data/PGPC_0001_S2_{1}_R1_001.fastq.gz -i raw_data/PGPC_0001_S2_{1}_R2_001.fastq.gz -o kneaddata_out/{2}/PGPC_0001_{1}/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 40 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--{2} --dovetail" --remove-intermediate-output' \
+ ::: L001 L002 L003 L004 L005 L006 L007 L008 ::: very-fast
+ 
+ parallel -j 1 --link --progress 'kneaddata -i raw_data/PGPC_0001_S2_{1}_R1_001.fastq.gz -i raw_data/PGPC_0001_S2_{1}_R2_001.fastq.gz -o kneaddata_out/{2}/PGPC_0001_{1}/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 40 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--{2} --dovetail" --remove-intermediate-output' \
+ ::: L001 L002 L003 L004 L005 L006 L007 L008 ::: fast
+ 
+ parallel -j 1 --link --progress 'kneaddata -i raw_data/PGPC_0001_S2_{1}_R1_001.fastq.gz -i raw_data/PGPC_0001_S2_{1}_R2_001.fastq.gz -o kneaddata_out/{2}/PGPC_0001_{1}/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 40 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--{2} --dovetail" --remove-intermediate-output' \
+ ::: L001 L002 L003 L004 L005 L006 L007 L008 ::: sensitive
+ 
+ parallel -j 1 --link --progress 'kneaddata -i raw_data/PGPC_0001_S2_{1}_R1_001.fastq.gz -i raw_data/PGPC_0001_S2_{1}_R2_001.fastq.gz -o kneaddata_out/{2}/PGPC_0001_{1}/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 40 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--{2} --dovetail" --remove-intermediate-output' \
+ ::: L001 L002 L003 L004 L005 L006 L007 L008 ::: very-sensitive
+ 
+#kneaddata_read_count_table --input kneaddata_out --output kneaddata_read_counts.txt
+```
+
+As the first `--very-fast` set was run when there was a lot of other stuff running on the server, re-running this here to get an accurate time:
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'kneaddata -i raw_data/PGPC_0001_S2_{1}_R1_001.fastq.gz -i raw_data/PGPC_0001_S2_{1}_R2_001.fastq.gz -o kneaddata_out/PGPC_0001_{1}_{2}/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 40 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--{2} --dovetail" --remove-intermediate-output' \
+ ::: L001 L002 L003 L004 L005 L006 L007 L008 ::: very-fast
+```
+
+### Results
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+import matplotlib.pyplot as plt 
+
+times = [6.31, 7.35, 8.23, 11.78]
+human = [395087109, 397386027, 398855567, 399505483]
+kept = [3437454, 2821014, 2418445, 2162939]
+total = [466938739, 466938739, 466938739, 466938739]
+options = ['very-fast', 'fast', 'sensitive', 'very-sensitive']
+x = [0, 1, 2, 3]
+unpaired = [total[a]-kept[a]-human[a] for a in x]
+
+plt.figure(figsize=(15,5))
+ax1, ax2, ax3, ax4 = plt.subplot(141), plt.subplot(142), plt.subplot(143), plt.subplot(144)
+ax1.bar(x, times, color='k')
+ax2.bar(x, human, color='k')
+ax3.bar(x, kept, color='k')
+#ax2.bar(x, total, bottom=kept, color='gray')
+
+ax4.bar(x, kept, color='red', label='Kept')
+ax4.bar(x, human, bottom=kept, color='blue', label='GRCh38/PhiX')
+ax4.bar(x, unpaired, bottom=human, color='gray', label='Unpaired')
+
+plt.sca(ax1)
+plt.xticks(x, options, rotation=45)
+plt.ylabel('Time (h)')
+plt.title('Time to run\nKneaddata')
+
+plt.sca(ax2)
+plt.xticks(x, options, rotation=45)
+plt.ylabel('Number of reads')
+plt.title('Paired reads mapping\nto GRCh38/PhiX genomes')
+plt.semilogy()
+
+plt.sca(ax3)
+plt.xticks(x, options, rotation=45)
+plt.ylabel('Number of reads')
+plt.title('Paired reads kept')
+plt.semilogy()
+
+plt.sca(ax4)
+plt.xticks(x, options, rotation=45)
+plt.ylabel('Number of reads')
+plt.title('Total reads')
+plt.semilogy()
+plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
+
+plt.tight_layout()
+plt.show()
+```
+
+As expected, Kneaddata takes longer to run as we go from very-fast to very-sensitive. The number of (paired) reads mapping to human or PhiX genomes increase as we go from very-fast (395,087,109 reads) to very-sensitive (399,505,483), while the number of (paired) reads left at the end (to be used for classification) decreases as we go from very-fast (3,437,454) to very-sensitive (2,162,939). 
+
+## Join reads
+
+First join the paired end reads for each lane and remove the very large paired_contam files:
+```{bash, eval=FALSE}
+for i in very-fast/* ; do cp $i/*kneaddata_paired* very-fast/ ; done
+mkdir cat_reads_very-fast
+concat_paired_end.pl -p 4 --no_R_match -o cat_reads_very-fast very-fast/*_paired_*.fastq -f
+for i in very-fast/* ; do rm $i/*paired_contam* ; done
+
+for i in fast/* ; do cp $i/*kneaddata_paired* fast/ ; done
+mkdir cat_reads_fast
+concat_paired_end.pl -p 4 --no_R_match -o cat_reads_fast fast/*_paired_*.fastq -f
+for i in fast/* ; do rm $i/*paired_contam* ; done
+
+for i in sensitive/* ; do cp $i/*kneaddata_paired* sensitive/ ; done
+mkdir cat_reads_sensitive
+concat_paired_end.pl -p 4 --no_R_match -o cat_reads_sensitive sensitive/*_paired_*.fastq -f
+for i in sensitive/* ; do rm $i/*paired_contam* ; done
+
+for i in very-sensitive/* ; do cp $i/*kneaddata_paired* very-sensitive/ ; done
+mkdir cat_reads_very-sensitive
+concat_paired_end.pl -p 4 --no_R_match -o cat_reads_very-sensitive very-sensitive/*_paired_*.fastq -f
+for i in very-sensitive/* ; do rm $i/*paired_contam* ; done
+```
+
+Now join the lanes for each sample:
+```{bash, eval=FALSE}
+concat_lanes.pl cat_reads_very-fast/* -o cat_lanes_very-fast -p 4
+concat_lanes.pl cat_reads_fast/* -o cat_lanes_fast -p 4
+concat_lanes.pl cat_reads_sensitive/* -o cat_lanes_sensitive -p 4
+concat_lanes.pl cat_reads_very-sensitive/* -o cat_lanes_very-sensitive -p 4
+```
+
+And put all of the files into one folder (and rename):
+```{bash, eval=FALSE}
+mkdir cat_lanes
+mv cat_lanes_very-fast/PGPC_0001_S2_R1.fastq cat_lanes/PGPC1_very-fast.fastq
+mv cat_lanes_fast/PGPC_0001_S2_R1.fastq cat_lanes/PGPC1_fast.fastq
+mv cat_lanes_sensitive/PGPC_0001_S2_R1.fastq cat_lanes/PGPC1_sensitive.fastq
+mv cat_lanes_very-sensitive/PGPC_0001_S2_R1.fastq PGPC1_very-sensitive.fastq
+
+mkdir intermediates
+for i in cat_reads_* ; do mv $i intermediates/ ; done
+for i in cat_lanes_* ; do mv $i intermediates/ ; done
+
+mv kneaddata_out/cat_lanes/ .
+```
+
+
+## Make database of GTDB + human genome {.tabset}
+
+### GTDB download
+Download bacterial and archaeal representative genomes from GTDB (24th November 2020, release 95):
+```{bash, eval=FALSE}
+#Genomes
+wget https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/genomic_files_reps/gtdb_genomes_reps.tar.gz
+#Metadata for bacteria and eukaryotes
+wget https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/bac120_metadata.tar.gz
+wget https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/ar122_metadata.tar.gz
+
+#Unzip
+tar -xf gtdb_genomes_reps.tar.gz
+tar -xf bac120_metadata.tar.gz
+tar -xf ar122_metadata.tar.gz
+
+rm gtdb_genomes_reps.tar.gz
+rm bac120_metadata.tar.gz 
+rm ar122_metadata.tar.gz 
+```
+
+### Human download
+Download the human genome from NCBI: </br>
+Using my script created previously for [Kraken2 NCBI databases](https://github.com/R-Wright-1/peptides)
+```{bash, eval=FALSE}
+python download_domain.py --domain vertebrate_mammalian --complete True --ext dna --human False
+```
+Note that this already changes the fasta headers to match those expected by Kraken2.
+
+### Make database as done previously
+
+Tried just editing all fasta IDs/descriptions to match NCBI taxonomy (as I did when I was making the protein database for Kraken). Ultimately didn't work because only a small number of the taxid's for the GTDB genomes actually match what is expected from the NCBI taxonomy. 
+
+</br>Example header of Kraken2 compatible fasta file</br>
+`>NC_000001.11|kraken:taxid|9606 NC_000001.11 Homo sapiens chromosome 1, GRCh38.p13 Primary Assembly`</br>
+Example header of current GTDB fasta file</br>
+`>NZ_SLZW01000001.1 Varunaivibrio sulfuroxidans strain DSM 101688 Ga0244726_101, whole genome shotgun sequence`</br>
+File name: `GCF_004341725.1_genomic.fna.gz`</br>
+</br>
+Change the fasta file headers to match the NCBI taxonomy expected by Kraken2:</br>
+(Didn't remove the original files within this script just incase something went wrong, but by uncommenting the line at the bottom of the for loop - os.system(rm..... - this would do this)
+```{python, eval=FALSE, class.source = "fold-hide"}
+import pandas as pd
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+import os
+
+bacteria, archaea = pd.read_csv('bac120_metadata_r95.tsv', index_col=0, header=0, sep='\t'), pd.read_csv('ar122_metadata_r95.tsv', index_col=0, header=0, sep='\t')
+
+bac_red = bacteria.loc[:, ['gtdb_taxonomy', 'ncbi_genbank_assembly_accession', 'ncbi_organism_name', 'ncbi_taxid', 'gtdb_genome_representative']]
+arc_red = archaea.loc[:, ['gtdb_taxonomy', 'ncbi_genbank_assembly_accession', 'ncbi_organism_name', 'ncbi_taxid', 'gtdb_genome_representative']]
+
+all_red = pd.concat([bac_red, arc_red])
+acc_dict = {}
+
+count = 0
+genomes = list(all_red.index.values)
+for genome in genomes:
+  gtdb_tax, assembly, ncbi_name, taxid, gtdb_genome = all_red.loc[genome, :].values
+  species = gtdb_tax.split('s__')[1]
+  if gtdb_genome.count('_') == 2: 
+    gtdb_genome_red = gtdb_genome.split("_", 1)[1]
+    gtdb_genome = gtdb_genome_red
+  acc_dict[gtdb_genome] = [taxid, species]
+
+fol = 'gtdb_genomes_reps_r95/'
+files = os.listdir(fol)
+logfile = []
+for f in files:
+  if '.fna' not in f: 
+    logfile.append(f+': not a .fna file, skipped this file')
+    continue
+  if 'tax' in f: 
+    logfile.append(f+': already had a .tax.fna.gz, skipped this file')
+    continue
+  elif os.path.exists(fol+f.split('.fna')[0]+".tax.fna.gz"):
+    logfile.append(f+': already had a .tax.fna.gz, skipped this file')
+    continue
+  f = f.split('.gz')[0]
+  acc = f.split("_")
+  acc = acc[0]+'_'+acc[1]
+  taxid, species = acc_dict[acc]
+  ff_unzip = "gunzip "+fol+f+".gz"
+  try: os.system(ff_unzip)
+  except: already_unzipped = True
+  records = SeqIO.parse(fol+f, "fasta")
+  new_records = []
+  for record in records:
+    newid = record.id+"|kraken:taxid|"+str(taxid)
+    newdescr = record.description+', GTDB species: '+species
+    newseq = SeqRecord(record.seq, id=newid, description=newdescr)
+    new_records.append(newseq)
+  SeqIO.write(new_records, fol+f.split('.fna')[0]+".tax.fna", "fasta")
+  if taxid != 'none':
+    logfile.append(f+'.gz: changed the fasta headers for this file')
+  else:
+    logfile.append(f+'.gz: changed the fasta headers for this file, but the NCBI taxonomy ID was missing')
+  ff_zip = "gzip "+fol+f.split('.fna')[0]+".tax.fna"
+  ff_zip_orig = "gzip "+fol+f
+  os.system(ff_zip)
+  os.system(ff_zip_orig)
+  #os.system("rm "+fol+f+'.gz')
+  
+with open("logfile.txt", 'w') as f:
+    for row in logfile:
+        f.write(row+'\n')
+```
+
+This was uploaded as a single script to the server and run as follows:
+```{bash, eval=FALSE}
+python change_fasta_headers.py
+```
+
+Move these .tax.fna.gz files to a new folder (not necessary if the originals were removed within the loop above):
+```{bash, eval=FALSE}
+mkdir gtdb_genomes_reps_r95_tax/
+for i in gtdb_genomes_reps_r95/*.tax.fna.gz ; do mv $i gtdb_genomes_reps_r95_tax/ ; done
+for i in gtdb_genomes_reps_r95/* ; do gzip $i ; done
+```
+
+The taxa with a kraken taxid of 'none' can't be added to kraken, so removing these from the new folder as follows:
+```{python, eval=FALSE}
+import os
+import pandas as pd
+
+fol = 'gtdb_genomes_reps_r95_tax/'
+new_fol = 'gtdb_genomes_reps_r95_tax_not_adding/'
+
+bacteria, archaea = pd.read_csv('bac120_metadata_r95.tsv', index_col=0, header=0, sep='\t'), pd.read_csv('ar122_metadata_r95.tsv', index_col=0, header=0, sep='\t')
+
+bac_red = bacteria.loc[:, ['gtdb_taxonomy', 'ncbi_genbank_assembly_accession', 'ncbi_organism_name', 'ncbi_taxid', 'gtdb_genome_representative']]
+arc_red = archaea.loc[:, ['gtdb_taxonomy', 'ncbi_genbank_assembly_accession', 'ncbi_organism_name', 'ncbi_taxid', 'gtdb_genome_representative']]
+
+all_red = pd.concat([bac_red, arc_red])
+genomes = list(all_red.index.values)
+
+remove = []
+for genome in genomes:
+  gtdb_tax, assembly, ncbi_name, taxid, gtdb_genome = all_red.loc[genome, :].values
+  if gtdb_genome.count('_') == 2: 
+    gtdb_genome_red = gtdb_genome.split("_", 1)[1]
+    gtdb_genome = gtdb_genome_red
+  if taxid == 'none':
+    remove.append(gtdb_genome)
+
+files = os.listdir(fol)
+for fi in files:
+  for gtdb in remove:
+    if gtdb in fi:
+      os.system('mv '+fol+fi+' '+new_fol)
+      continue
+```
+There are 153 archaeal genomes with no NCBI taxonomy ID, but only 113 genomes get removed. Not really sure why this is.
+
+Modifying the original code to not create the .tax files for those with no taxid and to not gzip the .tax files:
+```{python, eval=FALSE}
+import pandas as pd
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+import os
+
+bacteria, archaea = pd.read_csv('bac120_metadata_r95.tsv', index_col=0, header=0, sep='\t'), pd.read_csv('ar122_metadata_r95.tsv', index_col=0, header=0, sep='\t')
+
+bac_red = bacteria.loc[:, ['gtdb_taxonomy', 'ncbi_genbank_assembly_accession', 'ncbi_organism_name', 'ncbi_taxid', 'gtdb_genome_representative']]
+arc_red = archaea.loc[:, ['gtdb_taxonomy', 'ncbi_genbank_assembly_accession', 'ncbi_organism_name', 'ncbi_taxid', 'gtdb_genome_representative']]
+
+all_red = pd.concat([bac_red, arc_red])
+acc_dict = {}
+
+genomes = list(all_red.index.values)
+for genome in genomes:
+  gtdb_tax, assembly, ncbi_name, taxid, gtdb_genome = all_red.loc[genome, :].values
+  species = gtdb_tax.split('s__')[1]
+  if gtdb_genome.count('_') == 2: 
+    gtdb_genome_red = gtdb_genome.split("_", 1)[1]
+    gtdb_genome = gtdb_genome_red
+  acc_dict[gtdb_genome] = [taxid, species]
+
+fol = 'gtdb_genomes_reps_r95/'
+files = os.listdir(fol)
+logfile = []
+for f in files:
+  if '.fna' not in f: 
+    logfile.append(f+': not a .fna file, skipped this file')
+    continue
+  if 'tax' in f: 
+    logfile.append(f+': already had a .tax.fna.gz, skipped this file')
+    continue
+  elif os.path.exists(fol+f.split('.fna')[0]+".tax.fna.gz"):
+    logfile.append(f+': already had a .tax.fna.gz, skipped this file')
+    continue
+  f = f.split('.gz')[0]
+  acc = f.split("_")
+  acc = acc[0]+'_'+acc[1]
+  taxid, species = acc_dict[acc]
+  if taxid == 'none':
+    logfile.append(f+'.gz: NCBI taxonomy ID was missing so skipped this file')
+    continue
+  ff_unzip = "gunzip "+fol+f+".gz"
+  try: os.system(ff_unzip)
+  except: already_unzipped = True
+  records = SeqIO.parse(fol+f, "fasta")
+  new_records = []
+  for record in records:
+    newid = record.id+"|kraken:taxid|"+str(taxid)
+    newdescr = record.description+', GTDB species: '+species
+    newseq = SeqRecord(record.seq, id=newid, description=newdescr)
+    new_records.append(newseq)
+  SeqIO.write(new_records, fol+f.split('.fna')[0]+".tax.fna", "fasta")
+  if taxid != 'none':
+    logfile.append(f+'.gz: changed the fasta headers for this file')
+  else:
+    logfile.append(f+'.gz: changed the fasta headers for this file, but the NCBI taxonomy ID was missing')
+  ff_zip = "gzip "+fol+f.split('.fna')[0]+".tax.fna"
+  ff_zip_orig = "gzip "+fol+f
+  #os.system(ff_zip)
+  os.system(ff_zip_orig)
+  #os.system("rm "+fol+f+'.gz')
+  
+with open("logfile_2.txt", 'w') as f:
+    for row in logfile:
+        f.write(row+'\n')
+```
+
+#### Combine and make the database
+This takes a few hours to complete
+```{bash, eval=FALSE}
+#get NCBI taxonomy
+kraken2-build --download-taxonomy --db gtdb_human --use-ftp
+
+#add human genome
+kraken2-build --add-to-library vertebrate_mammalian/GCF_000001405.39_GRCh38.p13_genomic.tax.fna --db gtdb_human
+
+#for file in gtdb_genomes_reps_r95_tax/*.fna.gz ; do gunzip $file ; done
+
+#add all bacterial and archaeal genomes (aside from those with no NCBI taxonomy)
+for file in gtdb_genomes_reps_r95_tax/*.fna
+do
+    kraken2-build --add-to-library $file --db gtdb_human --threads 8
+done
+
+for file in gtdb_genomes_reps_r95_tax/*.fna ; do gunzip $file ; done
+
+#build the database
+kraken2-build --build --db gtdb_human --threads 20
+```
+
+Apparently this didn't work, so checking whether all taxonomy IDs are in the mapping file downloaded from NCBI:
+```{python, eval=FALSE}
+import pickle
+import pandas as pd
+
+gb = pd.read_csv('gtdb_human/taxonomy/nucl_gb.accession2taxid', sep='\t', header=0)
+#taxid_gb = gb.loc[:, 'taxid'].values
+gi_gb = gb.loc[:, 'gi'].values
+wgs = pd.read_csv('gtdb_human/taxonomy/nucl_wgs.accession2taxid', sep='\t', header=0)
+#taxid_wgs = wgs.loc[:, 'taxid'].values
+gi_wgs = wgs.loc[:, 'gi'].values
+#taxid_list = list(set(list(taxid_gb)+list(taxid_wgs)))
+gi_list = list(set(list(gi_gb)+list(gi_wgs)))
+
+with open('taxid.list', 'wb') as f:
+    pickle.dump(taxid_list, f)
+
+with open('gi.list', 'wb') as f:
+    pickle.dump(gi_list, f)
+
+with open('taxid.list', 'rb') as f:
+    taxid_list = set(pickle.load(f))
+
+bacteria, archaea = pd.read_csv('bac120_metadata_r95.tsv', index_col=0, header=0, sep='\t'), pd.read_csv('ar122_metadata_r95.tsv', index_col=0, header=0, sep='\t')
+
+bac_red = bacteria.loc[:, ['gtdb_taxonomy', 'ncbi_genbank_assembly_accession', 'ncbi_organism_name', 'ncbi_taxid', 'gtdb_genome_representative', 'ncbi_species_taxid']]
+arc_red = archaea.loc[:, ['gtdb_taxonomy', 'ncbi_genbank_assembly_accession', 'ncbi_organism_name', 'ncbi_taxid', 'gtdb_genome_representative', 'ncbi_species_taxid']]
+
+all_red = pd.concat([bac_red, arc_red])
+taxid_not_in_list = []
+
+genomes = list(all_red.index.values)
+for genome in genomes:
+  gtdb_tax, assembly, ncbi_name, taxid, gtdb_genome, sp_taxid = all_red.loc[genome, :].values
+  if gtdb_genome.count('_') == 2: 
+    gtdb_genome_red = gtdb_genome.split("_", 1)[1]
+    gtdb_genome = gtdb_genome_red
+  if taxid not in taxid_list and sp_taxid not in taxid_list:
+    taxid_not_in_list.append([gtdb_genome, taxid])
+    
+with open('taxid_not_in_list.list', 'wb') as f:
+    pickle.dump(taxid_not_in_list, f)
+
+# with open('taxid_not_in_list.list', 'rb') as f:
+#     taxid_not_in_list = pickle.load(f)
+```
+
+Looks like 5009 genomes (not including 'none's) are not in the taxonomy list. From a quick look, it appears as if while they do have NCBI taxid's assigned, that I can find on the NCBI website, they aren't taxonomically classified, e.g. `taxid: 1131273` is `Bacteria; FCB group; Candidatus Marinimicrobia`. So I'll have to try making my own taxonomy as suggested in [Struo](https://github.com/leylabmpi/Struo) and [GTDB_Kraken](https://github.com/hcdenbakker/GTDB_Kraken).
+
+### GTDB_Kraken
+
+[GTDB_Kraken](https://github.com/hcdenbakker/GTDB_Kraken)
+Following the build from source instructions 
+
+1. Creating a .tsv file formatted as in the example [here](https://github.com/hcdenbakker/GTDB_Kraken/blob/master/data/gtdb.2018-12-10.tsv), a tab-delimited file with the genome in the first column, the taxonomic classification in the second column (colon separated d__Kingdom;p__Phylum;c__Class;o__Order;f__Family;g__Genus;s__Species) and no header:
+```{python, eval=FALSE}
+import pandas as pd
+
+bac, arc = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/bac120_metadata_r95.tsv', header=0, index_col=0, sep='\t'), pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/ar122_metadata_r95.tsv', header=0, index_col=0, sep='\t')
+
+bac = bac.loc[:, 'gtdb_taxonomy']
+arc = arc.loc[:, 'gtdb_taxonomy']
+
+bac_arc = pd.concat([bac, arc])
+
+bac_arc.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/gtdb.2020-11-30.tsv', sep='\t', header=False)
+```
+
+2. Copy this to the server
+```{bash, eval=FALSE}
+scp gtdb.2020-11-30.tsv robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/
+scp scp gtdbToTaxonomy.pl robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/
+```
+
+3. Make sure the folder setup is the same as theirs
+gtdb_human
+    data
+        gtdb.2020-11-30.tsv
+    scripts
+        gtdbToTaxonomy.pl
+
+4. Run the taxonomy script:
+```{bash, eval=FALSE}
+perl scripts/gtdbToTaxonomy.pl --infile data/gtdb.2020-11-30.tsv
+```
+
+Looking at the first output:
+```{bash, eval=FALSE}
+_A anthracis
+scripts/gtdbToTaxonomy.pl   finding it (GCA_000006155)...from NCBI using esearch (GCA_000006155)...got it!
+
+scripts/gtdbToTaxonomy.pl Loading GCA_000007385, d__Bacteria;p__Prote...eae;g__Xanthomonas;s__Xanthomonas oryzae
+scripts/gtdbToTaxonomy.pl   finding it (GCA_000007385)...from NCBI using esearch (GCA_000007385)...got it!
+
+scripts/gtdbToTaxonomy.pl Loading GCA_000008605, d__Bacteria;p__Spiro...aceae;g__Treponema;s__Treponema pallidum
+scripts/gtdbToTaxonomy.pl   finding it (GCA_000008605)...from NCBI using esearch (GCA_000008605)...got it!
+
+scripts/gtdbToTaxonomy.pl Loading GCA_000010565, d__Bacteria;p__Firmi...culum;s__Pelotomaculum thermopropionicum
+scripts/gtdbToTaxonomy.pl   finding it (GCA_000010565)...from NCBI using esearch (GCA_000010565)...got it!
+
+scripts/gtdbToTaxonomy.pl Loading GCA_000013845, d__Bacteria;p__Firmi...ostridium_P;s__Clostridium_P perfringens
+scripts/gtdbToTaxonomy.pl   finding it (GCA_000013845)...from NCBI using esearch (GCA_000013845)...got it!
+
+scripts/gtdbToTaxonomy.pl Loading GCA_000014305, d__Bacteria;p__Firmi...e;g__Streptococcus;s__Streptococcus suis
+scripts/gtdbToTaxonomy.pl   finding it (GCA_000014305)...from NCBI using esearch (GCA_000014305)...got it!
+```
+So it looks like this is getting the NCBI taxonomy, which we don't want (maybe it worked when they made this script in 2018, or with the 2018 version, but doesn't seem to work here.)
+
+### Struo
+
+[Struo](https://github.com/leylabmpi/Struo)
+Seeing as I have already downloaded all of the GTDB genomes that I want I won't follow the instructions completely. 
+
+1. Run the gtdb_to_taxdump:
+This script allows you to make a kraken-compatible taxonomy with one or more input tsv files, which should have (at a minimum) the 'accession' in the first column and the 'gtdb_taxonomy' in the second column.</br>
+So we can use the bacteria and archaea .tsv files that were downloaded from the GTDB website and we'll also add the human genome to this (this could be made this way for anything, just need a dictionary of genomes with corresponding taxonomy):
+```{python, cache=TRUE}
+import pandas as pd
+
+genomes = {'GCF_000001405.39':'d__Animalia;p__Chordata;c__Mammalia;o__Primates;f__Hominidae;g__Homo;s__Homo sapiens'}
+
+genome_pd = pd.DataFrame.from_dict(genomes, orient='index').reset_index()#, columns=['accession', 'gtdb_taxonomy'])
+genome_pd = genome_pd.rename(columns={'index':'accession', 0:'gtdb_taxonomy'})
+
+bac, arc = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/bac120_metadata_r95.tsv', header=0, sep='\t'), pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/ar122_metadata_r95.tsv', header=0, sep='\t')
+
+bac = bac.loc[:, ['accession', 'gtdb_taxonomy']]
+arc = arc.loc[:, ['accession', 'gtdb_taxonomy']]
+
+bac_arc = pd.concat([bac, arc])
+genome_pd = pd.concat([genome_pd, bac_arc])
+
+genome_pd.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/all_taxonomy.tsv', sep='\t', index=False, header=False)
+genome_pd.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/all_taxonomy_ID.tsv', sep='\t', index=False)
+```
+
+Copy this to the server:
+```{bash, eval=FALSE}
+scp all_taxonomy.tsv robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/gtdb_human/
+scp all_taxonomy_ID.tsv robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/gtdb_human/
+```
+(The 'all_taxonomy_ID' file has the header so that the new taxid's can be added to a column there to make finding the corresponding ID's in a later step easier).
+
+And download the human genome (without the default NCBI taxid) (at some point I'll probably modify the peptides download_domain.py [script](https://github.com/R-Wright-1/peptides/blob/master/download_domain.py) to give the option to not change the fasta headers, but for just the one genome it's easier to just get the genome):
+```{bash, eval=FALSE}
+wget -q ftp://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/latest_assembly_versions/GCF_000001405.39_GRCh38.p13/GCF_000001405.39_GRCh38.p13_genomic.fna.gz
+```
+Put this into the same folder as the GTDB genomes (in this case `gtdb_genomes_reps_r95`)
+
+We also need networkx >= v2.4:
+```{bash, eval=FALSE}
+conda install -c conda-forge networkx
+```
+
+Copy the script to the server:
+```{bash, eval=FALSE}
+scp gtdb_to_taxdump.py robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/gtdb_human/
+```
+
+Run the script:
+```{bash, eval=FALSE}
+python gtdb_to_taxdump.py \
+  --table all_taxonomy_ID.tsv \
+  all_taxonomy.tsv \
+  > taxID_info.tsv
+```
+Looks like this has worked fine! Just need to note that these taxid's will not match anything that is in NCBI and will vary depending on how many taxa have been added and also between versions, etc.
+
+2. Unzip all fasta files:
+```{bash, eval=FALSE}
+for i in gtdb_genomes_reps_r95/*.fna.gz ; do gunzip $i ; done
+```
+
+3. Make a samples.txt file that has the following columns (taken from the output of the gtdb_to_taxdump and the list of fasta files that we've downloaded/are wanting to add):
+samples_col: 'ncbi_organism_name'
+fasta_file_path_col: 'fasta_file_path'
+taxID_col: 'gtdb_taxid' 
+taxonomy_col: 'gtdb_taxonomy'
+```{python, eval=FALSE}
+import pandas as pd
+import os
+
+genomes = pd.read_csv('all_taxonomy_ID_wTaxIDs.tsv', index_col=0, header=0, sep='\t')
+accession = (genomes.index.values)
+folder = '/home/robyn/tools/kraken_gtdb_human/gtdb_genomes_reps_r95/'
+set_genomes = set(os.listdir(folder))
+dict_genomes = {}
+
+#Get just the accession name for each fasta file in the folder
+for genome in set_genomes:
+  if '_genomic.fna' in genome:
+    this_gen = genome.split('_GRCh38.p13')[0]
+    this_gen = this_gen.split('_genomic.fna')[0]
+    dict_genomes[this_gen] = genome
+
+#for each accession name in the all_taxonomy... dataframe, get the name of this without the initial e.g. RS_ (if it has this)
+new_accession, rename, old_accession = set(), {}, set()
+for acc in accession:
+  old_acc = str(acc)
+  if acc[2] == '_':
+     acc = acc[3:]
+  if acc not in new_accession:
+    new_accession.add(acc)
+    rename[old_acc] = acc
+    old_accession.add(old_acc)
+
+#Now subset the all_taxonomy... dataframe to have only the genomes that are in our list of fasta files
+genomes = genomes.loc[old_accession, :].rename(index=rename)
+set_genomes = set(dict_genomes)
+genomes = genomes.loc[set_genomes, :]
+genome_names = set(genomes.index.values)
+
+#Add some columns to the all_taxonomy.... dataframe
+genomes['fasta_file_path'] = ""
+genomes['ncbi_organism_name'] = ""
+
+#And fill in the blanks of these columns with the species name and the fasta file path
+for gen in genome_names:
+  genomes.loc[gen, 'ncbi_organism_name'] = genomes.loc[gen, 'gtdb_taxonomy'].split(';s__')[1]
+  genomes.loc[gen, 'fasta_file_path'] = folder+dict_genomes[gen]
+
+#Get the columns in the right order and save the file
+genomes = genomes.loc[:, ['ncbi_organism_name', 'fasta_file_path', 'gtdb_taxid', 'gtdb_taxonomy']]
+genomes.to_csv('samples.txt', index=False, sep='\t')
+```
+
+4. Modify the config.yaml file:
+```{bash, eval=FALSE}
+## column names in samples table
+taxID_col: 'gtdb_taxid'
+taxonomy_col: 'gtdb_taxonomy'
+
+#-- if custom NCBI taxdump files --#
+names_dmp: /YOUR/PATH/TO/names.dmp
+nodes_dmp: /YOUR/PATH/TO/nodes.dmp
+```
+
+So in my case the config.yaml file looks like this:
+```{bash, eval=FALSE}
+#-- I/O --#
+# file listing samples and associated data
+samples_file: /home/robyn/tools/kraken_gtdb_human/gtdb_human/samples.txt
+
+## column names in samples table
+samples_col: 'ncbi_organism_name'
+fasta_file_path_col: 'fasta_file_path'
+taxID_col: 'gtdb_taxid'
+taxonomy_col: 'gtdb_taxonomy'   
+
+# output location
+output_dir: output/
+
+# temporary file directory (your username will be added automatically)
+tmp_dir: /custom_db/scratch/
+
+#-- databases to create --#
+# Replace "Create" with "Skip" to skip creation of any of these
+# Note that braken relies on the kraken2 database
+databases:
+  kraken2: Create
+  bracken: Create
+  humann2_bowtie2: Skip
+  humann2_diamond: Skip
+
+# output database name
+db_name: GTDB-custom
+
+#-- keep intermediate files required for re-creating DBs (eg., w/ more genomes) --#
+# If "True", the intermediate files are saved to `output_dir`
+# Else, the intermediate files are temporarily stored in `temp_folder`
+keep_intermediate: True
+use_ancient: True
+
+#-- if custom NCBI taxdump files (or just Skip) --#
+names_dmp: /home/robyn/tools/kraken_gtdb_human/gtdb_human/names.dmp
+nodes_dmp: /home/robyn/tools/kraken_gtdb_human/gtdb_human/nodes.dmp
+
+#-- software parameters --#
+# `vsearch_per_genome` = per-genome gene clustering
+# `vsearch_all` = all genes clustered (including `humann2_nuc_seqs` & `humann2_prot_seqs`)
+params:
+  bracken_build_kmer: 35
+  bracken_build_read_lens:
+    - 100
+    - 150
+  prodigal: ""
+  diamond_db: Skip
+  diamond_db_to_mem: Skip
+  diamond: Skip
+  vsearch_per_genome: Skip #--id 0.97 --strand both --qmask none --fasta_width 0
+  vsearch_all: Skip #--id 1.0 --strand both --qmask none --fasta_width 0
+
+#-- If adding genes to humann2 database --#
+# If you have nucleotid and/or protein gene sequences formatted for humann2,
+# provide the file paths to the fasta files below (gzip'ed)
+humann2_nuc_seqs: Skip
+humann2_prot_seqs: Skip
+
+#-- snakemake pipeline --#
+pipeline:
+  snakemake_folder: ./
+  script_folder: ./bin/scripts/
+```
+
+5. Run the Struo pipeline:
+Clone the github folder:
+```{bash, eval=FALSE}
+git clone https://github.com/leylabmpi/Struo
+```
+
+Upload custom config file (if not editied on server already):
+```{bash, eval=FALSE}
+ scp config.yaml robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/gtdb_human/Struo/
+```
+
+Make a conda environment with the appropriate packages etc:
+```{bash, eval=FALSE}
+conda create --name struo python=3.6
+conda activate struo
+conda install -c bioconda snakemake
+snakemake --version
+#3.13.3 - it says on the github that this should be 5.7.0?? But 3.13.3 is what installed....
+conda install -c bioconda r-base
+conda install -c bioconda r-argparse
+conda install -c bioconda r-curl
+conda install -c bioconda r-data.table
+conda install -c bioconda r-dplyr
+conda install -c bioconda ncbi-genome-download
+conda install -c bioconda newick_utils
+```
+
+Run the pipeline:
+```{bash, eval=FALSE}
+snakemake --use-conda
+```
+
+Getting this output:
+```{bash, eval=FALSE}
+Total number of skipped rows: 0
+Using temporary directory: /custom_db/scratch/robyn/Struo_30836966/ 
+InputFunctionException in line 83 of /home/robyn/tools/kraken_gtdb_human/gtdb_human/Struo/bin/kraken2/Snakefile:
+TypeError: <lambda>() missing 1 required positional argument: 'attempt'
+Wildcards:
+sample=Chlorobium_sp005843815
+```
+I've run this a few times and get a slightly different output each time, but the TypeError is the same.
+
+Line 83 is the start of this function:
+```{python, eval=FALSE}
+rule kraken2_build_add:
+    """
+    Adding genome fasta files to the kraken database.
+    Using the --add-to-library flag
+    """
+    input:
+        fasta = config['tmp_dir'] + '{sample}.fna',
+        nodes = kraken2_dir + 'taxonomy/nodes.dmp',
+        names = kraken2_dir + 'taxonomy/names.dmp'
+    output:
+        kraken2_dir + 'added/{sample}.done'
+    resources:
+        time = lambda wildcards, attempt: attempt ** 2 * 59,
+        mem_gb_pt = lambda wildcards, attempt: attempt * 6
+    conda:
+        '../envs/kraken2.yaml'
+    log:
+        log_dir + 'kraken2_build_add/{sample}.log'
+    benchmark:
+        benchmark_dir + 'kraken2_build_add/{sample}.txt'
+    shell:
+        """
+        DB=`dirname {input.names}`
+        DB=`dirname $DB`
+        kraken2-build --db $DB --add-to-library {input.fasta}  2> {log} 1>&2
+        touch {output} 2>> {log}
+        """
+```
+
+But I don't know what the problem is, so going to try to do what their script does myself:</br>
+
+### Make it myself {.tabset}
+
+#### 1. Investigate files needed
+
+So basically what we need to start is:</br>
+- The genomes to add</br>
+- Full taxonomy information for each genome</br>
+
+The outputs that we need from this are:
+- names.dmp, a tab delimited file that looks like this:</br>
+```{python, cache=TRUE}
+names = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/names_struo.dmp', sep='\t', header=None)
+print(names)
+```
+
+According to the NCBI [README on the ftp website](ftp://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump_readme.txt) these four columns are:
+tax_id					-- the id of node associated with this name
+name_txt				-- name itself
+unique name			-- the unique variant of this name if name not unique
+name class			-- (synonym, common name, ...)
+
+So we need to generate: </br>
+taxid</br>
+and then add the other fields from what we already have. 
+
+- nodes.dmp, a file that looks like this:</br>
+```{python, cache=TRUE}
+nodes = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/nodes_struo.dmp', sep='\t', header=None)
+print(nodes)
+```
+
+Again, according to NCBI [README on the ftp website](ftp://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump_readme.txt) these columns are: 
+tax_id					                    -- node id in GenBank taxonomy database
+parent tax_id		                    -- parent node id in GenBank taxonomy database
+rank					                      -- rank of this node (superkingdom, kingdom, ...) 
+embl code				                    -- locus-name prefix; not unique
+division id				                  -- see division.dmp file
+inherited div flag  (1 or 0)		    -- 1 if node inherits division from parent
+genetic code id				              -- see gencode.dmp file
+inherited GC  flag  (1 or 0)		    -- 1 if node inherits genetic code from parent
+mitochondrial genetic code id		    -- see gencode.dmp file
+inherited MGC flag  (1 or 0)		    -- 1 if node inherits mitochondrial gencode from parent
+GenBank hidden flag (1 or 0)        -- 1 if name is suppressed in GenBank entry lineage
+hidden subtree root flag (1 or 0)   -- 1 if this subtree has no sequence data yet
+comments				                    -- free-text comments and citations
+
+And if we look at just one line of the nodes.dmp file (created by the Struo pipeline):
+```{python, cache=TRUE}
+print(nodes.iloc[0, :].values)
+```
+
+So both files are both tab delimited and each field is separated by '|'.
+So we need to generate: tax_id, parent tax_id, rank (phylum, class, ....), embl code=XX, division id=0, inherited div flag=0, genetic code id=11, inherited GC  flag=1, mitochondrial genetic code id=1, inherited MGC flag=0, GenBank hidden flag=0, hidden subtree root flag=0</br>
+
+And finally, we need the nucl_gb.accession2taxid files (I think they just need to have this file extension, and not the file name), which look like this:</br>
+accession       accession.version       taxid   gi</br>
+A00001          A00001.1                10641   58418</br>
+A00002          A00002.1                9913    2</br>
+A00003          A00003.1                9913    3</br>
+A00004          A00004.1                32630   57971</br>
+A00005          A00005.1                32630   57972</br>
+A00006          A00006.1                32630   57973</br>
+A00008          A00008.1                32630   57974</br>
+A00009          A00009.1                32630   57975</br>
+A00010          A00010.1                32630   57976</br>
+</br>
+So we need lists of the accession (currently we have the accession.version, so we just need to remove the .version from these), the accession.version, the taxid's that we'll generate and the gi (these are apparently being phased out and some genomes therefore don't have them and the column can contain NA's instead).
+
+#### 2. Make TaxIds and files
+
+So the taxids basically just need to have a unique number for every taxonomy and level. But we're also going to want to save some additional info, so I'll make a table with the following columns:</br>
+- taxid</br>
+- name</br>
+- rank</br>
+- parent taxid (this can be itself in the case of root only) </br>
+
+I'll create this file from the two GTDB download files (ar122_metadata_r95.tsv) and (bac120_metadata_r95.tsv) and also add in the human genome info, as I did previously (but this time I'll also remove the redundancy and only keep the accession numbers that correspond to the reference genomes rather than all, so ~30,000)
+
+```{python, eval=FALSE}
+import pandas as pd
+import numpy as np
+
+genomes = {'GCF_000001405.39':'d__Animalia;p__Chordata;c__Mammalia;o__Primates;f__Hominidae;g__Homo;s__Homo sapiens'}
+
+genome_pd = pd.DataFrame.from_dict(genomes, orient='index').reset_index()#, columns=['accession', 'gtdb_taxonomy'])
+genome_pd = genome_pd.rename(columns={'index':'accession', 0:'gtdb_taxonomy'})
+
+bac, arc = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/bac120_metadata_r95.tsv', header=0, sep='\t'), pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/ar122_metadata_r95.tsv', header=0, sep='\t')
+
+bac = bac.loc[:, ['gtdb_genome_representative', 'gtdb_taxonomy']]
+arc = arc.loc[:, ['gtdb_genome_representative', 'gtdb_taxonomy']]
+
+bac_arc = pd.concat([bac, arc]).set_index('gtdb_genome_representative')
+
+bac_arc_red = bac_arc.groupby(by=bac_arc.index, axis=0).first()
+new_acc_dict = {}
+for acc in bac_arc_red.index.values:
+  if acc[2] == '_': new_acc = acc[3:]
+  else: new_acc = acc
+  new_acc_dict[acc] = new_acc
+bac_arc_rn = bac_arc_red.rename(index=new_acc_dict)
+bac_arc_rn = bac_arc_rn.reset_index().rename(columns={'gtdb_genome_representative':'accession'})
+genome_pd = pd.concat([genome_pd, bac_arc_rn])
+
+genome_pd.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/all_taxonomy_RW_db.tsv', sep='\t', index=False, header=False)
+
+genomes = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/all_taxonomy_RW_db.tsv', index_col=None, header=None, sep='\t').rename(columns={0:'accession', 1:'gtdb_taxonomy'})
+#print(genomes)
+
+root, superkingdom, phylum, classs, order, family, genus, species = {'root':[1,1]}, {}, {}, {}, {}, {}, {}, {}
+root_children, superkingdom_children, phylum_children, classs_children, order_children, family_children, genus_children = {'root':[]}, {}, {}, {}, {}, {}, {}
+
+genomes = genomes.set_index('accession')
+for acc in genomes.index.values:
+  tax = genomes.loc[acc, 'gtdb_taxonomy']
+  genomes.loc[acc, 'gtdb_taxonomy'] = tax
+
+genomes['taxid'] = ""
+genomes['parent'] = ""
+
+dict_list = [superkingdom, phylum, classs, order, family, genus, species]
+children_list = [superkingdom_children, phylum_children, classs_children, order_children, family_children, genus_children]
+taxa = set(genomes.loc[:, 'gtdb_taxonomy'].values)
+count = 2
+start = ['d__', 'p__', 'c__', 'o__', 'f__', 'g__', 's__']
+rank_names = ['superkingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+root_name1 = [1, '|', 'all', '|', '', '|', 'synonym', '|']
+root_name2 = [1, '|', 'root', '|', '', '|', 'scientific name', '|']
+root_node = [1, '|', 1, '|', 'no rank', '|', 'XX', '|', 0, '|', 0, '|', 11, '|', 1, '|', 1, '|', 0, '|', 0, '|', 0, '|']
+names, nodes = [root_name1, root_name2], [root_node]
+for tax in sorted(taxa):
+  tax = tax.split(';')
+  for a in range(len(tax)):
+    if tax[a][:3] == start[a]: #check that what we're looking at actually belongs to the level that we want to look at
+      if tax[a] not in dict_list[a]: #if we haven't already added this level
+        taxid = count #make taxid be the count
+        if a > 0: #if we're looking at above the superkingdom level
+          parent = dict_list[a-1][tax[a-1]][0] #get the taxid of the parent
+        else:
+          parent = 1 #otherwise, if we're looking at superkingdom level, the parent taxid must be 1
+        dict_list[a][tax[a]] = [taxid, parent] #add the taxid and the parent taxid to our dictionary list
+        if a < 6: #if we're not at the species level
+          children_list[a][tax[a]] = [] #add this taxa to the list, so we can add its children later
+        if a > 0:  #if we're not at the superkingdom level
+          children_list[a-1][tax[a-1]] = children_list[a-1][tax[a-1]]+[tax[a]] #add this child to its parent list
+        else: #if we are at the superkingdom level
+          root_children['root'] = root_children['root']+[tax[a]] #add this child to its parent list
+        #node = [tax_id, parent tax_id, rank (phylum, class, ....), embl code=XX, division id=0, inherited div flag=0, genetic code id=11, inherited GC  flag=1, mitochondrial genetic code id=1, inherited MGC flag=0, GenBank hidden flag=0, hidden subtree root flag=0]
+        node = [taxid, '|', parent, '|', rank_names[a], '|', 'XX', '|', 0, '|', 0, '|', 11, '|', 1, '|', 1, '|', 0, '|', 0, '|', 0, '|'] #make a list that fits the format of the nodes.dmp file
+        #name = [tax_id, name_txt, unique name, name class]
+        name = [taxid, '|', tax[a], '|','', '|', 'scientific name', '|'] #make a list that fits the format of the names.dmp file
+        names.append(name) #add the name to the list
+        nodes.append(node) #add the node to the list
+        count += 1 #add to the count
+
+for gen in genomes.index.values: #for each accession
+  sp_name = genomes.loc[gen, 'gtdb_taxonomy'].split(';')[-1] #the species name is at the end of the GTDB taxonomy
+  taxid, parent = species[sp_name] #get the taxid and parent taxid for this species
+  genomes.loc[gen, 'taxid'] = taxid #add the taxid to the right column of the dataframe
+  genomes.loc[gen, 'parent'] = parent #add the parent taxid to the right column of the dataframe
+
+genomes.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/RW_db_samples.tsv', sep='\t') #save the file that fits the format of the samples.txt file (we'll be able to use this to assign the taxid's to the fasta file headers)
+
+#getting a list of all taxid's sorted by rank
+superkingdom_children, phylum_children, classs_children, order_children, family_children, genus_children = children_list
+#taxid_list = ['taxID', 'parent', 'name', 'rank']
+taxid_list = [[1, 1, 'root', 'no rank']]
+
+#looping through each child within each parent to get these in order and adding them to a list
+for a in root_children['root']:
+  taxid_list.append(superkingdom[a]+[a, rank_names[0]])
+  for b in superkingdom_children[a]:
+    taxid_list.append(phylum[b]+[b, rank_names[1]])
+    for c in phylum_children[b]:
+      taxid_list.append(classs[c]+[c, rank_names[2]])
+      for d in classs_children[c]:
+        taxid_list.append(order[d]+[d, rank_names[3]])
+        for e in order_children[d]:
+          taxid_list.append(family[e]+[e, rank_names[4]])
+          for f in family_children[e]:
+            taxid_list.append(genus[f]+[f, rank_names[5]])
+            for g in genus_children[f]:
+              taxid_list.append(species[g]+[g, rank_names[6]])
+              
+taxid_df = pd.DataFrame(taxid_list, columns=['taxID', 'parent', 'name', 'rank']) #turn the list into a dataframe
+taxid_df.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/RW_db_taxid_info.tsv', sep='\t', index=False) #save it to a file
+
+names_df, nodes_df = pd.DataFrame(names), pd.DataFrame(nodes) #turn the names and nodes lists into a dataframe
+
+names_df.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/RW_names.dmp', sep='\t', index=False, header=False) #save the file
+nodes_df.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/RW_nodes.dmp', sep='\t', index=False, header=False) #save the file
+
+#now make the taxid2accession files
+#We need the accession, accession.version, taxid and gi (filled with NA)
+
+taxid2accession = pd.DataFrame(genomes.loc[:, 'taxid'])
+taxid2accession['accession.version'] = list(taxid2accession.index.values)
+taxid2accession['gi'] = np.nan
+
+acc_rename = {}
+for acc in taxid2accession.index.values:
+  acc_rename[acc] = acc.split('.')[0]
+  
+taxid2accession = taxid2accession.rename(index=acc_rename)
+taxid2accession.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/RW_nucl.taxid2accession', sep='\t')
+```
+
+#### 3. Copy the new files to the server
+(Because I made them locally)
+
+```{bash, eval=FALSE}
+scp RW_db_samples.tsv robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/
+scp RW_db_taxid_info.tsv robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/
+scp RW_names.dmp robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/
+scp RW_nodes.dmp robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/
+scp RW_nucl.taxid2accession robyn@vulcan.pharmacology.dal.ca:/home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/
+```
+
+Change the names and move to appropriate folders:
+```{bash, eval=FALSE}
+mkdir gtdb_human
+mkdir gtdb_human/taxonomy
+mv RW_db_samples.tsv db_samples.tsv  
+mv RW_db_taxid_info.tsv db_taxid_info.tsv
+mv RW_names.dmp gtdb_human/taxonomy/names.dmp
+mv RW_nodes.dmp gtdb_human/taxonomy/nodes.dmp
+mv RW_nucl.taxid2accession gtdb_human/taxonomy/nucl.taxid2accession 
+mkdir fasta_renamed
+```
+
+#### 4. Rename fasta headers and add files to library
+
+```{python, eval=FALSE}
+import pandas as pd
+import os
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+import os
+
+accession = pd.read_csv('/home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/db_samples.tsv', sep='\t', header=0, index_col=0)
+acc_dict = {}
+for acc in accession.index.values:
+  acc_dict[acc] = accession.loc[acc, 'taxid']
+
+genome_folder = '/home/robyn/tools/kraken_gtdb_human/gtdb_genomes_reps_r95/'
+new_folder = '/home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/fasta_renamed/'
+genomes = os.listdir(genome_folder)
+count = 0
+logfile = []
+for genome in genomes:
+  #if count > 99: continue
+  if '.fna' in genome:
+    if os.path.exists(new_folder+genome.split('.fna')[0]+".tax.fna"): continue
+    try:
+        acc = genome.split('_')
+        acc = acc[0]+'_'+acc[1]
+        taxid = acc_dict[acc]
+        records = SeqIO.parse(genome_folder+genome, "fasta")
+        new_records = []
+        for record in records:
+          newid = record.id+"|kraken:taxid|"+str(taxid)
+          newseq = SeqRecord(record.seq, id=newid, description=record.description)
+          new_records.append(newseq)
+        SeqIO.write(new_records, new_folder+genome.split('.fna')[0]+".tax.fna", "fasta")
+        os.system('kraken2-build --db gtdb_human --add-to-library '+new_folder+genome.split('.fna')[0]+".tax.fna"+' --threads 12')
+    except:
+        logfile.append(genome)
+  count += 1
+
+with open('logfile.txt', 'w') as f:
+    for log in logfile:
+        f.write(log+'\n')
+```
+
+The above was saved as `rename_custom_taxid.py` and run as follows:
+```{bash, eval=FALSE}
+python rename_custom_taxid.py
+```
+
+#### 5. Build the kraken database
+
+```{bash, eval=FALSE}
+kraken2-build --build --threads 12 --db gtdb_human
+```
+
+Output:
+```{}
+Creating sequence ID to taxonomy ID map (step 1)...
+Sequence ID to taxonomy ID map complete. [1.298s]
+Estimating required capacity (step 2)...
+Estimated hash table requirement: 176467022992 bytes
+Capacity estimation complete. [11m14.216s]
+Building database files (step 3)...
+Taxonomy parsed and converted.
+CHT created with 16 bits reserved for taxid.
+Completed processing of 3358011 sequences, 116943491436 bp
+Writing data to disk...  complete.
+Database files completed. [3h17m9.703s]
+Database construction complete. [Total: 3h28m26.337s]
+```
+
+If I move the other files used for creating to a different folder, just the hash.k2d, opts.k2d and taxo.k2d files are 165GB.
+
+#### 6. Build Bracken database
+
+
+```{bash, eval=FALSE}
+bracken-build -d /home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/gtdb_human/ -t 12 #makes Bracken database with read length of 100
+bracken-build -d /home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/gtdb_human/ -t 12 -l 150 #makes Bracken database with read length of 150
+```
+
+Accidentally forgot to put seqid2taxid file back in this folder when making, so this did [step 1a of creating the database](https://ccb.jhu.edu/software/bracken/index.shtml?t=manual). Luckily, you can just move this file back and then rerun it and it won't make the files it has already created again.
+
+## Kraken2 confidence parameters {.tabset}
+
+### Description of confidence
+
+**Summary of the description on the [Kraken2 website](https://ccb.jhu.edu/software/kraken/MANUAL.html#confidence-scoring):**</br>
+The specified confidence threshold score in the [0,1] interval adjusts labels up the tree until the label's score (below) meets or exceeds that threshold. If a label at the root would not have a score meeting this, the sequence is called unclassified.
+
+A sequence label's score is a fraction C/Q, where C is the number of k-mers mapped to LCA values in the clade rooted that the label, and Q is the number of k-mers that lack an ambiguous nucleotide (i.e. they were queried against the database). Consider these LCA mappings:</br>
+"562:13 561:4 A:31 0:1 562:3" would indicate that:</br>
+the first 13 k-mers mapped to taxonomy ID #562</br>
+the next 4 k-mers mapped to taxonomy ID #561</br>
+the next 31 k-mers contained an ambiguous nucleotide</br>
+the next k-mer was not in the database</br>
+the last 3 k-mers mapped to taxonomy ID #562</br></br>
+In this case, ID #561 is the parent node of #562. Here, a label of #562 for this sequence would have a score of C/Q = (13+3)/(13+4+1+3) = 16/21. A label of #561 would have a score of C/Q = (13+4+3)/(13+4+1+3) = 20/21. If a user specified a threshold of over 16/21, the original label would be adjusted from #562 to #561; if the threshold was greater than 20/21, the sequence would become unclassified.
+
+To give some guidance toward selecting an appropriate threshold, we show here the results of different thresholds on the MiSeq metagenome from the Kraken paper (see the paper for more details; note that the database used here is more recent than that used in the paper). Precision, sensitivity, and F-score (harmonic mean of recall and precision?) are measured at the genus rank:
+
+Thres   | Prec    | Sens    | F-score
+-----   |-----    |-----    |--------
+0       | 95.43   | 77.32   | 85.43
+0.05    | 97.28   | 76.31   | 85.53
+0.10    | 98.25   | 75.13   | 85.15
+0.15    | 98.81   | 73.87   | 84.54
+0.20    | 99.13   | 72.82   | 83.96
+0.25    | 99.38   | 71.74   | 83.33
+0.30    | 99.55   | 70.75   | 82.71
+0.35    | 99.61   | 69.53   | 81.90
+0.40    | 99.66   | 68.35   | 81.09
+0.45    | 99.70   | 66.93   | 80.09
+0.50    | 99.71   | 65.49   | 79.06
+
+As can be seen, with no threshold (i.e., Kraken's original labels), Kraken's precision is fairly high, but it does increase with the threshold. Diminishing returns apply, however, and there is a loss in sensitivity that must be taken into account when deciding on the threshold to use for your own project.
+
+### Methods (GTDB + human)
+
+So we'll try this with all of the confidence threshold options and compare the outputs (for each of the bowtie2 options used):
+```{bash, eval=FALSE}
+mkdir kraken2_outraw
+mkdir kraken2_kreport
+mkdir times
+
+sudo cp -r /home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/gtdb_human/ /scratch/ramdisk/
+
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 12 --db /scratch/ramdisk/gtdb_human/ --memory-mapping {1} --output kraken2_outraw/{1/.}.{2}.kraken.txt --report kraken2_kreport/{1/.}.{2}.kreport --confidence {2}) 2> times/time_{1/.}_{2}_.txt' ::: cat_lanes/*.fastq ::: 0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.45 0.5
+
+parallel -j 1 'bracken -d /home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/gtdb_human/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*.kreport
+```
+
+Took ~5 mins to copy the database to ramdisk.
+
+Repeating with all other confidence parameters:
+```{bash, eval=FALSE}
+sudo cp -r /home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/gtdb_human/ /scratch/ramdisk/
+
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ --memory-mapping {1} --output kraken2_gtdb_human/kraken2_outraw/{1/.}.{2}.kraken.txt --report kraken2_gtdb_human/kraken2_kreport/{1/.}.{2}.kreport --confidence {2}) 2> kraken2_gtdb_human/times/time_{1/.}_{2}_.txt' ::: cat_lanes/*.fastq ::: 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_gtdb_human/kraken2_kreport/*.kreport
+```
+
+#### Time to run
+
+I *think* that the times in seconds (shown in minutes on graph) that were output here would actually be divided by 12 as I ran them using 12 threads.</br>
+The lines plotted here are for each of the kraken confidence parameters (0.05 intervals between 0 and 0.5), but you can't actually tell the difference between them. </br>
+The only outlier here is the kraken run with confidence=0 and the output from the fast bowtie2 run, and my guess is that something else happened on Vulcan at that time, otherwise the rest are really consistent.
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+import os
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import csv
+
+time_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/kraken2_gtdb_human/times/'
+time_files = os.listdir(time_folder)
+
+bowtie_options = ['very-sensitive', 'sensitive', 'fast', 'very-fast']
+kraken_options = [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1]
+
+all_times, all_ram = [], []
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+ax2 = plt.subplot(122)
+colormap = mpl.cm.get_cmap('winter', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=21)
+m1 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+colors_20 = [m1.to_rgba(a) for a in range(22)]
+shapes_20 = ['o', 's', '^', '*', '1', 'p', '>', '<', 'v', '+', 'X']*2
+
+for k in range(len(kraken_options)):
+  kraken = kraken_options[k]
+  kraken_time, kraken_ram = [], []
+  #if kraken != 0: continue
+  for bowtie in bowtie_options:
+    for a in range(len(time_files)):
+      fn = time_files[a].split('_')
+      if fn[3] == str(kraken) and fn[2] == bowtie:
+        this_time = 0
+        with open(time_folder+time_files[a], 'rU') as f:
+          for row in f:
+            if 'User time' in row or 'System time' in row:
+              this_time += float(row.split(': ')[1])
+            if 'Maximum resident set size' in row:
+              ram = float(row.split(': ')[1])/1000000
+        kraken_time.append(this_time/60)
+        kraken_ram.append(ram)
+  ax1.plot([1, 2, 3, 4], kraken_time, color=colors_20[k], marker=shapes_20[k], markeredgecolor='k')
+  line = ax2.plot([1, 2, 3, 4], kraken_ram, color=colors_20[k], marker=shapes_20[k], markeredgecolor='k')
+
+plt.sca(ax1)
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.ylabel('Time (minutes)')
+plt.sca(ax2)
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.ylabel('Maximum RAM usage (GB)')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Methods (RefSeq Complete)
+
+So now I'll do the same but with the full NCBI RefSeq database:
+```{bash, eval=FALSE}
+mkdir kraken2_refseq/kraken2_outraw
+mkdir kraken2_refseq/kraken2_kreport
+mkdir times
+
+sudo cp -r /home/shared/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ /scratch/ramdisk/
+
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {1} --output kraken2_refseq/kraken2_outraw/{1/.}.{2}.kraken.txt --report kraken2_refseq/kraken2_kreport/{1/.}.{2}.kreport --confidence {2}) 2> kraken2_refseq/times/time_{1/.}_{2}_.txt' ::: cat_lanes/*.fastq ::: 0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.45 0.5
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_refseq/kraken2_kreport/*.kreport
+```
+
+Redo with other confidence parameters:
+```{bash, eval=FALSE}
+sudo cp -r /home/shared/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ /scratch/ramdisk/
+
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {1} --output kraken2_refseq/kraken2_outraw/{1/.}.{2}.kraken.txt --report kraken2_refseq/kraken2_kreport/{1/.}.{2}.kreport --confidence {2}) 2> kraken2_refseq/times/time_{1/.}_{2}_.txt' ::: cat_lanes/*.fastq ::: 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_refseq/kraken2_kreport/*.kreport
+```
+
+#### Time to run
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+import os
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import csv
+
+time_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/kraken2_refseq/times/'
+time_files = os.listdir(time_folder)
+
+all_times, all_ram = [], []
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+ax2 = plt.subplot(122)
+
+for k in range(len(kraken_options)):
+  kraken = kraken_options[k]
+  kraken_time, kraken_ram = [], []
+  #if kraken != 0: continue
+  for bowtie in bowtie_options:
+    #if bowtie != 'very-sensitive': continue
+    for a in range(len(time_files)):
+      fn = time_files[a].split('_')
+      if fn[3] == str(kraken) and fn[2] == bowtie:
+        this_time = 0
+        with open(time_folder+time_files[a], 'rU') as f:
+          for row in f:
+            if 'User time' in row or 'System time' in row:
+              this_time += float(row.split(': ')[1])
+            if 'Maximum resident set size' in row:
+              ram = float(row.split(': ')[1])/1000000
+        kraken_time.append(this_time/60)
+        kraken_ram.append(ram)
+  ax1.plot([1, 2, 3, 4], kraken_time, color=colors_20[k], marker=shapes_20[k], markeredgecolor='k')
+  line = ax2.plot([1, 2, 3, 4], kraken_ram, color=colors_20[k], marker=shapes_20[k], markeredgecolor='k')
+
+plt.sca(ax1)
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.ylabel('Time (minutes)')
+plt.sca(ax2)
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.ylabel('Maximum RAM usage (GB)')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Results (GTDB + human) {.tabset}
+
+All of the results shown here are based on the number of reads estimated to belong to each taxon by Bracken.</br></br> 
+
+Import data (including on the higher taxonomy levels for each species):
+```{python, results='hide', fig.keep='all', cache=TRUE}
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+
+taxa = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/RW_db_samples.tsv', header=0, index_col=0, sep='\t')
+all_tax = set(taxa.loc[:, 'gtdb_taxonomy'].values)
+sp_dict = {}
+for tax in all_tax:
+  sp_dict[tax.split(';')[-1]] = tax.split(';s__')[0]
+  
+sp_dom_dict = {}
+for sp in sp_dict:
+  sp_dom_dict[sp] = sp_dict[sp].split(';')[0]
+
+folder_name = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/kraken2_gtdb_human/kraken2_kreport/'
+results_folder = os.listdir('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/kraken2_gtdb_human/kraken2_kreport/')
+bracken = [result for result in results_folder if result[-8:] == '.bracken']
+
+all_output = []
+for boption in bowtie_options:
+  this_output = []
+  for koption in kraken_options:
+    result = pd.read_csv(folder_name+'PGPC1_'+boption+'.'+str(koption)+'.bracken', sep='\t', header=0, index_col=0)
+    result = result.loc[:, ['new_est_reads', 'fraction_total_reads']]
+    this_output.append(result)
+  all_output.append(this_output)
+```
+
+#### Domain-level classifications
+
+Sorted by bowtie2 option:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(10,5))
+ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+ax = [ax1, ax2, ax3, ax4]
+
+labels, names = [], []
+colors = {'d__Animalia':'#01418A', 'd__Archaea':'#F0C801', 'd__Bacteria':'#AF0109'}
+for a in range(len(bowtie_options)):
+  ax[a].set_title(bowtie_options[a])
+  output = all_output[a]
+  for c in range(len(kraken_options)):
+    this_output = pd.DataFrame(output[c])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    bottom = 0
+    for ind in this_output.index.values[::-1]:
+      val = this_output.loc[ind, 'new_est_reads']
+      line = ax[a].bar(kraken_options[c], val, bottom=bottom, width=0.04, edgecolor='k', color=colors[ind])
+      bottom += val
+      if len(labels) < 3: labels.append(line), names.append(ind)
+  plt.ylim([10000, 10000000])
+  plt.sca(ax[a])
+  plt.semilogy()
+  plt.xlim([-0.05, 1.05])
+  if a == 0 or a == 2: plt.ylabel('Number of reads')
+ax[1].legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+plt.tight_layout()
+plt.show()
+```
+Sorted by kraken confidence parameter:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(10,7.5))
+ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13, ax14, ax15, ax16, ax17, ax18, ax19, ax20, ax21 = plt.subplot(4,6,1), plt.subplot(4,6,2), plt.subplot(4,6,3), plt.subplot(4,6,4), plt.subplot(4,6,5), plt.subplot(4,6,6), plt.subplot(4,6,7), plt.subplot(4,6,8), plt.subplot(4,6,9), plt.subplot(4,6,10), plt.subplot(4,6,11), plt.subplot(4,6,12), plt.subplot(4,6,13), plt.subplot(4,6,14), plt.subplot(4,6,15), plt.subplot(4,6,16), plt.subplot(4,6,17), plt.subplot(4,6,18), plt.subplot(4,6,19), plt.subplot(4,6,20), plt.subplot(4,6,21)
+ax = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13, ax14, ax15, ax16, ax17, ax18, ax19, ax20, ax21]
+
+
+labels, names = [], []
+colors = {'d__Animalia':'#01418A', 'd__Archaea':'#F0C801', 'd__Bacteria':'#AF0109'}
+for a in range(len(kraken_options)):
+  ax[a].set_title(str(kraken_options[a]))
+  for c in range(len(bowtie_options)):
+    this_output = pd.DataFrame(all_output[c][a])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    bottom = 0
+    for ind in this_output.index.values[::-1]:
+      val = this_output.loc[ind, 'new_est_reads']
+      line = ax[a].bar(c, val, bottom=bottom, width=0.8, edgecolor='k', color=colors[ind])
+      bottom += val
+      if len(labels) < 3: labels.append(line), names.append(ind)
+  plt.ylim([10000, 10000000])
+  plt.sca(ax[a])
+  plt.semilogy()
+  if a % 6 != 0: plt.yticks([])
+  else: plt.ylabel('Number of reads')
+  if a < 15: plt.xticks([])
+  else: plt.xticks([0, 1, 2, 3], bowtie_options, rotation=90)
+ax[5].legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+    
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.4)
+plt.show()
+```
+
+All together:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(14,5))
+ax1 = plt.subplot(111)
+
+labels, names = [], []
+colors = {'d__Animalia':'#01418A', 'd__Archaea':'#F0C801', 'd__Bacteria':'#AF0109'}
+xlabels = []
+x = 0
+all_x = []
+for a in range(len(kraken_options)):
+  for c in range(len(bowtie_options)):
+    xlabels.append(bowtie_options[c]+'_'+str(kraken_options[a]))
+    this_output = pd.DataFrame(all_output[c][a])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    bottom = 0
+    for ind in this_output.index.values[::-1]:
+      val = this_output.loc[ind, 'new_est_reads']
+      line = ax1.bar(x, val, bottom=bottom, width=0.8, edgecolor='k', color=colors[ind])
+      bottom += val
+      if len(labels) < 3: labels.append(line), names.append(ind)
+    all_x.append(x)
+    x += 1
+  plt.ylim([10000, 10000000])
+  plt.semilogy()
+  plt.xticks(all_x, xlabels, rotation=90, fontsize=8)
+  plt.xlim(all_x[0]-0.5, all_x[-1]+0.5)
+plt.ylabel('Number of reads')
+ax1.legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+    
+plt.tight_layout()
+plt.show()
+```
+
+#### Number of bacterial reads
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+import matplotlib as mpl
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+colors = ['#6495ED', '#FF7F50', '#DE3163', '#CCCCFF']
+shapes = ['o', 's', '^', '*']
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_output = pd.DataFrame(all_output[a][c])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    this_set.append(this_output.loc['d__Bacteria', 'new_est_reads'])
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylim([30000, 1000000])
+plt.semilogy()
+plt.ylabel('Number of reads'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_output = pd.DataFrame(all_output[c][a])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    this_set.append(this_output.loc['d__Bacteria', 'new_est_reads'])
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.ylim([30000, 1000000])
+plt.semilogy()
+plt.ylabel('Number of reads'), plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+#### Bacterial diversity {.tabset}
+
+Get dataframe of number of bacterial reads (total 5270 species), convert to relative abundance and remove species with below a maximum of 0.1% relative abundance (73 species remaining):
+```{python, cache=TRUE}
+for a in range(len(all_output)):
+  for b in range(len(all_output[a])):
+    sample_name = bowtie_options[a]+'_'+str(kraken_options[b])
+    sample_table = all_output[a][b]
+    sample_table['species'] = sample_table.index.values
+    sample_table = sample_table.rename(index=sp_dom_dict)
+    sample_table = pd.DataFrame(sample_table.loc['d__Bacteria', :])
+    sample_table = pd.DataFrame(sample_table.set_index('species').loc[:, 'new_est_reads'])
+    if a == 0 and b == 0:
+      all_bacteria_reads = pd.DataFrame(sample_table.rename(columns={'new_est_reads':sample_name}))
+    else:
+      all_bacteria_reads = pd.concat([all_bacteria_reads, sample_table.rename(columns={'new_est_reads':sample_name})]).fillna(value=0)
+all_bacteria_reads = all_bacteria_reads.groupby(by=all_bacteria_reads.index, axis=0).sum()
+all_bacteria_percent = all_bacteria_reads.divide(all_bacteria_reads.sum(axis=0), axis=1).multiply(100)
+all_bacteria_percent_rem = all_bacteria_percent[all_bacteria_percent.max(axis=1) >= 0.1]
+```
+
+##### Richness
+
+All species:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+all_bacteria_rich = pd.DataFrame(all_bacteria_percent)
+all_bacteria_rich[all_bacteria_rich > 0] = 1
+all_bacteria_rich = pd.DataFrame(all_bacteria_rich.sum(axis=0)).transpose().rename(index={0:'sample'})
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(all_bacteria_rich.loc['sample', bowtie_options[a]+'_'+str(kraken_options[c])])
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.semilogy()
+plt.ylabel('Number of species'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(all_bacteria_rich.loc['sample', bowtie_options[c]+'_'+str(kraken_options[a])])
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.semilogy()
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+Only species above 0.1% abundance:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+all_bacteria_rich = pd.DataFrame(all_bacteria_percent_rem)
+all_bacteria_rich[all_bacteria_rich > 0] = 1
+all_bacteria_rich = pd.DataFrame(all_bacteria_rich.sum(axis=0)).transpose().rename(index={0:'sample'})
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(all_bacteria_rich.loc['sample', bowtie_options[a]+'_'+str(kraken_options[c])])
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Number of species'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(all_bacteria_rich.loc['sample', bowtie_options[c]+'_'+str(kraken_options[a])])
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+##### Shannon
+
+Diversity function:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+import numpy as np
+def get_diversity(diversity, sample):
+    '''
+    function to calculate a range of different diversity metrics
+    It takes as input:
+        - diversity (the name of the diversity metric we want, can be 'Simpsons', 'Shannon', 'Richness', 'Evenness', 'Maximum' (Maximum is not a diversity metric, the function will just return the maximum abundance value given in sample)
+        - sample (a list of abundance values that should correspond to one sample)
+    Returns:
+        - The diversity index for the individual sample
+    '''
+    for a in range(len(sample)):
+        sample[a] = float(sample[a])
+    total = sum(sample)
+    if diversity == 'Simpsons':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)**2
+        simpsons = 1-(sum(sample))
+        return simpsons
+    elif diversity == 'Shannon':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)
+            if sample[b] != 0:
+                sample[b] = -(sample[b] * (np.log(sample[b])))
+        shannon = sum(sample)
+        return shannon
+    elif diversity == 'Richness':
+        rich = 0
+        for b in range(len(sample)):
+            if sample[b] != 0:
+                rich += 1
+        return rich
+    elif diversity == 'Evenness':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)
+            if sample[b] != 0:
+                sample[b] = -(sample[b] * (np.log(sample[b])))
+        shannon = sum(sample)
+        rich = 0
+        for b in range(len(sample)):
+            if sample[b] != 0:
+                rich += 1
+        even = shannon/(np.log(rich))
+        return even
+    elif diversity == 'Maximum':
+        ma = (max(sample)/total)*100
+        return ma
+    return
+```
+
+All species:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(get_diversity('Shannon', all_bacteria_percent.loc[:, bowtie_options[a]+'_'+str(kraken_options[c])].values))
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Shannon diversity'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(get_diversity('Shannon', all_bacteria_percent.loc[:, bowtie_options[c]+'_'+str(kraken_options[a])].values))
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+Only species above 0.1% abundance:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(get_diversity('Shannon', all_bacteria_percent_rem.loc[:, bowtie_options[a]+'_'+str(kraken_options[c])].values))
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Shannon diversity'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(get_diversity('Shannon', all_bacteria_percent_rem.loc[:, bowtie_options[c]+'_'+str(kraken_options[a])].values))
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+##### Simpsons
+
+All species:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(get_diversity('Simpsons', all_bacteria_percent.loc[:, bowtie_options[a]+'_'+str(kraken_options[c])].values))
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Simpsons diversity'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(get_diversity('Simpsons', all_bacteria_percent.loc[:, bowtie_options[c]+'_'+str(kraken_options[a])].values))
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+Only species above 0.1% abundance:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(get_diversity('Simpsons', all_bacteria_percent_rem.loc[:, bowtie_options[a]+'_'+str(kraken_options[c])].values))
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Simpsons diversity'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(get_diversity('Simpsons', all_bacteria_percent_rem.loc[:, bowtie_options[c]+'_'+str(kraken_options[a])].values))
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+#### Beta diversity
+
+Based on Bray-Curtis diversity calculated with either all bacterial species or only those that are present at above 0.1% relative abundance.
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+from scipy.spatial import distance
+from sklearn import manifold
+from sklearn.decomposition import PCA
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+
+bowtie_handles, kraken_handles = [], []
+cols, shap = {}, {}
+for kraken in range(len(kraken_options)):
+  cols[kraken_options[kraken]] = colors_20[kraken]
+  kraken_handles.append(Patch(facecolor=colors_20[kraken], edgecolor='k', label=str(kraken_options[kraken])))
+for bowtie in range(len(bowtie_options)):
+  shap[bowtie_options[bowtie]] = shapes[bowtie]
+  bowtie_handles.append(Line2D([0], [0], marker=shapes[bowtie], color='w', label=bowtie_options[bowtie], markerfacecolor='k', markersize=15))
+  
+plt.figure(figsize=(12,5))
+ax = [plt.subplot(121), plt.subplot(122)]
+data = [all_bacteria_percent, all_bacteria_percent_rem]
+for a in range(len(data)):
+  pos, npos, stress = transform_for_NMDS(data[a].transpose())
+  for b in range(len(data[a].columns)):
+    sample = data[a].columns[b].split('_')
+    bowtie, kraken = sample[0], float(sample[1])
+    ax[a].scatter(npos[b,0], npos[b,1], color=cols[kraken], marker=shap[bowtie], s=100, edgecolor='k')
+  
+plt.sca(ax[0])
+plt.xlabel('nMDS1')
+plt.ylabel('nMDS2')
+plt.title('All species')
+  
+plt.sca(ax[1])
+plt.xlabel('nMDS1')
+plt.title('Only those above 0.1% abundance')
+legend1 = plt.legend(handles=bowtie_handles, loc='upper left', bbox_to_anchor=(1,1), title='Bowtie2 options')
+plt.legend(handles=kraken_handles, loc='upper left', bbox_to_anchor=(1, 0.65), title='Kraken options', ncol=2)
+plt.gca().add_artist(legend1)
+  
+plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/kraken2_gtdb_human/nmds_species.png', dpi=600, bbox_inches='tight')
+plt.show()
+```
+
+So we can see that these generally group by the kraken confidence parameter used, but below we'll look at a dendrogram, too. 
+
+#### Dendrogram with abundance
+
+Here I am using all species for Bray-Curtis distance (with Ward linkage) calculation, but only plotting those that are above 0.1% abundance. Species are normalised within each row. 
+```{python, results='hide', fig.keep='all', cache=TRUE}
+from scipy.cluster import hierarchy
+import scipy.spatial.distance as ssd
+
+plt.figure(figsize=(14,25))
+ax1 = plt.subplot2grid((20,4), (0,1), frameon=False, rowspan=2, colspan=3)
+ax2 = plt.subplot2grid((20,4), (3,1), rowspan=17, colspan=3)
+ax_col = plt.subplot2grid((40,4), (3,0))
+
+plt.sca(ax1)
+df = pd.DataFrame(all_bacteria_percent).transpose()
+X = df.iloc[0:].values
+y = df.iloc[:,0].values
+X_true = X
+similarities = distance.cdist(X_true, X_true, 'braycurtis')
+
+Z = ssd.squareform(similarities)
+Z = hierarchy.linkage(Z, "ward")
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k')
+x_labels, locs, xlocs, labels = list(ax1.get_xticklabels()), list(ax1.get_xticks()), list(ax1.get_yticks()), [] 
+for x in x_labels:
+  labels.append(x.get_text())
+order_names = [list(df.index.values)[int(l)] for l in labels]
+plt.xticks(locs, order_names, rotation=90)
+plt.yticks([])
+
+new_red_df = all_bacteria_percent_rem.loc[:, order_names]
+new_red_df = new_red_df.divide(new_red_df.max(axis=1), axis=0)
+species = list(new_red_df.index.values)
+species.reverse()
+
+colormap = mpl.cm.get_cmap('hot', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=1)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='horizontal')
+cb1.set_label('Normalised abundance')
+
+bottom = 0
+y = []
+for sp in species:
+  this_row = list(new_red_df.loc[sp, :].values)
+  for val in range(len(this_row)):
+    ax2.bar(val, 1, bottom=bottom, color=m.to_rgba(this_row[val]), edgecolor='k', width=1)
+  y.append(bottom+0.5)
+  bottom += 1
+
+plt.sca(ax2)
+plt.yticks(y, species)
+plt.xlim([-0.5, 83.5])
+plt.ylim([0, bottom])
+
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.2)
+plt.show()
+```
+
+#### Bacterial genus stacked bars (relative abundance)
+
+Plots showing stacked bars of bacterial genera. Just grouping by genus reduces us from 5270 (species) to 2703. If we then remove genera with < 0.1% relative abundance, we have 73 genera (so probably this is the same as the species level, but we could be accounting for slightly more relative abundance). I've removed those below 0.5%, to give only 29 genera.
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+all_bacteria_percent = all_bacteria_reads.divide(all_bacteria_reads.sum(axis=0), axis=1).multiply(100)
+species = set(all_bacteria_percent.index.values)
+gen_dict = {}
+
+for sp in species:
+  gen = sp.split('s__')[1]
+  gen = gen.split(' ')[0]
+  gen_dict[sp] = gen
+
+genus = all_bacteria_percent.rename(index=gen_dict)
+genus = genus.groupby(by=genus.index, axis=0).sum()
+genus_rem = genus[genus.max(axis=1) >= 0.5]
+
+sample = genus_rem.columns
+sam_rename = {}
+for sam in sample:
+  new_sam = sam.split('_')
+  if len(new_sam[1]) == 3: new_sam[1] = new_sam[1]+'0'
+  if len(new_sam[1]) == 1: new_sam[1] = '0.00'
+  sam_rename[sam] = new_sam[1]+'_'+new_sam[0]
+
+order = []
+for a in kraken_options:
+  for b in bowtie_options:
+    order.append(b+'_'+str(a))
+
+genus_rem = genus_rem.loc[:, order]
+genus_rem.rename(columns=sam_rename, inplace=True)
+print(genus_rem.columns)
+ 
+plt.figure(figsize=(20,10))
+ax1 = plt.subplot(111)
+
+colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+
+genera = list(genus_rem.index.values)
+genera.reverse()
+
+bottom = [0]*84
+x = [a for a in range(84)]
+handles = []
+for gen in range(len(genera)):
+  genus = genus_rem.loc[genera[gen], :].values
+  ax1.bar(x, genus, color=colors_40[gen], bottom=bottom, edgecolor='k', width=0.8)
+  bottom = [bottom[b]+genus[b] for b in range(len(bottom))]
+  handles.append(Patch(facecolor=colors_40[gen], edgecolor='k', label=genera[gen]))
+
+handles.reverse()
+plt.xticks(x, order, rotation=90)
+plt.xlim([-0.5, 83.5]), plt.ylim([0,100])
+plt.ylabel('Relative abundance (%)')
+plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1))
+
+plt.tight_layout()
+plt.show()
+```
+
+#### Bacterial genus stacked bars (abundance)
+
+Plots showing stacked bars of bacterial genera. Just grouping by genus reduces us from 5270 (species) to 2703. Here I've just kept the top 30 bacterial genera (by mean read number). 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+species = set(all_bacteria_reads.index.values)
+gen_dict = {}
+
+for sp in species:
+  gen = sp.split('s__')[1]
+  gen = gen.split(' ')[0]
+  gen_dict[sp] = gen
+
+genus = all_bacteria_reads.rename(index=gen_dict)
+genus = genus.groupby(by=genus.index, axis=0).sum()
+genus['sum'] = genus.mean(axis=1)
+genus_sorted = genus.sort_values(by='sum', axis=0, ascending=False)
+genus_red = genus_sorted.iloc[:30, :]
+genus_other = list(genus_sorted.iloc[30:, :].sum(axis=0).values)
+genus_red.loc['Other'] = genus_other
+genus_rem = genus_red.drop('sum', axis=1)
+
+sample = genus_rem.columns
+sam_rename = {}
+for sam in sample:
+  new_sam = sam.split('_')
+  if len(new_sam[1]) == 3: new_sam[1] = new_sam[1]+'0'
+  if len(new_sam[1]) == 1: new_sam[1] = '0.00'
+  sam_rename[sam] = new_sam[1]+'_'+new_sam[0]
+
+order = []
+for a in kraken_options:
+  for b in bowtie_options:
+    order.append(b+'_'+str(a))
+
+genus_rem = genus_rem.loc[:, order]
+genus_rem.rename(columns=sam_rename, inplace=True)
+print(genus_rem.columns)
+ 
+plt.figure(figsize=(20,15))
+ax1 = plt.subplot(211)
+ax2 = plt.subplot(212)
+
+colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+
+genera = list(genus_rem.index.values)
+genera.reverse()
+
+bottom = [0]*84
+x = [a for a in range(84)]
+handles = []
+for gen in range(len(genera)):
+  genus = genus_rem.loc[genera[gen], :].values
+  ax1.bar(x, genus, color=colors_40[gen], bottom=bottom, edgecolor='k', width=0.8)
+  ax2.bar(x, genus, color=colors_40[gen], bottom=bottom, edgecolor='k', width=0.8)
+  bottom = [bottom[b]+genus[b] for b in range(len(bottom))]
+  handles.append(Patch(facecolor=colors_40[gen], edgecolor='k', label=genera[gen]))
+
+handles.reverse()
+plt.sca(ax1)
+plt.xticks([])
+plt.xlim([-0.5, 83.5])
+plt.ylabel('Number of reads')
+plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1))
+
+plt.sca(ax2)
+plt.xticks(x, order, rotation=90)
+plt.semilogy()
+plt.xlim([-0.5, 83.5])
+plt.ylabel('Number of reads')
+
+
+plt.tight_layout()
+plt.show()
+```
+
+### Results (RefSeq Complete) {.tabset}
+
+All of the results shown here are based on the number of reads estimated to belong to each taxon by Bracken.</br></br> 
+
+Import data (including on the higher taxonomy levels for each species):
+```{python, results='hide', fig.keep='all', cache=TRUE}
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+
+folder_name = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/kraken2_refseq/kraken2_kreport/'
+results_folder = os.listdir('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/kraken2_refseq/kraken2_kreport/')
+bracken = [result for result in results_folder if result[-8:] == '.bracken']
+kreport = [result for result in results_folder if result[-15:] == 'bracken.kreport']
+
+sp_dict, sp_dom_dict = {}, {}
+keep_levels = ['D', 'P', 'C', 'O', 'F', 'G', 'S']
+for result in kreport:
+  result = pd.read_csv(folder_name+result, sep='\t')
+  result = result.rename(columns={'100.00':'perc', list(result.columns)[1]:'N', '0':'N', 'R':'level', '1':'taxid', 'root':'classification'})
+  result = pd.DataFrame(result.loc[:, ['level', 'classification']])
+  current = {}
+  for lvl in keep_levels: current[lvl] = lvl
+  for i in result.index.values:
+    line = result.loc[i, :].values
+    line[1] = line[1].lstrip()
+    if line[0] not in keep_levels: continue
+    current[line[0]] = line[1]
+    if line[0] == 'S': 
+      if line[1] in sp_dict: continue
+      tax = ''
+      for level in current: 
+        if level == 'S': continue
+        if level != 'D': tax += ';'
+        tax += level.lower()+'__'+current[level]
+      sp_dict[line[1]] = tax
+      sp_dom_dict[line[1]] = tax.split(';')[0]
+      
+all_output = []
+for boption in bowtie_options:
+  this_output = []
+  for koption in kraken_options:
+    result = pd.read_csv(folder_name+'PGPC1_'+boption+'.'+str(koption)+'.bracken', sep='\t', header=0, index_col=0)
+    result = result.loc[:, ['new_est_reads', 'fraction_total_reads']]
+    this_output.append(result)
+  all_output.append(this_output)
+```
+
+
+#### Domain-level classifications
+
+Sorted by bowtie2 option:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(10,5))
+ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+ax = [ax1, ax2, ax3, ax4]
+
+labels, names = [], []
+colors = {'d__Eukaryota':'#01418A', 'd__Archaea':'#F0C801', 'd__Bacteria':'#AF0109', 'd__Viruses':'gray'}
+for a in range(len(bowtie_options)):
+  ax[a].set_title(bowtie_options[a])
+  output = all_output[a]
+  for c in range(len(kraken_options)):
+    this_output = pd.DataFrame(output[c])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    bottom = 0
+    for ind in this_output.index.values:
+      val = this_output.loc[ind, 'new_est_reads']
+      line = ax[a].bar(kraken_options[c], val, bottom=bottom, width=0.04, edgecolor='k', color=colors[ind])
+      bottom += val
+      if len(labels) < 3: labels.append(line), names.append(ind)
+  plt.ylim([10000, 10000000])
+  plt.sca(ax[a])
+  plt.semilogy()
+  plt.xlim([-0.05, 1.05])
+  if a == 0 or a == 2: plt.ylabel('Number of reads')
+ax[1].legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+plt.tight_layout()
+plt.show()
+```
+Sorted by kraken confidence parameter:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(10,7.5))
+ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13, ax14, ax15, ax16, ax17, ax18, ax19, ax20, ax21 = plt.subplot(4,6,1), plt.subplot(4,6,2), plt.subplot(4,6,3), plt.subplot(4,6,4), plt.subplot(4,6,5), plt.subplot(4,6,6), plt.subplot(4,6,7), plt.subplot(4,6,8), plt.subplot(4,6,9), plt.subplot(4,6,10), plt.subplot(4,6,11), plt.subplot(4,6,12), plt.subplot(4,6,13), plt.subplot(4,6,14), plt.subplot(4,6,15), plt.subplot(4,6,16), plt.subplot(4,6,17), plt.subplot(4,6,18), plt.subplot(4,6,19), plt.subplot(4,6,20), plt.subplot(4,6,21)
+ax = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13, ax14, ax15, ax16, ax17, ax18, ax19, ax20, ax21]
+
+
+labels, names = [], []
+for a in range(len(kraken_options)):
+  ax[a].set_title(str(kraken_options[a]))
+  for c in range(len(bowtie_options)):
+    this_output = pd.DataFrame(all_output[c][a])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    bottom = 0
+    for ind in this_output.index.values:
+      val = this_output.loc[ind, 'new_est_reads']
+      line = ax[a].bar(c, val, bottom=bottom, width=0.8, edgecolor='k', color=colors[ind])
+      bottom += val
+      if len(labels) < 3: labels.append(line), names.append(ind)
+  plt.ylim([10000, 10000000])
+  plt.sca(ax[a])
+  plt.semilogy()
+  if a % 6 != 0: plt.yticks([])
+  else: plt.ylabel('Number of reads')
+  if a < 15: plt.xticks([])
+  else: plt.xticks([0, 1, 2, 3], bowtie_options, rotation=90)
+ax[5].legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+    
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.4)
+plt.show()
+```
+
+All together:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(14,5))
+ax1 = plt.subplot(111)
+
+labels, names = [], []
+xlabels = []
+x = 0
+all_x = []
+for a in range(len(kraken_options)):
+  for c in range(len(bowtie_options)):
+    xlabels.append(bowtie_options[c]+'_'+str(kraken_options[a]))
+    this_output = pd.DataFrame(all_output[c][a])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    bottom = 0
+    for ind in this_output.index.values:
+      val = this_output.loc[ind, 'new_est_reads']
+      line = ax1.bar(x, val, bottom=bottom, width=0.8, edgecolor='k', color=colors[ind])
+      bottom += val
+      if len(labels) < 3: labels.append(line), names.append(ind)
+    all_x.append(x)
+    x += 1
+  plt.ylim([10000, 10000000])
+  plt.semilogy()
+  plt.xticks(all_x, xlabels, rotation=90, fontsize=8)
+  plt.xlim(all_x[0]-0.5, all_x[-1]+0.5)
+plt.ylabel('Number of reads')
+ax1.legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+    
+plt.tight_layout()
+plt.show()
+```
+
+#### Number of bacterial reads
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+import matplotlib as mpl
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+colors = ['#6495ED', '#FF7F50', '#DE3163', '#CCCCFF']
+shapes = ['o', 's', '^', '*']
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_output = pd.DataFrame(all_output[a][c])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    this_set.append(this_output.loc['d__Bacteria', 'new_est_reads'])
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.semilogy()
+plt.ylabel('Number of reads'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_output = pd.DataFrame(all_output[c][a])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    this_set.append(this_output.loc['d__Bacteria', 'new_est_reads'])
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.semilogy()
+plt.ylabel('Number of reads'), plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+#### Bacterial diversity {.tabset}
+
+Get dataframe of number of bacterial reads (total 793 species), convert to relative abundance and remove species with below a maximum of 0.1% relative abundance (67 species remaining):
+```{python, cache=TRUE}
+for a in range(len(all_output)):
+  for b in range(len(all_output[a])):
+    sample_name = bowtie_options[a]+'_'+str(kraken_options[b])
+    sample_table = all_output[a][b]
+    sample_table['species'] = sample_table.index.values
+    sample_table = sample_table.rename(index=sp_dom_dict)
+    sample_table = pd.DataFrame(sample_table.loc['d__Bacteria', :])
+    sample_table = pd.DataFrame(sample_table.set_index('species').loc[:, 'new_est_reads'])
+    if a == 0 and b == 0:
+      all_bacteria_reads = pd.DataFrame(sample_table.rename(columns={'new_est_reads':sample_name}))
+    else:
+      all_bacteria_reads = pd.concat([all_bacteria_reads, sample_table.rename(columns={'new_est_reads':sample_name})]).fillna(value=0)
+
+all_bacteria_reads = all_bacteria_reads.groupby(by=all_bacteria_reads.index, axis=0).sum()
+all_bacteria_percent = all_bacteria_reads.divide(all_bacteria_reads.sum(axis=0), axis=1).multiply(100)
+all_bacteria_percent_rem = all_bacteria_percent[all_bacteria_percent.max(axis=1) >= 0.1]
+```
+
+##### Richness
+
+All species:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+all_bacteria_rich = pd.DataFrame(all_bacteria_percent)
+all_bacteria_rich[all_bacteria_rich > 0] = 1
+all_bacteria_rich = pd.DataFrame(all_bacteria_rich.sum(axis=0)).transpose().rename(index={0:'sample'})
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(all_bacteria_rich.loc['sample', bowtie_options[a]+'_'+str(kraken_options[c])])
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Number of species'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(all_bacteria_rich.loc['sample', bowtie_options[c]+'_'+str(kraken_options[a])])
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+Only species above 0.1% abundance:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+all_bacteria_rich = pd.DataFrame(all_bacteria_percent_rem)
+all_bacteria_rich[all_bacteria_rich > 0] = 1
+all_bacteria_rich = pd.DataFrame(all_bacteria_rich.sum(axis=0)).transpose().rename(index={0:'sample'})
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(all_bacteria_rich.loc['sample', bowtie_options[a]+'_'+str(kraken_options[c])])
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Number of species'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(all_bacteria_rich.loc['sample', bowtie_options[c]+'_'+str(kraken_options[a])])
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+##### Shannon
+
+All species:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(get_diversity('Shannon', all_bacteria_percent.loc[:, bowtie_options[a]+'_'+str(kraken_options[c])].values))
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Shannon diversity'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(get_diversity('Shannon', all_bacteria_percent.loc[:, bowtie_options[c]+'_'+str(kraken_options[a])].values))
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+Only species above 0.1% abundance:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(get_diversity('Shannon', all_bacteria_percent_rem.loc[:, bowtie_options[a]+'_'+str(kraken_options[c])].values))
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Shannon diversity'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(get_diversity('Shannon', all_bacteria_percent_rem.loc[:, bowtie_options[c]+'_'+str(kraken_options[a])].values))
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+##### Simpsons
+
+All species:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(get_diversity('Simpsons', all_bacteria_percent.loc[:, bowtie_options[a]+'_'+str(kraken_options[c])].values))
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Simpsons diversity'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(get_diversity('Simpsons', all_bacteria_percent.loc[:, bowtie_options[c]+'_'+str(kraken_options[a])].values))
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+Only species above 0.1% abundance:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+plt.sca(ax1)
+
+lines = []
+for a in range(len(bowtie_options)):
+  this_set = []
+  for c in range(len(kraken_options)):
+    this_set.append(get_diversity('Simpsons', all_bacteria_percent_rem.loc[:, bowtie_options[a]+'_'+str(kraken_options[c])].values))
+  line = ax1.plot(kraken_options, this_set, color=colors[a], marker=shapes[a], markeredgecolor='k')
+
+plt.legend(labels=bowtie_options, loc='upper right')
+plt.ylabel('Simpsons diversity'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options, rotation=90)
+
+ax2 = plt.subplot(122)
+plt.sca(ax2)
+
+lines = []
+for a in range(len(kraken_options)):
+  this_set = []
+  for c in range(len(bowtie_options)):
+    this_set.append(get_diversity('Simpsons', all_bacteria_percent_rem.loc[:, bowtie_options[c]+'_'+str(kraken_options[a])].values))
+  line = ax2.plot([1, 2, 3, 4], this_set, color=colors_20[a], marker=shapes_20[a], markeredgecolor='k')
+
+plt.legend(labels=kraken_options, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+plt.xlabel('Bowtie2 option')
+plt.xticks([1, 2, 3, 4], bowtie_options)
+plt.tight_layout()
+plt.show()
+```
+
+#### Beta diversity
+
+Based on Bray-Curtis diversity calculated with either all bacterial species or only those that are present at above 0.1% relative abundance.
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+from scipy.spatial import distance
+from sklearn import manifold
+from sklearn.decomposition import PCA
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+
+bowtie_handles, kraken_handles = [], []
+cols, shap = {}, {}
+for kraken in range(len(kraken_options)):
+  cols[kraken_options[kraken]] = colors_20[kraken]
+  kraken_handles.append(Patch(facecolor=colors_20[kraken], edgecolor='k', label=str(kraken_options[kraken])))
+for bowtie in range(len(bowtie_options)):
+  shap[bowtie_options[bowtie]] = shapes[bowtie]
+  bowtie_handles.append(Line2D([0], [0], marker=shapes[bowtie], color='w', label=bowtie_options[bowtie], markerfacecolor='k', markersize=15))
+  
+plt.figure(figsize=(12,5))
+ax = [plt.subplot(121), plt.subplot(122)]
+data = [all_bacteria_percent, all_bacteria_percent_rem]
+for a in range(len(data)):
+  pos, npos, stress = transform_for_NMDS(data[a].transpose())
+  for b in range(len(data[a].columns)):
+      sample = data[a].columns[b].split('_')
+      bowtie, kraken = sample[0], float(sample[1])
+      ax[a].scatter(npos[b,0], npos[b,1], color=cols[kraken], marker=shap[bowtie], s=100, edgecolor='k')
+  
+plt.sca(ax[0])
+plt.xlabel('nMDS1')
+plt.ylabel('nMDS2')
+plt.title('All species')
+  
+plt.sca(ax[1])
+plt.xlabel('nMDS1')
+plt.title('Only those above 0.1% abundance')
+legend1 = plt.legend(handles=bowtie_handles, loc='upper left', bbox_to_anchor=(1,1), title='Bowtie2 options')
+plt.legend(handles=kraken_handles, loc='upper left', bbox_to_anchor=(1, 0.65), title='Kraken options', ncol=2)
+plt.gca().add_artist(legend1)
+  
+plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/kraken2_refseq/nmds_species.png', dpi=600, bbox_inches='tight')
+plt.show()
+```
+
+#### Dendrogram with abundance
+
+Here I am using all species for Bray-Curtis distance (with Ward linkage) calculation, but only plotting those that are above 0.1% abundance. Species are normalised within each row. 
+```{python, results='hide', fig.keep='all', cache=TRUE}
+from scipy.cluster import hierarchy
+import scipy.spatial.distance as ssd
+
+plt.figure(figsize=(14,25))
+ax1 = plt.subplot2grid((20,4), (0,1), frameon=False, rowspan=2, colspan=3)
+ax2 = plt.subplot2grid((20,4), (3,1), rowspan=17, colspan=3)
+ax_col = plt.subplot2grid((40,4), (3,0))
+
+plt.sca(ax1)
+df = pd.DataFrame(all_bacteria_percent).transpose()
+X = df.iloc[0:].values
+y = df.iloc[:,0].values
+X_true = X
+similarities = distance.cdist(X_true, X_true, 'braycurtis')
+
+Z = ssd.squareform(similarities)
+Z = hierarchy.linkage(Z, "ward")
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k')
+x_labels, locs, xlocs, labels = list(ax1.get_xticklabels()), list(ax1.get_xticks()), list(ax1.get_yticks()), [] 
+for x in x_labels:
+  labels.append(x.get_text())
+order_names = [list(df.index.values)[int(l)] for l in labels]
+plt.xticks(locs, order_names, rotation=90)
+plt.yticks([])
+
+new_red_df = all_bacteria_percent_rem.loc[:, order_names]
+new_red_df = new_red_df.divide(new_red_df.max(axis=1), axis=0)
+species = list(new_red_df.index.values)
+species.reverse()
+
+colormap = mpl.cm.get_cmap('hot', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=1)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='horizontal')
+cb1.set_label('Normalised abundance')
+
+bottom = 0
+y = []
+for sp in species:
+  this_row = list(new_red_df.loc[sp, :].values)
+  for val in range(len(this_row)):
+    ax2.bar(val, 1, bottom=bottom, color=m.to_rgba(this_row[val]), edgecolor='k', width=1)
+  y.append(bottom+0.5)
+  bottom += 1
+
+plt.sca(ax2)
+plt.yticks(y, species)
+plt.xlim([-0.5, 83.5])
+plt.ylim([0, bottom])
+
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.2)
+plt.show()
+```
+
+#### Bacterial genus stacked bars (relative abundance)
+
+Plots showing stacked bars of bacterial genera. Just grouping by genus reduces us from 793 (species) to 340. If we then remove genera with < 0.1% relative abundance, we have 46 genera. I've removed those below 0.5%, to give only 28 genera.
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+all_bacteria_percent = all_bacteria_reads.divide(all_bacteria_reads.sum(axis=0), axis=1).multiply(100)
+species = set(all_bacteria_percent.index.values)
+gen_dict = {}
+
+for sp in species:
+  #gen = sp.split('s__')[1]
+  gen = sp.split(' ')[0]
+  gen_dict[sp] = gen
+
+genus = all_bacteria_percent.rename(index=gen_dict)
+genus = genus.groupby(by=genus.index, axis=0).sum()
+genus_rem = genus[genus.max(axis=1) >= 0.5]
+
+sample = genus_rem.columns
+sam_rename = {}
+for sam in sample:
+  new_sam = sam.split('_')
+  if len(new_sam[1]) == 3: new_sam[1] = new_sam[1]+'0'
+  if len(new_sam[1]) == 1: new_sam[1] = '0.00'
+  sam_rename[sam] = new_sam[1]+'_'+new_sam[0]
+
+order = []
+for a in kraken_options:
+  for b in bowtie_options:
+    order.append(b+'_'+str(a))
+
+genus_rem = genus_rem.loc[:, order]
+genus_rem.rename(columns=sam_rename, inplace=True)
+print(genus_rem.columns)
+
+plt.figure(figsize=(20,10))
+ax1 = plt.subplot(111)
+
+colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+
+genera = list(genus_rem.index.values)
+genera.reverse()
+
+bottom = [0]*84
+x = [a for a in range(84)]
+handles = []
+for gen in range(len(genera)):
+  genus = genus_rem.loc[genera[gen], :].values
+  ax1.bar(x, genus, color=colors_40[gen], bottom=bottom, edgecolor='k', width=0.8)
+  bottom = [bottom[b]+genus[b] for b in range(len(bottom))]
+  handles.append(Patch(facecolor=colors_40[gen], edgecolor='k', label=genera[gen]))
+
+handles.reverse()
+plt.xticks(x, order, rotation=90)
+plt.xlim([-0.5, 83.5]), plt.ylim([0,100])
+plt.ylabel('Relative abundance (%)')
+plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1))
+
+plt.tight_layout()
+plt.show()
+```
+
+#### Bacterial genus stacked bars (abundance)
+
+Plots showing stacked bars of bacterial genera. Here I've just kept the top 30 bacterial genera (by mean read number). 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+species = set(all_bacteria_reads.index.values)
+gen_dict = {}
+
+for sp in species:
+  #gen = sp.split('s__')[1]
+  gen = sp.split(' ')[0]
+  gen_dict[sp] = gen
+
+genus = all_bacteria_reads.rename(index=gen_dict)
+genus = genus.groupby(by=genus.index, axis=0).sum()
+genus['sum'] = genus.mean(axis=1)
+genus_sorted = genus.sort_values(by='sum', axis=0, ascending=False)
+genus_red = genus_sorted.iloc[:30, :]
+genus_other = list(genus_sorted.iloc[30:, :].sum(axis=0).values)
+genus_red.loc['Other'] = genus_other
+genus_rem = genus_red.drop('sum', axis=1)
+
+sample = genus_rem.columns
+sam_rename = {}
+for sam in sample:
+  new_sam = sam.split('_')
+  if len(new_sam[1]) == 3: new_sam[1] = new_sam[1]+'0'
+  if len(new_sam[1]) == 1: new_sam[1] = '0.00'
+  sam_rename[sam] = new_sam[1]+'_'+new_sam[0]
+
+order = []
+for a in kraken_options:
+  for b in bowtie_options:
+    order.append(b+'_'+str(a))
+
+genus_rem = genus_rem.loc[:, order]
+genus_rem.rename(columns=sam_rename, inplace=True)
+print(genus_rem.columns)
+ 
+plt.figure(figsize=(20,15))
+ax1 = plt.subplot(211)
+ax2 = plt.subplot(212)
+
+colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+
+genera = list(genus_rem.index.values)
+genera.reverse()
+
+bottom = [0]*84
+x = [a for a in range(84)]
+handles = []
+for gen in range(len(genera)):
+  genus = genus_rem.loc[genera[gen], :].values
+  ax1.bar(x, genus, color=colors_40[gen], bottom=bottom, edgecolor='k', width=0.8)
+  ax2.bar(x, genus, color=colors_40[gen], bottom=bottom, edgecolor='k', width=0.8)
+  bottom = [bottom[b]+genus[b] for b in range(len(bottom))]
+  handles.append(Patch(facecolor=colors_40[gen], edgecolor='k', label=genera[gen]))
+
+handles.reverse()
+plt.sca(ax1)
+plt.xticks([])
+plt.xlim([-0.5, 83.5])
+plt.ylabel('Number of reads')
+plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1))
+
+plt.sca(ax2)
+plt.xticks(x, order, rotation=90)
+plt.semilogy()
+plt.xlim([-0.5, 83.5])
+plt.ylabel('Number of reads')
+
+
+plt.tight_layout()
+plt.show()
+```
+
+## Test human genome {.tabset}
+
+### Chop up the genome
+
+Initial explore the genome
+```{python, eval=FALSE}
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+f = 'GCF_000001405.39_GRCh38.p13_genomic.fna'
+records = SeqIO.parse(f, "fasta")
+count = 0
+for record in records:
+  count += len(record.seq)
+  
+print(count)
+```
+
+This gives: 3,272,089,205 bases
+
+Now get the average length of reads in our human genome:
+```{python, eval=FALSE}
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+import numpy as np
+import os
+
+fol = 'cat_lanes/'
+files = os.listdir(fol)
+for f in files:
+  seq_len = []
+  records = SeqIO.parse(fol+f, "fastq")
+  for record in records:
+    seq_len.append(len(record.seq))
+  print(f, 'mean = ', str(np.mean(seq_len)), 'median = ', str(np.median(seq_len)), 'minimum=', str(np.min(seq_len)), 'maximum=', str(np.max(seq_len)), 'standard deviation=', str(np.std(seq_len)))
+```
+
+This gives:
+`PGPC1_very-fast.fastq mean =  126.0189794539796 median =  139.0 minimum= 50 maximum= 151 standard deviation= 29.32198162013586`</br>
+`PGPC1_fast.fastq mean =  127.54254356766751 median =  142.0 minimum= 50 maximum= 151 standard deviation= 28.74779915431567`</br>
+`PGPC1_very-sensitive.fastq mean =  129.20685581054298 median =  145.0 minimum= 50 maximum= 151 standard deviation= 28.163537142041392`</br>
+`PGPC1_sensitive.fastq mean =  128.37165658098488 median =  143.0 minimum= 50 maximum= 151 standard deviation= 28.415484446848374`</br>
+
+Count number of sequences in fasta files:
+```{python, eval=FALSE}
+from Bio import SeqIO
+import os
+
+fol = 'cat_lanes/'
+files = os.listdir(fol)
+for f in files:
+  records = SeqIO.parse(fol+f, "fastq")
+  count = 0
+  for record in records:
+    count += 1
+  print(f, count)
+```
+
+This gives:
+`PGPC1_very-fast.fastq 6874908`</br>
+`PGPC1_fast.fastq 5642028`</br>
+`PGPC1_sensitive.fastq 4836890`</br>
+`PGPC1_very-sensitive.fastq 4325878`</br>
+
+These files are:</br>
+`2.0G PGPC1_very-fast.fastq` -> 0.290913 b/seq
+`1.7G PGPC1_fast.fastq` -> 0.3013101 b/seq
+`1.4G PGPC1_sensitive.fastq` -> 0.2894422 b/seq
+`1.3G PGPC1_very-sensitive.fastq` -> 0.300517 b/seq
+
+So we want 3,272,089,205 divided by the average number of bases (average of the average=127.785): 25,606,207</br>
+Multiplied by 30 (30X coverage): 768,186,210 </br>
+Standard HiSeq number of reads: 600,000,000 </br>
+Standard deviation (average of standard deviations): 28.6622 </br>
+</br>
+Based on the file sizes above, 600,000,000 sequences would make a file that is ~90 GB
+</br>
+Which we can then use to generate a fake file:
+```{python, eval=FALSE}
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+import random
+
+f = 'GCF_000001405.39_GRCh38.p13_genomic.fna'
+records = SeqIO.parse(f, "fasta")
+one_sequence = ''
+for record in records:
+  one_sequence += str(record.seq)
+
+max_length, avg, stdev = 3272089205, 127.785, 28.6622
+#nseqs = 600000000
+nseqs = 100
+
+this_fasta = []
+for a in range(0, nseqs):
+  rn = int(random.normalvariate(avg, stdev))
+  start = random.randint(0, max_length-1-rn)
+  this_fasta.append(SeqRecord(Seq(one_sequence[start:start+rn].capitalize()), id='Sequence'+str(a+1), description='Chunk '+str(start)+':'+str(start+rn)))
+
+SeqIO.write(this_fasta, "human_genome_chunks.fasta", "fasta")
+```
+This basically makes a string of the whole genome sequence and generates 600,000,000 random sequences that:</br>
+- have a length drawn from a normal distribution of mean and standard deviation of 127.785 and 28.6622</br>
+- start on random nucleotide between 1 and nucleotide max length (number of nucleotides in whole genome sequence) minus sequence length
+
+### Classify with GTDB {.tabset}
+
+```{bash, eval=FALSE}
+sudo cp -r /home/shared/Kraken2_GTDB_human_Dec2020/ /scratch/ramdisk/
+
+mkdir kraken2_gtdb_human
+mkdir kraken2_gtdb_human/times
+mkdir kraken2_gtdb_human/kraken2_outraw
+mkdir kraken2_gtdb_human/kraken2_kreport
+
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ --memory-mapping {1} --output kraken2_gtdb_human/kraken2_outraw/{1/.}.{2}.kraken.txt --report kraken2_gtdb_human/kraken2_kreport/{1/.}.{2}.kreport --confidence {2}) 2> kraken2_gtdb_human/times/time_{1/.}_{2}_.txt' ::: human_genome_chunks.fasta ::: 0 0.2 0.4 0.6 0.8 1
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_gtdb_human/kraken2_kreport/*.kreport
+```
+
+#### Time to run
+
+```{python, results='hide', fig.keep='all'}
+import os
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import csv
+
+time_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/hu_ref/kraken2_gtdb_human/times/'
+time_files = os.listdir(time_folder)
+
+kraken_options = [0, 0.2, 0.4, 0.6, 0.8, 1]
+
+all_times, all_ram = [], []
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+ax2 = plt.subplot(122)
+colormap = mpl.cm.get_cmap('winter', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=7)
+m1 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+colors_20 = [m1.to_rgba(a) for a in range(8)]
+shapes_20 = ['o', 's', '^', '*', '1', 'p', '>', '<', 'v', '+', 'X']*2
+
+kraken_time, kraken_ram = [], []
+for k in range(len(kraken_options)):
+  kraken = kraken_options[k]
+  #if kraken != 0: continue
+  for a in range(len(time_files)):
+    fn = time_files[a].split('_')
+    if fn[4] == str(kraken):
+          this_time = 0
+          with open(time_folder+time_files[a], 'rU') as f:
+            for row in f:
+              if 'User time' in row or 'System time' in row:
+                this_time += float(row.split(': ')[1])
+              if 'Maximum resident set size' in row:
+                ram = float(row.split(': ')[1])/1000000
+          kraken_time.append(this_time/60)
+          kraken_ram.append(ram)
+ax1.bar(kraken_options, kraken_time, color=colors_20[:len(kraken_options)], edgecolor='k', width=0.18)
+line = ax2.bar(kraken_options, kraken_ram, color=colors_20[:len(kraken_options)], edgecolor='k', width=0.18)
+
+plt.sca(ax1)
+plt.ylabel('Time (seconds)')
+plt.xlabel('Kraken confidence')
+plt.sca(ax2)
+plt.xlabel('Kraken confidence')
+plt.ylabel('Maximum RAM usage (GB)')
+
+plt.tight_layout()
+plt.show()
+```
+
+#### Import data
+
+```{python, results='hide', fig.keep='all'}
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+
+taxa = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/RW_db_samples.tsv', header=0, index_col=0, sep='\t')
+all_tax = set(taxa.loc[:, 'gtdb_taxonomy'].values)
+sp_dict = {}
+for tax in all_tax:
+  sp_dict[tax.split(';')[-1]] = tax.split(';s__')[0]
+  
+sp_dom_dict = {}
+for sp in sp_dict:
+  sp_dom_dict[sp] = sp_dict[sp].split(';')[0]
+
+folder_name = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/hu_ref/kraken2_gtdb_human/kraken2_kreport/'
+results_folder = os.listdir(folder_name)
+bracken = [result for result in results_folder if result[-8:] == '.bracken']
+
+all_output = []
+for koption in kraken_options:
+    result = pd.read_csv(folder_name+'human_genome_chunks.'+str(koption)+'.bracken', sep='\t', header=0, index_col=0)
+    result = result.loc[:, ['new_est_reads', 'fraction_total_reads']]
+    all_output.append(result)
+```
+
+#### Domain-level classifications
+
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(5,5))
+ax1 = plt.subplot(111)
+
+labels, names = [], []
+colors = {'d__Animalia':'#01418A', 'd__Archaea':'#F0C801', 'd__Bacteria':'#AF0109'}
+for c in range(len(kraken_options)):
+    this_output = pd.DataFrame(all_output[c])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    bottom = 0
+    for ind in this_output.index.values[::-1]:
+      val = this_output.loc[ind, 'new_est_reads']
+      line = ax1.bar(kraken_options[c], val, bottom=bottom, width=0.18, edgecolor='k', color=colors[ind])
+      bottom += val
+      if len(labels) < 3: labels.append(line), names.append(ind)
+  #plt.ylim([10000, 10000000])
+plt.semilogy()
+plt.xlim([-0.1, 1.1])
+plt.ylabel('Number of reads')
+plt.legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+plt.tight_layout()
+plt.show()
+```
+
+#### Bacterial reads
+
+```{python, results='hide', fig.keep='all'}
+import matplotlib as mpl
+
+plt.figure(figsize=(6,5))
+ax1 = plt.subplot(111)
+
+this_set = []
+for c in range(len(kraken_options)):
+  this_output = pd.DataFrame(all_output[c])
+  this_output = this_output.rename(index=sp_dom_dict)
+  this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+  this_set.append(this_output.loc['d__Bacteria', 'new_est_reads'])
+
+ax1.plot(kraken_options, this_set, 'o-', markeredgecolor='k')
+
+plt.semilogy()
+plt.ylabel('Number of reads'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options)
+
+plt.tight_layout()
+plt.show()
+```
+
+#### Bacteria stacked bar
+
+Get bacteria:
+```{python}
+for b in range(len(all_output)):
+    sample_name = str(kraken_options[b])
+    sample_table = all_output[b]
+    sample_table['species'] = sample_table.index.values
+    sample_table = sample_table.rename(index=sp_dom_dict)
+    sample_table = pd.DataFrame(sample_table.loc['d__Bacteria', :])
+    sample_table = pd.DataFrame(sample_table.set_index('species').loc[:, 'new_est_reads'])
+    if b == 0:
+      all_bacteria_reads = pd.DataFrame(sample_table.rename(columns={'new_est_reads':sample_name}))
+    else:
+      all_bacteria_reads = pd.concat([all_bacteria_reads, sample_table.rename(columns={'new_est_reads':sample_name})]).fillna(value=0)
+all_bacteria_reads = all_bacteria_reads.groupby(by=all_bacteria_reads.index, axis=0).sum()
+all_bacteria_percent = all_bacteria_reads.divide(all_bacteria_reads.sum(axis=0), axis=1).multiply(100)
+
+genus = {}
+species = list(all_bacteria_percent.index.values)
+for sp in species:
+  genus[sp] = sp.split(' ')[0].split('__')[1]
+
+all_bacteria_genus = all_bacteria_percent.rename(index=genus)
+all_bacteria_genus = all_bacteria_genus.groupby(by=all_bacteria_genus.index).sum()
+all_bacteria_genus_rem = all_bacteria_genus[all_bacteria_genus.max(axis=1) >= 0.1]
+
+all_bacteria_genus_reads = all_bacteria_reads.rename(index=genus)
+all_bacteria_genus_reads = all_bacteria_genus_reads.groupby(by=all_bacteria_genus_reads.index).sum()
+```
+
+If we keep all bacteria, we have 23,541 species. If we only keep those that are above 0.1% relative abundance then we have 250 species, above 0.5% 77 species and above 1% 64 species. If we group to genus and remove those that are above 0.1% we have 307 genera, 0.5% we have 78 genera, 1% we have 63 genera and 2% we have 12 species.
+This is all genera above 0.1% abundance:
+```{python, results='hide', fig.keep='all'}
+import random
+from matplotlib.patches import Patch
+
+genus_rem = pd.DataFrame(all_bacteria_genus_rem)
+
+plt.figure(figsize=(20,20))
+ax1 = plt.subplot(231)
+ax2 = plt.subplot(234)
+
+colormap = mpl.cm.get_cmap('hsv', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=320)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+colors = [m.to_rgba(a) for a in range(320)]
+random.shuffle(colors)
+
+genera = list(genus_rem.index.values)
+genera.reverse()
+
+bottom, bottom_abs = [0]*6, [0]*6
+x = [a for a in range(6)]
+handles = []
+
+for gen in range(len(genera)):
+  genus = genus_rem.loc[genera[gen], :].values
+  ax1.bar(x, genus, color=colors[gen], bottom=bottom, edgecolor='k', width=0.8)
+  bottom = [bottom[b]+genus[b] for b in range(len(bottom))]
+  handles.append(Patch(facecolor=colors[gen], edgecolor='k', label=genera[gen]))
+  
+  genus_abs = all_bacteria_genus_reads.loc[genera[gen], :].values
+  ax2.bar(x, genus_abs, color=colors[gen], bottom=bottom_abs, edgecolor='k', width=0.8)
+  bottom_abs = [bottom_abs[b]+genus_abs[b] for b in range(len(bottom_abs))]
+handles.reverse()
+plt.sca(ax1)
+plt.xticks(x, kraken_options, rotation=90)
+plt.xlim([-0.5, 5.5]), plt.ylim([0,100])
+plt.ylabel('Relative abundance (%)')
+plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1), ncol=6)
+
+plt.sca(ax2)
+plt.xticks(x, kraken_options, rotation=90)
+plt.xlim([-0.5, 5.5])
+plt.semilogy()
+plt.ylabel('Number of reads')
+
+#plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+If we now show just those above 2% abundance:
+```{python, results='hide', fig.keep='all'}
+import random
+from matplotlib.patches import Patch
+
+genus_rem = all_bacteria_genus[all_bacteria_genus.max(axis=1) >= 2]
+
+plt.figure(figsize=(20,20))
+ax1 = plt.subplot(211)
+ax2 = plt.subplot(212)
+
+colormap = mpl.cm.get_cmap('hot', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=12)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+colors = [m.to_rgba(a) for a in range(12)]
+
+genera = list(genus_rem.index.values)
+genera.reverse()
+
+bottom, bottom_abs = [0]*6, [0]*6
+x = [a for a in range(6)]
+handles = []
+
+for gen in range(len(genera)):
+  genus = genus_rem.loc[genera[gen], :].values
+  ax1.bar(x, genus, color=colors[gen], bottom=bottom, edgecolor='k', width=0.8)
+  bottom = [bottom[b]+genus[b] for b in range(len(bottom))]
+  handles.append(Patch(facecolor=colors[gen], edgecolor='k', label=genera[gen]))
+
+  genus_abs = all_bacteria_genus_reads.loc[genera[gen], :].values
+  ax2.bar(x, genus_abs, color=colors[gen], bottom=bottom_abs, edgecolor='k', width=0.8)
+  bottom_abs = [bottom_abs[b]+genus_abs[b] for b in range(len(bottom_abs))]
+handles.reverse()
+plt.sca(ax1)
+plt.xticks(x, kraken_options, rotation=90)
+plt.xlim([-0.5, 5.5]), plt.ylim([0,100])
+plt.ylabel('Relative abundance (%)')
+plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1))
+
+plt.sca(ax2)
+plt.xticks(x, kraken_options, rotation=90)
+plt.xlabel('Kraken confidence')
+plt.xlim([-0.5, 5.5])
+plt.semilogy()
+plt.ylabel('Number of reads')
+
+#plt.tight_layout()
+plt.show()
+```
+
+So we can see that for the confidence values of 0 and 1 we have a consistent mixture of genera that are all very low relative abundance, but the mid-values are overtaken by Herminiimonas. But we have a very small number of reads overall.
+
+### Classify with RefSeq Complete {.tabset}
+
+I started running this like this and it's using a lot of memory, so splitting into 10 files
+```{bash, eval=FALSE}
+sudo cp -r /home/shared/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ /scratch/ramdisk/
+
+mkdir kraken2_refseq
+mkdir kraken2_refseq/times
+mkdir kraken2_refseq/kraken2_outraw
+mkdir kraken2_refseq/kraken2_kreport
+
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {1} --output kraken2_refseq/kraken2_outraw/{1/.}.{2}.kraken.txt --report kraken2_refseq/kraken2_kreport/{1/.}.{2}.kreport --confidence {2}) 2> kraken2_refseq/times/time_{1/.}_{2}_.txt' ::: human_genome_chunks.fasta ::: 0 0.2 0.4 0.6 0.8 1
+```
+
+Split:
+```{bash, eval=FALSE}
+#split -n 10 --numeric-suffixes human_genome_chunks.fasta human_genome_chunks_part #-> this led to the file formats not being right because some of the headers were taken without the sequences
+split -l 250000000 --numeric-suffixes human_genome_chunks.fasta human_genome_chunks_part
+for i in human_genome_chunks_part* ; do mv $i $i.fasta ; done
+```
+Just splitting to 10 files gave some of the split files starting with the sequence rather than the ID. If we split based on the number of lines that each file should have then still some files started with the sequence.
+So will need to script this:
+```{python, eval=FALSE}
+import os 
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+import subprocess
+
+def split_file(file, parts):
+  records = SeqIO.parse(file, "fasta")
+  count, part, new_file = 0, 1, []
+  fn = file.replace('.fasta', '')
+  for record in records:
+    new_file.append(record)
+    count += 1
+    if count == 60000000:
+      SeqIO.write(new_file, fn+'_'+str(part)+'.fasta', "fasta")
+      count, new_file = 0, []
+      part += 1
+  return
+
+file = 'human_genome_chunks.fasta'
+split_file(file, 10)
+```
+
+So this gives 10 files with the file name: human_genome_chunks_*.fasta
+
+Now run:
+```{bash, eval=FALSE}
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 24 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {1} --output kraken2_refseq/kraken2_outraw/{1/.}.{2}.kraken.txt --report kraken2_refseq/kraken2_kreport/{1/.}.{2}.kreport --confidence {2}) 2> kraken2_refseq/times/time_{1/.}_{2}_.txt' ::: human_genome_chunks_*.fasta ::: 0 0.2 0.4 0.6 0.8 1
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_refseq/kraken2_kreport/*.kreport
+```
+
+#### Time to run
+
+```{python, results='hide', fig.keep='all'}
+import os
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import csv
+
+time_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/hu_ref/kraken2_refseq/times/'
+time_files = os.listdir(time_folder)
+
+kraken_options = [0, 0.2, 0.4, 0.6, 0.8, 1]
+
+all_times, all_ram = [], []
+
+plt.figure(figsize=(12,5))
+ax1 = plt.subplot(121)
+ax2 = plt.subplot(122)
+colormap = mpl.cm.get_cmap('winter', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=7)
+m1 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+colors_20 = [m1.to_rgba(a) for a in range(8)]
+shapes_20 = ['o', 's', '^', '*', '1', 'p', '>', '<', 'v', '+', 'X']*2
+
+kraken_time, kraken_ram = [], []
+for k in range(len(kraken_options)):
+  kraken = kraken_options[k]
+  #if kraken != 0: continue
+  this_time, this_ram = 0, []
+  for a in range(len(time_files)):
+    fn = time_files[a].split('chunks_')[1].split('_')[1]
+    if fn == str(kraken):
+          with open(time_folder+time_files[a], 'rU') as f:
+            for row in f:
+              if 'User time' in row or 'System time' in row:
+                this_time += float(row.split(': ')[1])
+              if 'Maximum resident set size' in row:
+                ram = float(row.split(': ')[1])/1000000
+          this_ram.append(ram)
+  kraken_time.append(this_time/60)
+  kraken_ram.append(max(this_ram))
+ax1.bar(kraken_options, kraken_time, color=colors_20[:len(kraken_options)], edgecolor='k', width=0.18)
+line = ax2.bar(kraken_options, kraken_ram, color=colors_20[:len(kraken_options)], edgecolor='k', width=0.18)
+
+plt.sca(ax1)
+plt.ylabel('Time (seconds)')
+plt.xlabel('Kraken confidence')
+plt.sca(ax2)
+plt.xlabel('Kraken confidence')
+plt.ylabel('Maximum RAM usage (GB)')
+
+plt.tight_layout()
+plt.show()
+```
+
+#### Import data
+
+```{python, results='hide', fig.keep='all'}
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+
+folder_name = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/confidence_testing/hu_ref/kraken2_refseq/kraken2_kreport/'
+results_folder = os.listdir(folder_name)
+bracken = [result for result in results_folder if result[-8:] == '.bracken']
+kreport = [result for result in results_folder if result[-15:] == 'bracken.kreport']
+
+sp_dict, sp_dom_dict = {}, {}
+keep_levels = ['D', 'P', 'C', 'O', 'F', 'G', 'S']
+for result in kreport:
+  result = pd.read_csv(folder_name+result, sep='\t')
+  result = result.rename(columns={'100.00':'perc', list(result.columns)[1]:'N', '0':'N', 'R':'level', '1':'taxid', 'root':'classification'})
+  result = pd.DataFrame(result.loc[:, ['level', 'classification']])
+  current = {}
+  for lvl in keep_levels: current[lvl] = lvl
+  for i in result.index.values:
+    line = result.loc[i, :].values
+    line[1] = line[1].lstrip()
+    if line[0] not in keep_levels: continue
+    current[line[0]] = line[1]
+    if line[0] == 'S': 
+      if line[1] in sp_dict: continue
+      tax = ''
+      for level in current: 
+        if level == 'S': continue
+        if level != 'D': tax += ';'
+        tax += level.lower()+'__'+current[level]
+      sp_dict[line[1]] = tax
+      sp_dom_dict[line[1]] = tax.split(';')[0]
+      
+all_output = []
+for koption in kraken_options:
+    this_conf = []
+    for brack in bracken:
+        name = brack.split('chunks_')[1]
+        name = name.split('.')
+        if name[2].isnumeric():
+          conf = float(name[1]+'.'+name[2])
+        else:
+          conf = int(name[1])
+        if conf == koption:
+          result = pd.read_csv(folder_name+brack, sep='\t', header=0, index_col=0)
+          result = result.loc[:, ['new_est_reads', 'fraction_total_reads']]
+          if isinstance(this_conf, list):
+            this_conf = result
+          else:
+            this_conf = pd.concat([result, this_conf])
+            this_conf = this_conf.groupby(by=this_conf.index, axis=0).sum()
+    all_output.append(this_conf)
+```
+
+#### Domain-level classifications
+
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(5,5))
+ax1 = plt.subplot(111)
+
+labels, names = [], []
+colors = {'d__Eukaryota':'#01418A', 'd__Bacteria':'#AF0109'}
+for c in range(len(kraken_options)):
+    this_output = pd.DataFrame(all_output[c])
+    this_output = this_output.rename(index=sp_dom_dict)
+    this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+    bottom = 0
+    print(this_output)
+    for ind in this_output.index.values[::-1]:
+      val = this_output.loc[ind, 'new_est_reads']
+      line = ax1.bar(kraken_options[c], val, bottom=bottom, width=0.18, edgecolor='k', color=colors[ind])
+      bottom += val
+      if len(labels) < 2: labels.append(line), names.append(ind)
+plt.ylim([10, 1000000000])
+plt.semilogy()
+plt.xlim([-0.1, 1.1])
+plt.ylabel('Number of reads')
+plt.legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+plt.tight_layout()
+plt.show()
+```
+
+#### Bacterial reads
+
+```{python, results='hide', fig.keep='all'}
+import matplotlib as mpl
+
+plt.figure(figsize=(6,5))
+ax1 = plt.subplot(111)
+
+this_set = []
+for c in range(len(kraken_options)):
+  this_output = pd.DataFrame(all_output[c])
+  this_output = this_output.rename(index=sp_dom_dict)
+  this_output = this_output.groupby(by=this_output.index, axis=0).sum()
+  try:
+    this_set.append(this_output.loc['d__Bacteria', 'new_est_reads'])
+  except:
+    this_set.append(0)
+
+ax1.plot(kraken_options, this_set, 'o-', markeredgecolor='k')
+print(this_set)
+
+#plt.semilogy()
+plt.ylabel('Number of reads'), plt.xlabel('Kraken confidence parameter')
+plt.xticks(kraken_options)
+
+plt.tight_layout()
+plt.show()
+```
+At a confidence parameter of 0.6 we have 19 reads.
+
+#### Bacteria stacked bar
+
+Get bacteria:
+```{python}
+
+for b in range(len(all_output)):
+    sample_name = str(kraken_options[b])
+    sample_table = all_output[b]
+    sample_table['species'] = sample_table.index.values
+    sample_table = sample_table.rename(index=sp_dom_dict)
+    try:
+      sample_table = pd.DataFrame(sample_table.loc['d__Bacteria', :])
+      sample_table = pd.DataFrame(sample_table.set_index('species').loc[:, 'new_est_reads'])
+      if b == 0:
+        all_bacteria_reads = pd.DataFrame(sample_table.rename(columns={'new_est_reads':sample_name}))
+      else:
+        all_bacteria_reads = pd.concat([all_bacteria_reads, sample_table.rename(columns={'new_est_reads':sample_name})]).fillna(value=0)
+    except:
+      no_bacteria = True
+
+all_bacteria_reads = all_bacteria_reads.groupby(by=all_bacteria_reads.index, axis=0).sum()
+all_bacteria_percent = all_bacteria_reads.divide(all_bacteria_reads.sum(axis=0), axis=1).multiply(100)
+
+genus = {}
+species = list(all_bacteria_percent.index.values)
+for sp in species:
+  genus[sp] = sp.split(' ')[0]
+
+all_bacteria_genus = all_bacteria_percent.rename(index=genus)
+all_bacteria_genus = all_bacteria_genus.groupby(by=all_bacteria_genus.index).sum()
+
+all_bacteria_genus_reads = all_bacteria_reads.rename(index=genus)
+all_bacteria_genus_reads = all_bacteria_genus_reads.groupby(by=all_bacteria_genus_reads.index).sum()
+```
+
+If we keep all bacteria, we have 11 species and 9 genera, so I'm plotting all of them. 
+
+```{python, results='hide', fig.keep='all'}
+import random
+from matplotlib.patches import Patch
+
+genus_rem = pd.DataFrame(all_bacteria_genus)
+
+plt.figure(figsize=(20,20))
+ax1 = plt.subplot(211)
+ax2 = plt.subplot(212)
+
+colormap = mpl.cm.get_cmap('hot', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=12)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+colors = [m.to_rgba(a) for a in range(12)]
+
+genera = list(genus_rem.index.values)
+genera.reverse()
+
+bottom, bottom_abs = [0]*3, [0]*3
+x = [a for a in range(3)]
+handles = []
+
+for gen in range(len(genera)):
+  genus = genus_rem.loc[genera[gen], :].values
+  ax1.bar(x, genus, color=colors[gen], bottom=bottom, edgecolor='k', width=0.8)
+  bottom = [bottom[b]+genus[b] for b in range(len(bottom))]
+  handles.append(Patch(facecolor=colors[gen], edgecolor='k', label=genera[gen]))
+  
+  genus_abs = all_bacteria_genus_reads.loc[genera[gen], :].values
+  ax2.bar(x, genus_abs, color=colors[gen], bottom=bottom_abs, edgecolor='k', width=0.8)
+  bottom_abs = [bottom_abs[b]+genus_abs[b] for b in range(len(bottom_abs))]
+handles.reverse()
+plt.sca(ax1)
+#plt.xticks(x, kraken_options, rotation=90)
+plt.xticks([])
+plt.xlim([-0.5, 2.5]), plt.ylim([0,100])
+plt.ylabel('Relative abundance (%)')
+plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1))
+
+plt.sca(ax2)
+plt.xticks(x, kraken_options, rotation=90)
+plt.xlim([-0.5, 2.5])
+#plt.semilogy()
+plt.ylim([0, 1000])
+plt.ylabel('Number of reads')
+
+#plt.tight_layout()
+plt.show()
+```
+
+### Kneaddata/Bowtie2
+
+```{bash, eval=FALSE}
+
+```
+
+Look at removing low complexity sequences using dustmasker
+
+### Kneaddata + classify with GTDB
+
+
+### Kneaddata + classify with RefSeq Complete
+

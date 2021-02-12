@@ -1,0 +1,1245 @@
+---
+title: Atlantic PATH IBD analysis
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+---
+
+```{R, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(phyloseq)
+library(microbiome)
+library(philr)
+library(ape)
+library(dplyr)
+library(exactRankTests)
+library(ggplot2)
+library(ggnewscale)
+library(knitr)
+library(metacoder)
+library(microbiome)
+library(nlme)
+library(philr)
+library(phyloseq)
+library(reticulate)
+library(vegan)
+library(compositions)
+```
+
+```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+import numpy as np
+import os
+import pandas as pd
+import math
+import matplotlib.pyplot as plt
+from scipy.cluster import hierarchy
+import matplotlib as mpl
+from matplotlib_venn import venn2
+import csv
+from matplotlib.patches import Patch
+import pickle
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+
+save_path = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/analysis/'
+
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    if dist_met != False:
+      similarities = distance.cdist(X_true, X_true, dist_met)
+    else:
+      similarities = df
+      X_true = similarities.iloc[0:].values
+      similarities = np.nan_to_num(similarities)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+
+def get_diversity(diversity, sample):
+    '''
+    function to calculate a range of different diversity metrics
+    It takes as input:
+        - diversity (the name of the diversity metric we want, can be 'Simpsons', 'Shannon', 'Richness', 'Evenness', 'Maximum' (Maximum is not a diversity metric, the function will just return the maximum abundance value given in sample)
+        - sample (a list of abundance values that should correspond to one sample)
+    Returns:
+        - The diversity index for the individual sample
+    '''
+    for a in range(len(sample)):
+        sample[a] = float(sample[a])
+    total = sum(sample)
+    if diversity == 'Simpsons':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)**2
+        simpsons = 1-(sum(sample))
+        return simpsons
+    elif diversity == 'Shannon':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)
+            if sample[b] != 0:
+                sample[b] = -(sample[b] * (np.log(sample[b])))
+        shannon = sum(sample)
+        return shannon
+    elif diversity == 'Richness':
+        rich = 0
+        for b in range(len(sample)):
+            if sample[b] != 0:
+                rich += 1
+        return rich
+    elif diversity == 'Evenness':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)
+            if sample[b] != 0:
+                sample[b] = -(sample[b] * (np.log(sample[b])))
+        shannon = sum(sample)
+        rich = 0
+        for b in range(len(sample)):
+            if sample[b] != 0:
+                rich += 1
+        even = shannon/(np.log(rich))
+        return even
+    elif diversity == 'Maximum':
+        ma = (max(sample)/total)*100
+        return ma
+    return
+```
+
+# QIIME2 processing {.tabset}
+
+## Initial quality checks
+```{bash, eval=FALSE}
+cd Future_IBD_samples
+mkdir fastqc_Previous_Seqd/
+mkdir fastqc_Run376
+mkdir fastqc_Run377
+fastqc -t 4 Previous_Seqd/*fastq.gz -o fastqc_Previous_Seqd/
+fastqc -t 4 Run376/*fastq.gz -o fastqc_Run376/
+fastqc -t 4 Run377/*fastq.gz -o fastqc_Run377/
+multiqc fastqc_Previous_Seqd/ -f
+mv multiqc_report.html multiqc_report_Previous_Seqd.html
+rm -r multiqc_data/
+multiqc fastqc_Run376/ -f
+mv multiqc_report.html multiqc_report_Run376.html
+rm -r multiqc_data/
+multiqc fastqc_Run377/ -f
+mv multiqc_report.html multiqc_report_Run377.html
+rm -r multiqc_data/
+
+cd ..
+cd other_IBD
+
+mkdir fastqc_Plate10102440/
+mkdir fastqc_redos/
+mkdir fastqc_Run218/
+mkdir fastqc_Run223/
+mkdir fastqc_Run225/
+mkdir fastqc_Run232/
+fastqc -t 4 rawdata_Plate10102440/*fastq.gz -o fastqc_Plate10102440/
+fastqc -t 4 rawdata_redos/*fastq.gz -o fastqc_redos/
+fastqc -t 4 rawdata_Run218/*fastq.gz -o fastqc_Run218/
+fastqc -t 4 rawdata_Run223/*fastq.gz -o fastqc_Run223/
+fastqc -t 4 rawdata_Run225/*fastq.gz -o fastqc_Run225/
+fastqc -t 4 rawdata_Run232/*fastq.gz -o fastqc_Run232/
+multiqc fastqc_Plate10102440/ -f
+mv multiqc_report.html multiqc_report_Plate10102440.html
+rm -r multiqc_data/
+multiqc fastqc_redos/ -f
+mv multiqc_report.html multiqc_report_redos.html
+rm -r multiqc_data/
+multiqc fastqc_Run218/ -f
+mv multiqc_report.html multiqc_report_Run218.html
+rm -r multiqc_data/
+multiqc fastqc_Run223/ -f
+mv multiqc_report.html multiqc_report_Run223.html
+rm -r multiqc_data/
+multiqc fastqc_Run225/ -f
+mv multiqc_report.html multiqc_report_Run225.html
+rm -r multiqc_data/
+multiqc fastqc_Run232/ -f
+mv multiqc_report.html multiqc_report_Run232.html
+rm -r multiqc_data/
+```
+
+## Import and summarize
+```{bash, eval=FALSE}
+cd Future_IBD_samples
+
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path Previous_Seqd/ \
+  --output-path reads_previous_seqd.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+qiime demux summarize \
+  --i-data reads_previous_seqd.qza  \
+  --o-visualization summary_reads_previous_seqd.qzv
+  
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path Run376/ \
+  --output-path reads_Run376.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+qiime demux summarize \
+  --i-data reads_Run376.qza  \
+  --o-visualization summary_reads_Run376.qzv
+  
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path Run377/ \
+  --output-path reads_Run377.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+qiime demux summarize \
+  --i-data reads_Run377.qza  \
+  --o-visualization summary_reads_Run377.qzv
+
+cd ..
+cd other_IBD
+
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path rawdata_Plate10102440/ \
+  --output-path reads_Plate10102440.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+qiime demux summarize \
+  --i-data reads_Plate10102440.qza  \
+  --o-visualization summary_reads_Plate10102440.qzv
+  
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path rawdata_redos/ \
+  --output-path reads_redos.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+qiime demux summarize \
+  --i-data reads_redos.qza  \
+  --o-visualization summary_reads_redos.qzv
+
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path rawdata_Run218/ \
+  --output-path reads_Run218.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+qiime demux summarize \
+  --i-data reads_Run218.qza  \
+  --o-visualization summary_reads_Run218.qzv
+
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path rawdata_Run223/ \
+  --output-path reads_Run223.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+qiime demux summarize \
+  --i-data reads_Run223.qza  \
+  --o-visualization summary_reads_Run223.qzv
+
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path rawdata_Run225/ \
+  --output-path reads_Run225.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+qiime demux summarize \
+  --i-data reads_Run225.qza  \
+  --o-visualization summary_reads_Run225.qzv
+
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path rawdata_Run232/ \
+  --output-path reads_Run232.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+qiime demux summarize \
+  --i-data reads_Run232.qza  \
+  --o-visualization summary_reads_Run232.qzv
+```
+
+## Cutadapt V4V5
+```{bash, eval=FALSE}
+#Decided to just move all samples/processing files to individual directories for each run so that the commands didn't need to be changed each time. These are each of the directories (they will be combined after DADA2):
+Future_IBD_samples/previous_seqd_summary
+Future_IBD_samples/Run376_processing
+Future_IBD_samples/Run377_processing
+other_IBD/Plate10102440_processing
+other_IBD/redos_processing
+other_IBD/Run218_processing
+other_IBD/Run223_processing
+other_IBD/Run225_processing
+other_IBD/Run232_processing
+
+qiime cutadapt trim-paired \
+  --i-demultiplexed-sequences reads.qza \
+  --p-cores 8 \
+  --p-front-f GTGYCAGCMGCCGCGGTAA \
+  --p-front-r CCGYCAATTYMTTTRAGTTT \
+  --p-discard-untrimmed \
+  --p-no-indels \
+  --o-trimmed-sequences trimmed_reads.qza
+
+qiime demux summarize \
+  --i-data trimmed_reads.qza  \
+  --o-visualization summary_trimmed_reads.qzv
+```
+
+## DADA2
+```{bash, eval=FALSE}
+mkdir dada2_out
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs trimmed_reads.qza \
+  --p-trunc-len-f 260 \
+  --p-trunc-len-r 160 \
+  --p-max-ee-f 2 \
+  --p-max-ee-r 2 \
+  --p-n-threads 8 \
+  --o-table dada2_out/table.qza \
+  --o-representative-sequences dada2_out/representative_sequences.qza \
+  --o-denoising-stats dada2_out/stats.qza
+  
+qiime metadata tabulate \
+  --m-input-file dada2_out/stats.qza \
+  --o-visualization stats_dada2_out.qzv
+  
+qiime feature-table summarize \
+  --i-table dada2_out/table.qza  \
+  --o-visualization summary_dada2_out.qzv
+```
+
+## Merge tables
+```{bash, eval=FALSE}
+qiime feature-table merge \
+  --i-tables Future_IBD_samples/previous_seqd_processing/dada2_out/table.qza \
+  --i-tables Future_IBD_samples/Run376_processing/dada2_out/table.qza \
+  --i-tables Future_IBD_samples/Run377_processing/dada2_out/table.qza \
+  --i-tables other_IBD/Plate10102440_processing/dada2_out/table.qza \
+  --i-tables other_IBD/redos_processing/dada2_out/table.qza \
+  --i-tables other_IBD/Run218_processing/dada2_out/table.qza \
+  --i-tables other_IBD/Run223_processing/dada2_out/table.qza \
+  --i-tables other_IBD/Run225_processing/dada2_out/table.qza \
+  --i-tables other_IBD/Run232_processing/dada2_out/table.qza \
+  --o-merged-table merged_table.qza
+  
+qiime feature-table merge-seqs \
+  --i-data Future_IBD_samples/previous_seqd_processing/dada2_out/representative_sequences.qza \
+  --i-data Future_IBD_samples/Run376_processing/dada2_out/representative_sequences.qza \
+  --i-data Future_IBD_samples/Run377_processing/dada2_out/representative_sequences.qza \
+  --i-data other_IBD/Plate10102440_processing/dada2_out/representative_sequences.qza \
+  --i-data other_IBD/redos_processing/dada2_out/representative_sequences.qza \
+  --i-data other_IBD/Run218_processing/dada2_out/representative_sequences.qza \
+  --i-data other_IBD/Run223_processing/dada2_out/representative_sequences.qza \
+  --i-data other_IBD/Run225_processing/dada2_out/representative_sequences.qza \
+  --i-data other_IBD/Run232_processing/dada2_out/representative_sequences.qza \
+  --o-merged-data merged_representative_sequences.qza
+```
+
+## Classify
+```{bash, eval=FALSE}
+qiime feature-classifier classify-sklearn \
+  --i-reads merged_representative_sequences.qza \
+  --i-classifier /home/shared/taxa_classifiers/qiime2-2020.8_classifiers/silva-138-99-nb-classifier.qza \
+  --p-n-jobs 12 \
+  --output-dir taxa
+  
+qiime tools export \
+  --input-path taxa/classification.qza \
+  --output-path taxa
+```
+
+## Filter features
+```{bash, eval=FALSE}
+qiime feature-table filter-features \
+  --i-table merged_table.qza \
+  --p-min-frequency 5 \
+  --p-min-samples 1 \
+  --o-filtered-table table_filtered.qza
+  
+qiime feature-table summarize \
+  --i-table table_filtered.qza \
+  --o-visualization summary_table_filtered.qzv
+
+qiime taxa filter-table \
+  --i-table table_filtered.qza \
+  --i-taxonomy taxa/classification.qza \
+  --p-include d__ \
+  --p-exclude mitochondria,chloroplast \
+  --o-filtered-table table_filtered_contamination.qza
+  
+qiime feature-table summarize \
+  --i-table table_filtered_contamination.qza \
+  --o-visualization summary_table_filtered_contamination.qzv
+```
+
+## Filter
+*Not rarefying or removing samples with low numbers of reads*
+```{bash, eval=FALSE}
+qiime feature-table filter-seqs \
+  --i-data merged_representative_sequences.qza \
+  --i-table table_filtered_contamination.qza \
+  --o-filtered-data  representative_sequences_filtered_contamination.qza
+```
+
+## Insert sequences into tree
+```{bash, eval=FALSE}
+qiime fragment-insertion sepp \
+  --i-representative-sequences representative_sequences_filtered_contamination.qza \
+  --i-reference-database /home/robyn/tools/sepp/sepp-refs-silva-128.qza \
+  --o-tree insertion_tree.qza \
+  --o-placements insertion_placements.qza \
+  --p-threads 12
+```
+
+## Get rarefaction curves
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+  --i-table table_filtered_contamination.qza \
+  --p-max-depth 131945 \
+  --p-steps 20 \
+  --p-metrics 'observed_features' \
+  --o-visualization rarefaction_curves.qzv
+```
+Screenshot from the QIIME2 website:
+![](/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/rarefaction_curves.png)
+
+## Export all files
+```{bash, eval=FALSE}
+qiime tools export \
+  --input-path representative_sequences_filtered_contamination.qza \
+  --output-path exports
+  
+sed -i -e '1 s/Feature/#Feature/' -e '1 s/Taxon/taxonomy/' taxa/taxonomy.tsv
+
+qiime tools export \
+  --input-path table_filtered_contamination.qza \
+  --output-path exports
+  
+biom add-metadata \
+  -i exports/feature-table.biom \
+  -o exports/feature-table_w_tax.biom \
+  --observation-metadata-fp taxa/taxonomy.tsv \
+  --sc-separated taxonomy
+  
+biom convert \
+  -i exports/feature-table_w_tax.biom \
+  -o exports/feature-table_w_tax.txt \
+  --to-tsv \
+  --header-key taxonomy
+  
+qiime tools export \
+  --input-path insertion_tree.qza \
+  --output-path exports
+```
+
+# Basic summary {.tabset}
+
+No filtering low depth samples or removal of ASVs (aside from what was very low abundance in QIIME2).
+
+## Sort metadata
+
+Metadata is currently in three different tables: original, baseline and followup. Some of the variable names are the same between these, some are not. I've identified which match between them in the variable labels file, and have added a column with a new name for each. Now to add all of the metadata to a single file and check, adding only the data for samples that we actually have.
+```{python, results='hide', fig.keep='all', eval=FALSE}
+variable_labels = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/Metadata/sorting/variable_labels.csv', header=0)
+baseline_data = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/Metadata/sorting/baseline_data.csv', header=0)
+followup_data = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/Metadata/sorting/followup_data.csv', header=0)
+original_data = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/Metadata/sorting/original_data.csv', header=0)
+label_dict = {}
+
+for row in variable_labels.index.values:
+  followup, baseline, original, new = variable_labels.loc[row, ['variable_name_followup', 'variable_name_baseline', 'variable_name_original', 'new_name']].values
+  if isinstance(followup, str): label_dict[followup] = new
+  if isinstance(baseline, str): label_dict[baseline] = new
+  if isinstance(original, str): label_dict[original] = new
+
+new_labels = variable_labels.loc[:, 'new_name'].values
+baseline_data.rename(columns=label_dict, inplace=True)
+followup_data.rename(columns=label_dict, inplace=True)
+original_data.rename(columns=label_dict, inplace=True)
+datasets = [baseline_data, followup_data, original_data]
+
+variable_labels['BASELINE_VARIABLES'] = ''
+variable_labels['FOLLOWUP_VARIABLES'] = ''
+variable_labels['ORIGINAL_VARIABLES'] = ''
+dataset_names = ['BASELINE_VARIABLES', 'FOLLOWUP_VARIABLES', 'ORIGINAL_VARIABLES']
+variable_labels.set_index('new_name', inplace=True)
+
+for label in new_labels:
+  for d in range(len(datasets)):
+    data = datasets[d]
+    if label not in data.columns:
+      variable_labels.loc[label, dataset_names[d]] = 'Not in dataset'
+      continue
+    all_vals = list(data.loc[:, label])
+    all_vals = [str(val) for val in all_vals]
+    all_vals = set(all_vals)
+    this_variable = ''
+    for val in all_vals:
+      if this_variable != '': this_variable += ', '+str(val)
+      else: this_variable += str(val)
+    variable_labels.loc[label, dataset_names[d]] = this_variable
+
+variable_labels.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/Metadata/sorting/sorted_variable_labels.csv')
+
+baseline_data.loc[:, 'DATASET'] = 'baseline'
+followup_data.loc[:, 'DATASET'] = 'followup'
+original_data.loc[:, 'DATASET'] = 'original'
+
+new_columns = set(['DATASET']+list(new_labels))
+count = 0
+datasets = [baseline_data, followup_data, original_data]
+
+for data in datasets:
+  for col in new_columns:
+    if col not in data.columns:
+      data[col] = 'NA'
+  if count == 0:
+    combined_data = data.loc[:, new_columns].set_index('SALIVA')
+  else:
+    combined_data = pd.concat([combined_data, data.loc[:, new_columns].set_index('SALIVA')])
+  count += 1
+
+combined_data.to_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/Metadata/sorting/sorted_metadata.csv')
+```
+
+Get original fastq file names:
+```{python, eval=FALSE}
+import os
+import pickle
+
+folders = ['Plate10102440_processing', 'redos_processing', 'Run218_processing', 'Run223_processing', 'Run225_processing', 'Run232_processing']
+all_fastq = []
+for folder in folders:
+  contents = os.listdir(folder)
+  for file in contents:
+    if 'rawdata' in file:
+      fastq = os.listdir(folder+'/'+file)
+      all_fastq = all_fastq+fastq
+
+for f in range(len(all_fastq)):
+  all_fastq[f] = all_fastq[f].split('_')[0]
+  
+all_fastq = list(set(all_fastq))
+print(len(all_fastq))
+      
+with open('all_file_names.list', 'wb') as f:
+    pickle.dump(all_fastq, f)
+```
+
+## Import data
+
+Sort data (matching sample names between the feature table and reducing the metadata table to only include samples that are in the feature table):
+```{python, results='hide', fig.keep='all', eval=FALSE}
+metadata = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/Metadata/sorting/sorted_metadata.csv', header=0)
+#remove samples from extraction 16 and check they didn't have additional metadata
+metadata_16rem = metadata.loc[metadata.loc[:, 'EXTRACTION_NUMBER'] != 'Extraction.16'].set_index('SALIVA')
+metadata_16 = metadata.loc[metadata.loc[:, 'EXTRACTION_NUMBER'] == 'Extraction.16'].set_index('SALIVA')
+ex16_samples, columns = list(metadata_16.index.values), list(metadata_16.columns)
+for sample in ex16_samples:
+  for column in columns:
+    if metadata_16.loc[sample, column] != 'NA' and metadata_16.loc[sample, column] != 'nan':
+      if metadata_16rem.loc[sample, column] == 'NA' or metadata_16rem.loc[sample, column] == 'nan': metadata_16rem.loc[sample, column] = metadata_16.loc[sample, column]
+metadata = metadata_16rem.reset_index()
+
+#some of the sample names open as floats so we need to change this (we can't just covert to integers and then floats as some of them can't be due to hyphenated ends)
+metadata['SAMPLE_NAME_FT'] = metadata['SAMPLE_NAME_FT'].astype(str)
+for row in metadata.index.values:
+  if '.0' in metadata.loc[row, 'SAMPLE_NAME_FT']:
+    metadata.loc[row, 'SAMPLE_NAME_FT'] = str(int(float(metadata.loc[row, 'SAMPLE_NAME_FT'])))
+metadata = metadata.set_index('SALIVA')
+metadata.index = metadata.index.map(str)
+
+#check for duplicate saliva samples
+saliva, duplicates = [], []
+for row in list(metadata.index.values):
+  if row in saliva: duplicates.append(row)
+  else: saliva.append(row)
+
+#if the saliva samples don't have an associated sequenced sample, remove them from the metadata table, but first check whether there is additional metadata there.
+metadata = metadata.reset_index()
+not_keeping = []
+for duplicate in duplicates:
+  keep, not_keep = [], []
+  for row in metadata.index.values:
+    if metadata.loc[row, 'SALIVA'] == duplicate:
+      if metadata.loc[row, 'SAMPLE_NAME_FT'] == 'nan':
+        not_keeping.append(row), not_keep.append(row)
+      else:
+        keep.append(row)
+  if not_keep != []:
+    for nk in not_keep:
+      for column in columns:
+        if metadata.loc[nk, column] != 'NA' and metadata.loc[nk, column] != 'nan':
+          for k in keep:
+            if metadata.loc[k, column] == 'NA' or metadata.loc[k, column] == 'nan':
+              metadata.loc[k, column] = metadata.loc[nk, column]
+metadata = metadata.drop(not_keeping, axis=0)
+
+#Now remove those samples that aren't to do with IBD and rename those that are multiple cancers (including IBD) to only IBD
+metadata = metadata.set_index('SALIVA')
+keeping = []
+for row in list(metadata.index.values):
+  if not isinstance(metadata.loc[row, 'GROUP'], str):
+    if row != 'sterile-water': keeping.append(row)
+  elif 'IBD' in metadata.loc[row, 'GROUP']:
+    if metadata.loc[row, 'GROUP'] != 'IBD': metadata.loc[row, 'GROUP'] = 'IBD'
+    if row != 'sterile-water': keeping.append(row)
+metadata = metadata.loc[keeping, :]
+
+#drop any duplicates that have the same sample name and dataset name and check how many duplicates we have now
+metadata = metadata.drop_duplicates(subset=['SAMPLE_NAME_FT', 'DATASET'])
+if metadata.index.name != 'SALIVA': metadata = metadata.set_index('SALIVA')
+saliva, duplicates = [], []
+for row in list(metadata.index.values):
+  if row in saliva: duplicates.append(row)
+  else: saliva.append(row)
+
+#here we are checking the dataset, sample name, caseid and extraction number of each duplicate. If each instance of the duplicates caseid's are identical then these were resequenced versions of samples that didn't work well the first round, so we are keeping the sample names that have '-2' on the end. We have three samples that were sequenced in duplicate accidentally because AtPATH resent them, so here we are just adding 'dup' to the end, and this is also added to the appropriate samples in the feature table (basing this on the ones that aren't the same number of reads as in the first round of analysis). Apparently only one of these was duplicated in the feature table (probably QIIME2 did something with the samples that had the same name), so I've just removed the 'PS' from one of them so that they'll match the samples that don't have 'dup' on the end. If I decide to look at the duplicates at some point then I'll cross this bridge then.
+if metadata.index.name == 'SALIVA': metadata = metadata.reset_index()
+not_keeping = []
+for duplicate in duplicates:
+  r, dataset, sn, caseid, extract = [], [], [], [], []
+  for row in metadata.index.values:
+    if metadata.loc[row, 'SALIVA'] == duplicate:
+      r.append(row), dataset.append(metadata.loc[row, 'DATASET']), sn.append(metadata.loc[row, 'SAMPLE_NAME_FT']), caseid.append(metadata.loc[row, 'CASEID']), extract.append(metadata.loc[row, 'EXTRACTION_NUMBER'])
+  if caseid[0] == caseid[1]:
+    if '-2' not in sn[0]: not_keeping.append(r[0])
+    else: not_keeping.append(r[1])
+  else:
+    for e in range(len(extract)):
+      if extract[e] != 'Extraction.18':
+        not_keeping.append(r[e])
+metadata = metadata.drop(not_keeping, axis=0)
+metadata = metadata.loc[metadata.loc[:, 'GROUP'] == 'IBD']
+metadata = metadata.set_index('SALIVA')
+metadata.to_csv(save_path+'metadata_check.csv')
+metadata.index = metadata.index.map(str)
+
+#now get the feature table
+ft = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/exports/feature-table_w_tax.txt', index_col=0, header=0, sep='\t')
+ft.columns = ft.columns.map(str)
+
+#and check whether we have all of the samples from the metadata table in the feature table - some have two different names by splitting with '/', so I'm just taking the first of these and renaming the column in the metadata table.
+if metadata.index.name != 'SAMPLE_NAME_FT': metadata = metadata.reset_index().set_index('SAMPLE_NAME_FT')
+sample_rename = {}
+drop = []
+for sample in metadata.index.values:
+  if sample not in ft.columns:
+    if '/' in sample:
+      sample1 = sample.split(' /')[0]
+      sample_rename[sample] = sample1
+    else:
+      drop.append(sample)
+metadata = metadata.rename(index=sample_rename)
+metadata = metadata.drop(drop, axis=0)
+
+#now reducing the feature table to these samples
+ft = ft.loc[:, list(metadata.index.values)+['taxonomy']]
+
+#renaming the future IBD samples
+for sample in metadata.index.values:
+  if 'F' in metadata.loc[sample, 'CASEID']:
+    metadata.loc[sample, 'GROUP'] = 'FUTURE_IBD'
+
+#and saving the files
+metadata.to_csv(save_path+'metadata_reduced.csv')
+ft_reduced.to_csv(save_path+'ft_1_reduced_metadata.csv')
+```
+
+Apparently this still wasn't enough to make sure that all of the sample names were the same between the metadata table and the featrue table, so one final check:
+```{python, results='hide', fig.keep='all', eval=FALSE}
+metadata_fn = save_path+'metadata_reduced.csv'
+ft_fn = save_path+'ft_1_reduced_metadata.csv'
+metadata = pd.read_csv(metadata_fn, index_col=0, header=0)
+ft = pd.read_csv(ft_fn, index_col=0, header=0)
+
+samples_md, samples_ft, samples_keep = list(metadata.index.values), list(ft.columns), []
+not_md, not_ft = [], []
+for smd in samples_md:
+  if smd not in samples_ft:
+    not_md.append(smd)
+  else:
+    samples_keep.append(smd)
+for sft in samples_ft:
+  if sft not in samples_md:
+    not_ft.append(sft)
+
+metadata = metadata.loc[samples_keep, :]
+metadata['SDC_GENDER'] = metadata['SDC_GENDER'].astype(float)
+metadata['SDC_GENDER'] = metadata['SDC_GENDER'].astype(int)
+ft = ft.loc[:, samples_keep+['taxonomy']]
+metadata.to_csv(save_path+'metadata_reduced_ft.csv')
+ft.to_csv(save_path+'ft_2_reduced_metadata.csv')
+```
+
+## Summarise by metadata variables {.tabset}
+Show all samples, samples grouped by healthy/IBD/future IBD</br>
+Groups: </br>
+- IBD</br>
+- FUTURE_IBD</br>
+
+```{python, results='hide', fig.keep='all'}
+metadata_fn = save_path+'metadata_reduced_ft.csv'
+ft_fn = save_path+'ft_2_reduced_metadata.csv'
+```
+
+```{python, results='hide', fig.keep='all'}
+metadata = pd.read_csv(metadata_fn, index_col=0, header=0)
+metadata = metadata.reset_index().set_index('SALIVA')
+ft = pd.read_csv(ft_fn, index_col=0, header=0).drop('taxonomy', axis=1)
+metadata_group = metadata.set_index('GROUP')
+```
+
+### Gender
+
+```{python, results='hide', fig.keep='all'}
+def plot_two_category_discrete(category_dict, category, md, percent=False):
+  groups = list(set(md.index.values))
+  count = 0
+  plot, x, names, colors = [], [1, 2, 3.5, 4.5, 6.5, 7.5, 9, 10], [], ['b', 'r', 'b', 'r', 'b', 'r', 'b', 'r']
+  labels = ['Controls\nn=', 'Cases\nn=', 'Controls\nn=', 'Cases\nn=']
+  for group in groups:
+    md_group = pd.DataFrame(md.loc[group, [category, 'CASE_CONTROL']]).reset_index()
+    g1_case, g1_control, g2_case, g2_control = 0, 0, 0, 0
+    cats = [cat for cat in category_dict]
+    for row in md_group.index.values:
+      if md_group.loc[row, 'CASE_CONTROL'] == 0 and md_group.loc[row, category] == cats[0]:
+        g1_control += 1
+      elif md_group.loc[row, 'CASE_CONTROL'] == 1 and md_group.loc[row, category] == cats[0]:
+        g1_case += 1
+      elif md_group.loc[row, 'CASE_CONTROL'] == 0 and md_group.loc[row, category] == cats[1]:
+        g2_control += 1
+      elif md_group.loc[row, 'CASE_CONTROL'] == 1 and md_group.loc[row, category] == cats[1]:
+        g2_case += 1
+    if count == 0:
+      labels[1] += str(g1_case+g2_case)
+      labels[0] += str(g1_control+g2_control)
+    elif count == 1:
+      labels[3] += str(g1_case+g2_case)
+      labels[2] += str(g1_control+g2_control)
+    count += 1
+    if percent:
+      perc_g1_case, perc_g1_control, perc_g2_case, perc_g2_control = (g1_case/(g1_case+g2_case))*100, (g1_control/(g1_control+g2_control))*100, (g2_case/(g1_case+g2_case))*100, (g2_control/(g1_control+g2_control))*100
+      g1_case, g1_control, g2_case, g2_control = perc_g1_case, perc_g1_control, perc_g2_case, perc_g2_control
+    plot = plot+[g1_control, g2_control, g1_case, g2_case]
+    names = names+[category_dict[cats[0]], category_dict[cats[1]], category_dict[cats[0]], category_dict[cats[1]]]
+  ax1 = plt.subplot(111)
+  ax1.bar(x, plot, color=colors, edgecolor='k')
+  plt.xticks(x, names, rotation=90)
+  if percent:
+    ax1.set_ylabel('Percentage of group')
+  else:
+    ax1.set_ylabel('Number of participants')
+  text = [1.5, 4, 7, 9.5]
+  for a in range(len(text)):
+    ax1.text(text[a], -15, labels[a], ha='center', va='center')
+  text = [2.75, 8.25]
+  for g in range(len(groups)):
+    ax1.text(text[g], -20, groups[g], ha='center', fontweight='bold')
+  return
+
+plot_two_category_discrete({1:'Male', 2:'Female'}, 'SDC_GENDER', metadata_group, percent=True)
+plt.tight_layout()
+plt.show()
+```
+
+### Age
+
+```{python, results='hide', fig.keep='all'}
+def adjacent_values(vals, q1, q3):
+    upper_adjacent_value = q3 + (q3 - q1) * 1.5
+    upper_adjacent_value = np.clip(upper_adjacent_value, q3, vals[-1])
+
+    lower_adjacent_value = q1 - (q3 - q1) * 1.5
+    lower_adjacent_value = np.clip(lower_adjacent_value, vals[0], q1)
+    return lower_adjacent_value, upper_adjacent_value
+
+def add_lines(dt, num, ax):
+  quartile1, medians, quartile3 = np.percentile(dt, [25, 50, 75])
+  whiskers = adjacent_values(dt, quartile1, quartile3)
+  whiskersMin, whiskersMax = whiskers[0], whiskers[1]
+  inds = np.arange(num, num + 1)
+  
+  ax.scatter(inds, medians, marker='o', color='white', s=30, zorder=3)
+  ax.vlines(inds, quartile1, quartile3, color='k', linestyle='-', lw=5)
+  ax.vlines(inds, whiskersMin, whiskersMax, color='k', linestyle='-', lw=1)
+  return
+    
+def plot_two_category_continuous(category, md, ax=False):
+  groups = list(set(md.index.values))
+  x, names, colors = [1, 2, 3, 4], [], ['#CB4335', '#F1C40F', '#CB4335', '#F1C40F']
+  labels = ['Controls\nn=', 'Cases\nn=', 'Controls\nn=', 'Cases\nn=']
+  data = []
+  count = 0
+  for group in groups:
+    md_group = pd.DataFrame(md.loc[group, [category, 'CASE_CONTROL']]).reset_index()
+    case, control = [], []
+    for row in md_group.index.values:
+      if md_group.loc[row, 'CASE_CONTROL'] == 0:
+        control.append(md_group.loc[row, category])
+      elif md_group.loc[row, 'CASE_CONTROL'] == 1:
+        case.append(md_group.loc[row, category])
+    if count == 0:
+      labels[0] = labels[0]+str(len(control))
+      labels[1] = labels[1]+str(len(case))
+    else:
+      labels[2] = labels[2]+str(len(control))
+      labels[3] = labels[3]+str(len(case))
+    count += 1
+    data.append(control)
+    data.append(case)
+  if ax == False:
+    ax = plt.subplot(111)
+  parts = ax.violinplot(data, showmeans=False, showmedians=False, showextrema=False)
+  count = 0
+  for pc in parts['bodies']:
+    pc.set_facecolor(colors[count])
+    pc.set_edgecolor('black')
+    pc.set_alpha(1)
+    count += 1
+  for a in range(len(data)):
+    add_lines(data[a], a+1, ax)
+  plt.sca(ax)
+  plt.xticks(x, labels)
+  text = [0.225, 0.775]
+  for g in range(len(groups)):
+    ax.text(text[g], -0.15, groups[g], ha='center', fontweight='bold', transform=ax.transAxes)
+  return
+
+metadata_group = metadata_group.reset_index()
+for row in metadata_group.index.values:
+  if isinstance(metadata_group.loc[row, 'SDC_AGE_CALC'], float):
+    age = metadata_group.loc[row, 'SDC_AGE_CALC']
+    if np.isnan(age):
+      dob = int(metadata_group.loc[row, 'SDC_DOB'])
+      qx = int(metadata_group.loc[row, 'ADM_QX_COMPLETION'].split('/')[-1])
+      age = qx-dob
+      metadata_group.loc[row, 'SDC_AGE_CALC'] = age
+metadata_group = metadata_group.set_index('GROUP')
+
+plot_two_category_continuous('SDC_AGE_CALC', metadata_group)
+plt.ylabel('Age (at time of questionnaire)')
+plt.tight_layout()
+plt.show()
+```
+
+### Rarefaction curves
+
+Using the curves calculated by QIIME2 & saved to csv
+```{python, results='hide', fig.keep='all'}
+curves = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/rarefaction_curves_observed_features.csv', header=0, index_col=0)
+curves = curves.loc[ft.columns, :]
+col_names = curves.columns
+col_rename = {}
+for col in col_names:
+  col_rename[col] = col.split('_')[0].split('-')[1]
+curves = curves.rename(columns=col_rename)
+curves.columns = curves.columns.map(int)
+curves = curves.groupby(by=curves.columns, axis=1).mean()
+
+metadata = pd.read_csv(metadata_fn, index_col=0, header=0)
+
+groups, case_control = {}, {}
+for row in metadata.index.values:
+  groups[row] = metadata.loc[row, 'GROUP']
+  case_control[row] = metadata.loc[row, 'CASE_CONTROL']
+
+ax1 = plt.subplot(211)
+ax2 = plt.subplot(212)
+curves.transpose().plot(ax=ax1, legend=False)
+curves.transpose().plot(ax=ax2, legend=False)
+plt.sca(ax2)
+plt.xlim([-1000, 20000])
+plt.xlabel('Sequencing depth')
+plt.ylabel('Observed features')
+plt.sca(ax1)
+plt.ylabel('Observed features')
+plt.show()
+```
+
+### Number of reads
+
+Note that at this point no samples have been removed and the only ASVs that were removed were the ones that were present at less than 5 total reads.
+```{python, results='hide', fig.keep='all'}
+metadata = pd.read_csv(metadata_fn, index_col=0, header=0)
+filtering = [0, 2500, 5000, 10000]
+
+reads = ft.sum(axis=0)
+groups, case_control = {}, {}
+for row in metadata.index.values:
+  groups[row] = metadata.loc[row, 'GROUP']
+  case_control[row] = metadata.loc[row, 'CASE_CONTROL']
+metadata = metadata.reset_index().set_index('SALIVA')
+
+plt.figure(figsize=(10,10))
+axis = [plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)]
+titles = ['No filtering', 'Above 2,500 reads', 'Above 5,000 reads', 'Above 10,000 reads']
+for a in range(len(axis)):
+  reads_keeping = reads >= filtering[a]
+  ft_reduced = ft.loc[:, reads_keeping]
+  dropping = list(ft_reduced.index.values)
+  ft_reduced = ft_reduced.transpose()
+  ft_reduced['Reads'] = ft_reduced.sum(axis=1)
+  ft_reduced.drop(dropping, axis=1, inplace=True)
+  ft_reduced['GROUP'] = ''
+  ft_reduced['CASE_CONTROL'] = ''
+  for row in ft_reduced.index.values:
+    try:
+      ft_reduced.loc[row, 'GROUP'] = groups[row]
+      ft_reduced.loc[row, 'CASE_CONTROL'] = case_control[row]
+    except:
+      ft_reduced.loc[row, 'GROUP'] = groups[row.split('-')[0]]
+      ft_reduced.loc[row, 'CASE_CONTROL'] = case_control[row.split('-')[0]]
+  ft_reduced = ft_reduced.set_index('GROUP')
+  plot_two_category_continuous('Reads', ft_reduced, ax=axis[a])
+  axis[a].set_ylabel('Number of reads')
+  axis[a].set_title(titles[a], fontsize=14, fontweight='bold')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Number of ASVs
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(10,10))
+axis = [plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)]
+titles = ['No filtering', 'Above 2,500 reads', 'Above 5,000 reads', 'Above 10,000 reads']
+for a in range(len(axis)):
+  reads_keeping = reads >= filtering[a]
+  ft_reduced = ft.loc[:, reads_keeping]
+  dropping = list(ft_reduced.index.values)
+  rich = pd.DataFrame(ft_reduced)
+  rich[rich > 0] = 1
+  ft_reduced = ft_reduced.transpose()
+  ft_reduced['Diversity'] = rich.sum(axis=0)
+  ft_reduced.drop(dropping, axis=1, inplace=True)
+  ft_reduced['GROUP'] = ''
+  ft_reduced['CASE_CONTROL'] = ''
+  for row in ft_reduced.index.values:
+    try:
+      ft_reduced.loc[row, 'GROUP'] = groups[row]
+      ft_reduced.loc[row, 'CASE_CONTROL'] = case_control[row]
+    except:
+      ft_reduced.loc[row, 'GROUP'] = groups[row.split('-')[0]]
+      ft_reduced.loc[row, 'CASE_CONTROL'] = case_control[row.split('-')[0]]
+  ft_reduced = ft_reduced.set_index('GROUP')
+  plot_two_category_continuous('Diversity', ft_reduced, ax=axis[a])
+  axis[a].set_ylabel('Richness')
+  axis[a].set_title(titles[a], fontsize=14, fontweight='bold')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Shannon
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(10,10))
+axis = [plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)]
+titles = ['No filtering', 'Above 2,500 reads', 'Above 5,000 reads', 'Above 10,000 reads']
+for a in range(len(axis)):
+  reads_keeping = reads >= filtering[a]
+  ft_reduced = ft.loc[:, reads_keeping]
+  dropping = list(ft_reduced.index.values)
+  div = []
+  for column in ft_reduced.columns:
+    sample = list(ft_reduced.loc[:, column])
+    div.append(get_diversity('Shannon', sample))
+  ft_reduced = ft_reduced.transpose()
+  ft_reduced['Diversity'] = div
+  ft_reduced.drop(dropping, axis=1, inplace=True)
+  ft_reduced['GROUP'] = ''
+  ft_reduced['CASE_CONTROL'] = ''
+  for row in ft_reduced.index.values:
+    try:
+      ft_reduced.loc[row, 'GROUP'] = groups[row]
+      ft_reduced.loc[row, 'CASE_CONTROL'] = case_control[row]
+    except:
+      ft_reduced.loc[row, 'GROUP'] = groups[row.split('-')[0]]
+      ft_reduced.loc[row, 'CASE_CONTROL'] = case_control[row.split('-')[0]]
+  ft_reduced = ft_reduced.set_index('GROUP')
+  plot_two_category_continuous('Diversity', ft_reduced, ax=axis[a])
+  axis[a].set_ylabel('Shannon')
+  axis[a].set_title(titles[a], fontsize=14, fontweight='bold')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Simpsons
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(10,10))
+axis = [plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)]
+titles = ['No filtering', 'Above 2,500 reads', 'Above 5,000 reads', 'Above 10,000 reads']
+for a in range(len(axis)):
+  reads_keeping = reads >= filtering[a]
+  ft_reduced = ft.loc[:, reads_keeping]
+  dropping = list(ft_reduced.index.values)
+  div = []
+  for column in ft_reduced.columns:
+    sample = list(ft_reduced.loc[:, column])
+    div.append(get_diversity('Simpsons', sample))
+  ft_reduced = ft_reduced.transpose()
+  ft_reduced['Diversity'] = div
+  ft_reduced.drop(dropping, axis=1, inplace=True)
+  ft_reduced['GROUP'] = ''
+  ft_reduced['CASE_CONTROL'] = ''
+  for row in ft_reduced.index.values:
+    try:
+      ft_reduced.loc[row, 'GROUP'] = groups[row]
+      ft_reduced.loc[row, 'CASE_CONTROL'] = case_control[row]
+    except:
+      ft_reduced.loc[row, 'GROUP'] = groups[row.split('-')[0]]
+      ft_reduced.loc[row, 'CASE_CONTROL'] = case_control[row.split('-')[0]]
+  ft_reduced = ft_reduced.set_index('GROUP')
+  plot_two_category_continuous('Diversity', ft_reduced, ax=axis[a])
+  axis[a].set_ylabel('Simpsons')
+  axis[a].set_title(titles[a], fontsize=14, fontweight='bold')
+
+plt.tight_layout()
+plt.show()
+```
+
+# Ordination plots
+
+## Without filtering {.tabset}
+
+Not normalised at all or had any low depth samples removed.</br>
+Reduce the number of features in the feature table (so we don't run out of memory calculating PHILR distances) - and use this for all plots so they're all based on the same number of features:
+```{python}
+ft_sum = ft.sum(axis=0)
+print('Median=', np.median(ft_sum))
+limit = np.median(ft_sum)/1000
+print('Limit=', limit)
+ft_red = ft[ft.max(axis=1) > limit]
+#ft_red2 = ft[ft.max(axis=1) > limit*10]
+print('Original features=', ft.shape[0])
+print('Reduced features=', ft_red.shape[0])
+```
+We have a median of 27457 reads per sample, so we'll divide this by 1000, giving a limit of 27.457 reads. This takes us from 27,674 features to 6,667.</br>
+</br>
+
+### Bray-Curtis absolute
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+metadata = pd.read_csv(metadata_fn, index_col=0, header=0)
+
+if os.path.exists(save_path+'npos_bc_abs.df'):
+  with open(save_path+'npos_bc_abs.df', 'rb') as f: npos_bc_abs = pickle.load(f)
+else:
+  pos, npos_bc_abs, stress = transform_for_NMDS(ft_red.transpose())
+  with open(save_path+'npos_bc_abs.df', 'wb') as f: pickle.dump(npos_bc_abs, f)
+
+npos = npos_bc_abs
+plt.figure(figsize=(6,6))
+colors = {'IBD0':'#1A5276', 'IBD1':'#E67E22', 'FUTURE_IBD0':'#5499C7', 'FUTURE_IBD1':'#F7DC6F'}
+labels = ['IBD controls', 'IBD cases', 'Future IBD controls', 'Future IBD cases']
+sample_names = list(ft_red.columns)
+for a in range(len(sample_names)):
+  try: g1, g2 = metadata.loc[sample_names[a], 'GROUP'], metadata.loc[sample_names[a], 'CASE_CONTROL']
+  except: g1, g2 = metadata.loc[sample_names[a].split('-')[0], 'GROUP'], metadata.loc[sample_names[a].split('-')[0], 'CASE_CONTROL']
+  if not isinstance(g1, str): g1, g2 = g1[0], g2[0]
+  color = colors[str(g1)+str(g2)]
+  plt.scatter(npos[a,0], npos[a,1], color=color, edgecolor='k', alpha=0.8)
+plt.xlabel('NMDS1'), plt.ylabel('NMDS2')
+handles = [Patch(facecolor=colors[color], edgecolor='k', label='') for color in colors]
+plt.legend(handles=handles, labels=labels, loc='upper left')
+```
+
+### Bray-Curtis relative abundance
+
+Converted from read counts to relative abundance
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+metadata = pd.read_csv(metadata_fn, index_col=0, header=0)
+ft_ra = ft_red.divide(ft_red.sum(axis=0), axis=1).multiply(100)
+
+if os.path.exists(save_path+'npos_bc_ra.df'):
+  with open(save_path+'npos_bc_ra.df', 'rb') as f: npos_bc_ra = pickle.load(f)
+else:
+  pos, npos_bc_ra, stress = transform_for_NMDS(ft_ra.transpose())
+  with open(save_path+'npos_bc_ra.df', 'wb') as f: pickle.dump(npos_bc_ra, f)
+  
+npos = npos_bc_ra
+plt.figure(figsize=(6,6))
+colors = {'IBD0':'#1A5276', 'IBD1':'#E67E22', 'FUTURE_IBD0':'#5499C7', 'FUTURE_IBD1':'#F7DC6F'}
+labels = ['IBD controls', 'IBD cases', 'Future IBD controls', 'Future IBD cases']
+sample_names = list(ft_ra.columns)
+for a in range(len(sample_names)):
+  g1, g2 = metadata.loc[sample_names[a], 'GROUP'], metadata.loc[sample_names[a], 'CASE_CONTROL']
+  if not isinstance(g1, str): g1, g2 = g1[0], g2[0]
+  color = colors[str(g1)+str(g2)]
+  plt.scatter(npos[a,0], npos[a,1], color=color, edgecolor='k', alpha=0.8)
+plt.xlabel('NMDS1'), plt.ylabel('NMDS2')
+handles = [Patch(facecolor=colors[color], edgecolor='k', label='') for color in colors]
+plt.legend(handles=handles, labels=labels, loc='upper left')
+```
+
+### Aitchison distance (Euclidean on CLR)
+
+Convert to CLR:
+```{R, results='hide', fig.keep='all', eval=FALSE}
+asv_table <- py$ft_red
+asv_table = as.matrix(asv_table)
+phy_tree <- read_tree("/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/exports/tree.nwk")
+    
+#Convert these to phyloseq objects
+ASV = otu_table(asv_table, taxa_are_rows = TRUE)
+physeq = phyloseq(ASV,phy_tree)
+
+physeq_clr <- microbiome::transform(physeq, "clr")
+write_phyloseq(physeq_clr, type="all", path=py$save_path)
+```
+
+Plot:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+metadata = pd.read_csv(metadata_fn, index_col=0, header=0)
+ft_clr_fn = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/analysis/otu_table.csv'
+ft_clr = pd.read_csv(ft_clr_fn, index_col=0, header=0)
+
+if os.path.exists(save_path+'npos_eu_clr.df'):
+  with open(save_path+'npos_eu_clr.df', 'rb') as f: npos_eu_clr = pickle.load(f)
+else:
+  pos, npos_eu_clr, stress = transform_for_NMDS(ft_clr.transpose(), dist_met='euclidean')
+  with open(save_path+'npos_eu_clr.df', 'wb') as f: pickle.dump(npos_eu_clr, f)
+
+npos = npos_eu_clr
+
+plt.figure(figsize=(6,6))
+colors = {'IBD0':'#1A5276', 'IBD1':'#E67E22', 'FUTURE_IBD0':'#5499C7', 'FUTURE_IBD1':'#F7DC6F'}
+labels = ['IBD controls', 'IBD cases', 'Future IBD controls', 'Future IBD cases']
+sample_names = list(ft_clr.columns)
+for a in range(len(sample_names)):
+  g1, g2 = metadata.loc[sample_names[a], 'GROUP'], metadata.loc[sample_names[a], 'CASE_CONTROL']
+  if not isinstance(g1, str): g1, g2 = g1[0], g2[0]
+  color = colors[str(g1)+str(g2)]
+  plt.scatter(npos[a,0], npos[a,1], color=color, edgecolor='k', alpha=0.8)
+plt.xlabel('NMDS1'), plt.ylabel('NMDS2')
+handles = [Patch(facecolor=colors[color], edgecolor='k', label='') for color in colors]
+plt.legend(handles=handles, labels=labels, loc='upper left')
+```
+
+### PHILR distance
+
+Make taxonomy matrix:
+```{python, results='hide', fig.keep='all'}
+tax = pd.DataFrame(pd.read_csv(ft_fn, index_col=0, header=0).loc[:, 'taxonomy'])
+levels = ["Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"]
+for level in levels:
+  tax[level] = ''
+
+for row in tax.index.values:
+  this_tax = tax.loc[row, 'taxonomy']
+  this_tax = this_tax.split(';')
+  for a in range(len(this_tax)):
+    tax.loc[row, levels[a]] = this_tax[a].split('__')[1]
+
+tax = tax.drop('taxonomy', axis=1)
+tax = tax.reset_index()
+tax = tax.rename(columns={'#OTU ID':'OTUID'})
+```
+
+Calculate:
+```{R, results='hide', fig.keep='all', eval=FALSE}
+asv_table <- py$ft_red
+asv_table = as.matrix(asv_table)
+taxmat <- py$tax
+taxmat2 <- taxmat[,-1]
+rownames(taxmat2) <- taxmat[,1]
+sampledata <- py$metadata
+sampledata <- sample_data(sampledata)
+colnames(taxmat2) <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+phy_tree <- read_tree("/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/exports/tree.nwk")
+    
+#Convert these to phyloseq objects
+ASV = otu_table(asv_table, taxa_are_rows = TRUE)
+TAX = tax_table(taxmat2)
+taxa_names(TAX) <- taxmat[,1]
+physeq = phyloseq(ASV,phy_tree,TAX, sampledata)
+
+is.rooted(phy_tree(physeq))
+is.binary.tree(phy_tree(physeq))
+phy_tree(physeq) <- makeNodeLabel(phy_tree(physeq), method="number", prefix='n')
+name.balance(phy_tree(physeq), tax_table(physeq), 'n1')
+    
+#Add pseudocount 
+physeq <- transform_sample_counts(physeq, function(x) x+1)
+    
+#now the philr part
+otu.table <- t(otu_table(physeq))
+tree <- phy_tree(physeq)
+metadata <- sample_data(physeq)
+tax <- tax_table(physeq)
+physeq.philr <- philr(otu.table, tree, part.weights='enorm.x.gm.counts', ilr.weights='blw.sqrt')
+physeq.philr.mat = as.matrix(physeq.philr)
+    
+#now calculate the distance
+physeq.dist <- dist(physeq.philr, method="euclidean")
+physeq.dist.mat <- as.matrix(physeq.dist)
+write.csv(physeq.dist.mat, paste(py$save_path, "philr_distance.csv", sep=""))
+```
+
+Plot:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+metadata = pd.read_csv(metadata_fn, index_col=0, header=0)
+ft_philr_fn = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/analysis/philr_distance.csv'
+ft_philr = pd.read_csv(ft_philr_fn, header=0, index_col=0)
+
+if os.path.exists(save_path+'npos_philr.df'):
+  with open(save_path+'npos_philr.df', 'rb') as f: npos_philr = pickle.load(f)
+else:
+  pos, npos_philr, stress = transform_for_NMDS(ft_philr.transpose(), dist_met=False)
+  with open(save_path+'npos_philr.df', 'wb') as f: pickle.dump(npos_philr, f)
+  
+npos = npos_philr
+plt.figure(figsize=(6,6))
+colors = {'IBD0':'#1A5276', 'IBD1':'#E67E22', 'FUTURE_IBD0':'#5499C7', 'FUTURE_IBD1':'#F7DC6F'}
+labels = ['IBD controls', 'IBD cases', 'Future IBD controls', 'Future IBD cases']
+sample_names = list(ft_philr.columns)
+for a in range(len(sample_names)):
+  g1, g2 = metadata.loc[sample_names[a], 'GROUP'], metadata.loc[sample_names[a], 'CASE_CONTROL']
+  if not isinstance(g1, str): g1, g2 = g1[0], g2[0]
+  color = colors[str(g1)+str(g2)]
+  plt.scatter(npos[a,0], npos[a,1], color=color, edgecolor='k', alpha=0.8)
+plt.xlabel('NMDS1'), plt.ylabel('NMDS2')
+handles = [Patch(facecolor=colors[color], edgecolor='k', label='') for color in colors]
+plt.legend(handles=handles, labels=labels, loc='upper left')
+```
+
+## Taxa bar plots
+Just regular bar plots at different levels
+
+## Heat maps
+Showing samples ordered by some distance metric and abundance of taxa (genus level?) within the samples
+
+# Differential abundance
+ANCOM
+
+# Random Forests {.tabset}
+Run for lots of different categories and at different levels
+
+## Healthy/Future IBD/IBD
+
+## Age
+
+## Sex
+
+## Diet
+
+## etc
+
+# Combine differential abundance and random forest

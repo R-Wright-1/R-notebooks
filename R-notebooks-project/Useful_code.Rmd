@@ -22,8 +22,7 @@ ls -1 | wc -l
 
 Show certain number of files in directory (default is 10):
 ```{bash, eval=FALSE}
-ls | head
-ls | head -n 20
+ls | head -20
 ```
 
 List size of files:
@@ -38,9 +37,15 @@ gunzip raw_data/*gz
 tar -xf filename
 ```
 
+Zip files:
+```{bash, eval=FALSE}
+gzip file_to_zip
+tar -czvf name-of-archive.tar.gz /path/to/directory-or-file
+```
+
 Using rsync to copy files:
 ```{bash, eval=FALSE}
-rsync --partial --progress W0.tar.bz2 robyn@vulcan.pharmacology.dal.ca:/home/robyn/
+rsync --partial --progress W0.tar.bz2 user@server.address
 ```
 
 Connect to server:
@@ -53,7 +58,7 @@ ssh robyn@vulcan.pharmacology.dal.ca
 
 Connect RStudio to server:
 ```{bash, eval=FALSE}
- ssh -N -L 8787:vulcan.pharmacology.dal.ca:8787 robyn@vulcan.pharmacology.dal.ca
+ ssh -N -L 8787:server.address:8787 user@server.address
 ```
 Go to [this link](http://localhost:8787/). Login details are robyn and server password
 
@@ -65,6 +70,26 @@ cat folder/*.fasta > combined.fasta
 [Server backup](https://github.com/LangilleLab/lab_information/wiki/Backups-and-Extra-Storage):
 ```{bash, eval=FALSE}
 ln -s fungi_metagenome/processing/ robyn_backup/fungi_metagenome/
+```
+
+Edit text document:
+`vi $file_name` enter text editor
+`i` enter insert mode - make any changes
+`esc` exit insert mode
+`:x` save changes and exit document
+`:q` exit document (no changes made)
+`:q!` exit document without saving changes
+
+## BLAST
+
+Make database:
+```{bash, eval=FALSE}
+makeblastdb -in TARA_004_DCM_0.22-1.6.16SrRNA.miTAG.fna -dbtype nucl
+```
+
+BLAST:
+```{bash, eval=FALSE}
+blastn -db TARA/test_blast/TARA_004_DCM_0.22-1.6.16SrRNA.miTAG.fna -query Bacillus_16S.fna -out bacillus_test.txt -perc_identity 90 -outfmt 6
 ```
 
 ## PICRUSt2
@@ -116,6 +141,8 @@ rm qiime2-2020.2-py36-linux-conda.yml
 
 
 ## QIIME2/amplicon standard analysis {.tabset}
+
+Based on the [standard workflow here](https://github.com/LangilleLab/microbiome_helper/wiki/Amplicon-SOP-v2-(qiime2-2020.2)).
 
 ### Quality control of reads
 
@@ -404,6 +431,36 @@ Download reads (need an accession list .txt file for this):
 prefetch --option-file Dussud\ Hudec\ et\ al.\ 2018/SRR_Acc_List.txt #adding the -X option allows adding a maximum file size (in kb) - this will be important for metagenomes
 #these files by default get added to an ncbi/sra/ folder in your home directory and can then be moved wherever you like
 for i in SRA/* ; do fastq-dump -split-files --gzip $i ; done
+```
+
+## Downloading from anywhere
+
+```{bash, eval=FALSE}
+wget link_to_reads
+```
+
+Downloading from PGPC with check to see what kind of file it is first (and whether it already is downloaded):
+```{python, eval=FALSE}
+import os
+import subprocess
+
+participants = ['PGPC_0001', 'PGPC_0002', 'PGPC_0003', 'PGPC_0004', 'PGPC_0005']
+
+for a in range(0, 250):
+    try:
+        output = subprocess.check_output("wget --spider --server-response https://personalgenomes.ca/v1/public/files/"+str(a)+"/download 2>&1 | grep -i content-disposition", shell=True)
+        output = str(output)
+        fn = output.split('"')[1]
+        print(fn)
+        if 'md5sum' not in output and 'fastq.gz' in output:
+            for participant in participants:
+                if participant in output:
+                    if not os.path.exists(fn):
+                        os.system("wget --content-disposition https://personalgenomes.ca/v1/public/files/"+str(a)+"/download")
+                    else:
+                        print('Already had '+fn)
+    except:
+        print('Didnt work '+str(a))
 ```
 
 ## Prokka
@@ -929,6 +986,11 @@ Get rows or columns with only those above a certain value included:
 df = df[df.max(axis=1) > 1]
 ```
 
+Replace all numbers above a certain value:
+```{python, eval=FALSE}
+df[df > 9] = 11
+```
+
 Get a list of column or index names:
 ```{python, eval=FALSE}
 columns = list(df.columns)
@@ -978,6 +1040,11 @@ sums = db.sum(axis=0)
 Get relative abundance:
 ```{python, eval=FALSE}
 db = db.divide(db.sum(axis=0), axis=1).multiply(100)
+```
+
+Sort by the value in a row:
+```{python, eval=FALSE}
+
 ```
 
 ## Stats

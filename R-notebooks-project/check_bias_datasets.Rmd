@@ -1,0 +1,56 @@
+---
+title: "Check datasets"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+```{python}
+import pandas as pd
+import os
+
+folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/correcting_bias/datasets_correcting_bias/'
+dataset = sorted(os.listdir(folder))
+
+for data in dataset:
+  if '.csv' in data:
+    print('\n', data)
+    data = pd.read_csv(folder+data, index_col=0, header=0, sep=',')
+    count1 = 0
+    for taxa1 in data.index.values:
+      count2 = 0
+      if taxa1 == 'Dore':
+        print(taxa1)
+```
+
+```{python}
+import pandas
+import os
+
+folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/correcting_bias/datasets_gibbons_2/'
+subfolders = os.listdir(folder)
+print(subfolders)
+
+for sbf in subfolders:
+  if sbf != 'baxter': continue
+  if '.' not in sbf:
+    shared = pd.read_csv(folder+sbf+'/shared.txt', sep='\t', header=0, index_col=1)
+    taxonomy = pd.read_csv(folder+sbf+'/taxonomy.txt', sep='\t', header=0, index_col=0)
+    shared = pd.DataFrame(shared.drop(['label', 'numOtus'], axis=1).transpose())
+    tax_dict = {}
+    count = 0
+    for otu in taxonomy.index.values:
+      tax = taxonomy.loc[otu, 'Taxonomy']
+      tax = tax.split(';')[-1]
+      tax = tax.split('(')[0]
+      tax_dict[otu] = tax
+      count += 1
+    shared = shared.rename(index=tax_dict)
+    #print(shared)
+```

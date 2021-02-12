@@ -152,6 +152,30 @@ plt.tight_layout()
 plt.show()
 ```
 
+### Figure for poster
+```{python, basic_4b, cache=TRUE, results='hide',fig.keep='all', eval=FALSE}
+#6
+plt.figure(figsize=(10, 1.5))
+ax1, ax2 = plt.subplot(121), plt.subplot(122)
+plt.sca(ax1)
+plt.bar(list(reads.index.values), reads.loc[:, 'Percentage'].values, color=colors, edgecolor='k')
+plt.xticks(list(reads.index.values), ['B', 'B', 'B', 'B', 'B', 'S', 'S', 'S', 'S', 'Bu', 'Bu', 'Bu', 'Bu', 'SE', 'SE', 'SE', 'SE', 'BE', 'BE', 'BE', 'BE'], fontsize=8)
+plt.ylabel('Reads kept (%)')
+plt.xlim([0.5,20.5])
+
+plt.sca(ax2)
+plt.bar(list(reads.index.values), reads.loc[:, 'cat_reads'].values, color=colors, edgecolor='k')
+plt.semilogy()
+plt.xticks(list(reads.index.values), ['B', 'B', 'B', 'B', 'B', 'S', 'S', 'S', 'S', 'Bu', 'Bu', 'Bu', 'Bu', 'SE', 'SE', 'SE', 'SE', 'BE', 'BE', 'BE', 'BE'], fontsize=8)
+plt.ylabel('Log reads\nremaining')
+color_ac = {'Blood':'(B)', 'Saliva':'(S)', 'Buccal':'(Bu)', 'Saliva_euk':'(SE)', 'Buccal_euk':'(BE)'}
+handles = [Patch(facecolor=colors_dict[color], edgecolor='k', label=color+' '+color_ac[color]) for color in colors_dict]
+ax2.legend(handles=handles, bbox_to_anchor=(1.0,1.05))
+plt.xlim([0.5,20.5])
+plt.tight_layout()
+plt.savefig('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Conferences/CSH/reads.png', dpi=600, bbox_inches='tight')
+```
+
 ### Table of reads remaining
 ```{python, basic_5, cache=TRUE}
 #7
@@ -431,6 +455,38 @@ plt.tight_layout()
 plt.show()
 ```
 
+### Kingdom for poster
+
+```{python, tax_humann_6_p, cache=TRUE, results='hide',fig.keep='all'}
+#14
+plt.figure(figsize=(5,3))
+ax1 = plt.subplot2grid((20,1), (0,0), rowspan=18)
+ax2 = plt.subplot2grid((20,1), (18,0), rowspan=2)
+plt.sca(ax1)
+plt.bar(list(taxa.columns.values), taxa.loc['k__Viruses', :].values, color='#C70039', edgecolor='k')
+plt.bar(list(taxa.columns.values), taxa.loc['k__Bacteria', :].values, bottom=taxa.loc['k__Viruses', :].values, color='#026B81', edgecolor='k')
+#plt.xticks(list(taxa.columns.values), sample_names, rotation=90)
+empty = []
+
+short = ['B', 'B', 'B', 'B', 'B', 'S', 'S', 'S', 'S', 'Bu', 'Bu', 'Bu', 'Bu', 'SE', 'SE', 'SE', 'SE', 'BE', 'BE', 'BE', 'BE']
+
+for x in range(0,21):
+    empty.append('')
+    ax2.bar(x, 1, color=colors[x], width=1, edgecolor='k')
+    ax2.text(x, 0.5, short[x], ha='center', va='center', color='w', fontsize=8)
+plt.xticks([])
+plt.xlim([0.5,20.5])
+plt.ylabel('Relative abundance (%)')
+
+handles = [Patch(facecolor='#C70039', edgecolor='k', label='Viruses'), Patch(facecolor='#026B81', edgecolor='k', label='Bacteria')]
+ax1.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1.05))
+ax2.legend(handles=[Patch(facecolor=colors_dict[color], edgecolor='k', label=color+' '+color_ac[color]) for color in colors_dict], loc='upper left', bbox_to_anchor=(1, 8))
+plt.sca(ax2)
+plt.xticks([]), plt.yticks([]), plt.xlim(0.5, 20.5)
+plt.tight_layout()
+plt.savefig('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Conferences/CSH/metaphlan_kingdom.png', dpi=600, bbox_inches='tight')
+```
+
 ### Genus
 
 Here the relative abundance of taxa calulated by MetaPhlAn2 are plotted at the Genus level for each sample. Genera with below 1% maximum relative abundance have been removed.
@@ -461,6 +517,8 @@ plt.legend(handles=handles, bbox_to_anchor=(1,1.05), ncol=2)
 plt.tight_layout()
 plt.show()
 ```
+
+### 
 
 ## MetaPhlAn3 taxonomy nMDS plots {.tabset}
 
@@ -825,6 +883,87 @@ Note that the 'From paper' plot uses the classifications given in the original p
 #18
 get_summary_reads(kraken_all_db)
 plt.show()
+```
+
+### Percent classified for poster
+
+```{python cache=TRUE, tax_kraken_2_p, results='hide'}
+x1 = [x for x in range(21)]
+tax_plotting = ['Archaea', 'Bacteria', 'Eukaryota', 'Viruses', 'unclassified']
+color_plotting = ['#EDBB99', '#5499C7', '#7DCEA0', '#F7DC6F', '#CCD1D1']
+tax_paper = ['Bacteria', 'Eukaryota', 'Other', 'Unclassified']
+color_paper = ['#5499C7', '#7DCEA0', '#CD6155', '#CCD1D1']
+from_paper = pd.read_csv('/Users/robynwright/Documents/OneDrive/Github/Human_metagenome/kraken2/from_paper.csv', header=0, index_col=0)
+
+def get_summary_reads(kraken_db):
+    fig = plt.figure(figsize=(8,5))
+    ax1, ax2, ax3, ax4 = plt.subplot2grid((34,2), (0,0), rowspan=14), plt.subplot2grid((34,2), (0,1), rowspan=14), plt.subplot2grid((34,2), (18,0), rowspan=14), plt.subplot2grid((34,2), (18,1), rowspan=14)
+    ax5, ax6 = plt.subplot2grid((34,2), (32,0), rowspan=2), plt.subplot2grid((34,2), (32,1), rowspan=2)
+    ax1.set_title('Minikraken V1\n(without human genome)'), ax2.set_title('Minikraken V2\n(with human genome)'), ax3.set_title('GTDB'), ax4.set_title('RefSeq Complete V93')
+    ax_plot = [ax3, ax3, ax1, ax1, ax2, ax2, ax4, ax4]
+    x_plot = [x1, x2, x1, x2, x1, x2, x1, x2]
+    axs = [ax1, ax2, ax3, ax4]
+    for s in range(len(samples)):
+        if s == 0:
+            continue
+        bottom = 0
+    for db in range(len(kraken_db)):
+        if db % 2 != 0: continue
+        ax_using = ax_plot[db]
+        x = x_plot[db]
+        db = kraken_db[db]
+        handles = []
+        for tax in range(len(tax_plotting)):
+            handles.append(Patch(facecolor=color_plotting[tax], edgecolor='k', label=tax_plotting[tax]))
+            tax = tax_plotting[tax]
+            if tax not in list(db.index.values):
+                db.loc[tax] = [0 for i in range(db.shape[1])]
+        handles.append(Patch(facecolor=color_paper[2], edgecolor='k', label='Other'))
+        db = db.fillna(value=0)
+        for s in range(len(samples)):
+            bottom = 0
+            for t in range(len(tax_plotting)):
+                prop = db.loc[tax_plotting[t], samples[s]+'_reads']
+                cat = total_reads.loc[samples[s], 'cat_reads']
+                prop = (prop/cat)*100
+                if tax_plotting[t] == 'Bacteria':
+                  print(prop)
+                ax_using.bar(x[s], prop, bottom=bottom, color=color_plotting[t], edgecolor='k', width=0.8)
+                bottom += prop
+    ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1.05))
+    ax4.legend(handles=[Patch(facecolor=colors_dict[color], edgecolor='k', label=color+' '+color_ac[color]) for color in colors_dict], loc='upper left', bbox_to_anchor=(1, 1.4))
+    for ax in axs:
+        plt.sca(ax)
+        plt.xticks(x1, ['' for x in x1])
+        plt.ylim([0, 100])
+        plt.xlim([0.5, 20.5])
+    """
+    for x in range(0,21):
+      ax5.bar(x, 1, color=colors[x], width=1, edgecolor='k')
+      ax6.bar(x, 1, color=colors[x], width=1, edgecolor='k')
+      ax5.text(x, 0.5, short[x], ha='center', va='center', color='w', fontsize=6)
+      ax6.text(x, 0.5, short[x], ha='center', va='center', color='w', fontsize=6)
+    """
+    ax5.set_xticks([]), ax5.set_yticks([]), ax6.set_xticks([]), ax6.set_yticks([]), ax5.set_xlim([0.5, 20.5]), ax6.set_xlim([0.5, 20.5])
+    ax1.set_ylabel('Classified (%)'), ax3.set_ylabel('Classified (%)')
+    #plt.tight_layout()
+    return
+
+get_summary_reads(kraken_all_db)
+plt.savefig('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Conferences/CSH/kraken_classified.png', dpi=600, bbox_inches='tight')
+```
+```{python}
+plt.figure(figsize=(0.5,5.49))
+ax1 = plt.subplot(111, frameon=False)
+plt.xticks([]), plt.yticks([])
+x = 20
+for color in colors_dict:
+  for a in range(4):
+    ax1.bar(1, 1, bottom=x, width=1, color=colors_dict[color], edgecolor='k')
+    ax1.text(1, x+0.5, color_ac[color].replace('(', '').replace(')', ''), color='w', ha='center', va='center')
+    x -= 1
+plt.xticks([]), plt.yticks([])
+plt.savefig('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Conferences/CSH/vertical_legend.png', dpi=600, bbox_inches='tight')
 ```
 
 ### Summary of number of bacteria
@@ -1330,6 +1469,85 @@ Relative abundance is scaled within each genus, with yellow being highest in abu
 
 ```{python, tax_kraken_47, results='hide', cache=TRUE}
 plot_heatmap(new_genus, ancom[0])
+```
+
+### For poster presentation
+```{python, tax_kraken_48, result='hide', cache=TRUE}
+minikrakenv1 = [['Burkholderia', ['hb', 'hb', 'hb', '']], ['Enterobacter', ['hb', '', '', '']], ['Klebsiella', ['hb', '', '', '']], ['Paracoccus', ['hb', '', '', '']], ['Pasteurella', ['hb', '', '', '']], ['Prevotella', ['lb', '', 'lb', '']], ['Rothia', ['lb', 'lb', 'lb', 'lb']], ['Staphylococcus', ['hb', '', '', '']], ['Streptococcus', ['', 'lb', '', 'lb']]]
+
+minikrakenv2 = [['Campylobacter', ['', '', 'lb', '']], ['Capnocytophaga', ['lb', '', '', '']], ['Clostridium', ['hb', '', '', '']], ['Klebsiella', ['hb', 'hb', 'hb', 'hb']], ['Mogibacterium', ['lb', '', '', '']], ['Prevotella', ['lb', '', 'lb', '']], ['Pseudomonas', ['hb', '', 'hb', '']], ['Rothia', ['lb', 'lb', '', 'lb']], ['Streptococcus', ['', 'lb', '', 'lb']], ['Streptomyces', ['hb', 'hb', 'hb', 'hb']], ['Veillonella', ['lb', '', '', '']]]
+
+gtdb = [['Acinetobacter', ['', '', 'hb', 'hb']], ['Actinomyces', ['', 'lb','', '']], ['Mycobacterium', ['hb', '', '', '']], ['Pauljensenia', ['lb', '', '', '']], ['Poseidonibacter', ['', '', '', 'hb']], ['Prevotella', ['lb', 'lb', 'lb', '']], ['Psychrobacter', ['hb', '', '', '']], ['Rothia', ['', 'lb', '', '']], ['Streptococcus', ['lb', 'lb', 'lb', '']], ['Veillonella', ['lb', 'lb', 'lb', '']]]
+
+rsc = [['Actinomyces', ['', 'lb', '', 'lb']], ['Bordetella', ['hb', '', '', '']], ['Enterococcus', ['hb', '', '', '']], ['Escherichia', ['hb', '', '', '']], ['Klebsiella', ['hb', '', '', '']], ['Mesorhizobium', ['hb', '', '', '']], ['Mycobacterium', ['hb', 'hb', 'hb', '']], ['Prevotella', ['lb', 'lb', 'lb', '']], ['Pseudomonas', ['hb', 'hb', 'hb', '']], ['Rothia', ['', 'lb', '', '']], ['Salmonella', ['hb', '', '', '']], ['Staphylococcus', ['hb', '', '', '']], ['Streptococcus', ['', 'lb', '', '']],['Veillonella', ['lb', 'lb', 'lb', 'lb']]]
+
+databases = [minikrakenv1, minikrakenv2, gtdb, rsc]
+all_taxa = []
+
+for db in databases:
+  for a in range(len(db)):
+    if db[a][0] not in all_taxa:
+      all_taxa.append(db[a][0])
+all_taxa = sorted(all_taxa)
+
+fig = plt.figure(figsize=(10,6))
+ax1 = plt.subplot2grid((1,30), (0,1), colspan=28, frameon=False)
+ax2 = plt.subplot2grid((1,30), (0,0), colspan=1, frameon=False)
+
+x = 3
+y = [[19, 18, 17, 16, ], [14, 13, 12, 11], [9, 8, 7, 6], [4, 3, 2, 1]]
+short = ['S', 'Bu', 'SE', 'BE']
+colors = {'hb':'#900C3F', 'lb':'#055AB3', '':'#C3C3C3'}
+allx = []
+
+comp = [['#016F85', '#ff8300', '#02aed1', '#FFC300'], ['#016F85', '#ff8300', '#02aed1', '#FFC300'], ['#016F85', '#ff8300', '#02aed1', '#FFC300'], ['#016F85', '#ff8300', '#02aed1', '#FFC300']]
+for a in range(len(y)):
+  for b in range(len(y[a])):
+    ax2.bar(1, 1, bottom=y[a][b], color=comp[a][b], edgecolor='k', width=1)
+    ax2.text(1, y[a][b]+0.5, short[b], ha='center', va='center', color='w', fontsize=8)
+plt.sca(ax2)
+plt.xlim([0.5, 1.6]), plt.ylim([0.9, 20])
+
+plt.sca(ax1)
+for taxa in all_taxa:
+  for d in range(len(databases)):
+    db = databases[d]
+    added = False
+    for a in range(len(db)):
+      if db[a][0] == taxa:
+        added = True
+        for b in range(len(db[a][1])):
+          ax1.bar(x, 1, bottom=y[d][b], color=colors[db[a][1][b]], width=1, edgecolor='k')
+    if added == False:
+      for b in range(4):
+        ax1.bar(x, 1, bottom=y[d][b], color=colors[''], width=1, edgecolor='k')
+  allx.append(x)
+  x += 1
+
+plt.sca(ax2)
+ax2.xaxis.set_ticks_position('top')
+plt.xticks([1], ['Blood $vs$'], rotation=90)
+plt.yticks([18, 13, 8, 3], ['MiniKraken V1', 'MiniKraken V2', 'GTDB', 'RefSeq Complete V93'], rotation=90, va='center', ha='center', fontweight='bold')
+
+ax2.legend(handles=[Patch(facecolor=colors_dict[color], edgecolor='k', label=color+' '+color_ac[color]) for color in colors_dict][1:], loc='upper left', bbox_to_anchor=(-0.5,0), ncol=2)
+ax1.legend(handles=[Patch(facecolor=colors['hb'], edgecolor='k', label='More abundant in blood'), Patch(facecolor=colors['lb'], edgecolor='k', label='Less abundant in blood'), Patch(facecolor=colors[''], edgecolor='k', label='No significant difference')], loc='upper left', bbox_to_anchor=(0.38, 0), ncol=2)
+
+plt.sca(ax1)
+plt.yticks([])
+plt.xlim([2.5, x-0.4]), plt.ylim([0.9, 20])
+ax1.xaxis.set_ticks_position('top')
+for a in range(len(all_taxa)):
+  all_taxa[a] = '$'+all_taxa[a]+'$'
+plt.xticks(allx, all_taxa, rotation=90)
+plt.tight_layout()
+plt.savefig('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Conferences/CSH/significant_differences.png', dpi=600, bbox_inches='tight')
+```
+
+```{python}
+ax1 = plt.subplot(frameon=False)
+plt.xticks([]), plt.yticks([])
+ax1.legend(handles=[Patch(facecolor=colors_dict[color], edgecolor='k', label=color+' '+color_ac[color]) for color in colors_dict], loc='best', ncol=5)
+plt.savefig('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/Conferences/CSH/legend.png', dpi=600, bbox_inches='tight')
 ```
 
 ## Kraken2 intersection between databases {.tabset}

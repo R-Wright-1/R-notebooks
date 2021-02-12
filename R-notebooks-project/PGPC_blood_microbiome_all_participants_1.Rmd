@@ -1,0 +1,1542 @@
+---
+title: "PGPC blood microbiome all participants"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+---
+
+```{R, results='hide', fig.keep='all', message=FALSE, include=FALSE, eval=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(phyloseq)
+```
+
+```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+import numpy as np
+import os
+import pandas as pd
+import math
+import matplotlib.pyplot as plt
+from scipy.cluster import hierarchy
+import matplotlib as mpl
+from matplotlib_venn import venn2
+import csv
+from matplotlib.patches import Patch
+import pickle
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+
+save_path = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/output/'
+analysis = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/'
+
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+```
+
+# Run everything through kneaddata {.tabset}
+
+## Get participant download links
+
+Run this script on vulcan, it will save a pickle dictionary containing links for all files related to each participant:
+```{python, eval=FALSE}
+import os
+import subprocess
+import pickle
+
+participants = {}
+participant_numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 61, 62, 67, 69, 70, 71, 72, 73, 74, 76, 77, 78, 82, 87]
+for num in participant_numbers:
+  participants['PGPC_'+str(num).zfill(4)] = []
+
+for a in range(0, 3000):
+  try:
+      link = "https://personalgenomes.ca/v1/public/files/"+str(a)+"/download"
+      output = subprocess.check_output("wget --spider --server-response "+link+" 2>&1 | grep -i content-disposition", shell=True)
+      output = str(output)
+      fn = output.split('"')[1]
+      if 'md5sum' not in output and 'fastq.gz' in output:
+        for participant in participants:
+          if participant in fn:
+            participants[participant] = participants[participant]+[link]
+    except:
+        do_nothing = True
+        
+with open('participant_links.dict', 'wb') as f:
+    pickle.dump(participants, f)
+```
+
+This didn't get all of them because where most are e.g. 0001, some of them are e.g. 54 or 51, so checking the file names didn't work for all. Modifying the script to get the rest:
+```{python, eval=FALSE}
+import os
+import subprocess
+import pickle
+
+with open('participant_links.dict', 'rb') as f:
+    participants = pickle.load(f)
+
+already_saved = []
+for participant in participants:
+  if participants[participant] != []:
+    already_saved = already_saved+participants[participant]
+all_links = {}
+
+for a in range(0, 3000):
+  try:
+      link = "https://personalgenomes.ca/v1/public/files/"+str(a)+"/download"
+      if link in already_saved: continue
+      output = subprocess.check_output("wget --spider --server-response "+link+" 2>&1 | grep -i content-disposition", shell=True)
+      output = str(output)
+      fn = output.split('"')[1]
+      if 'md5sum' not in output and 'fastq.gz' in output:
+        for participant in participants:
+          if participant in fn:
+            participants[participant] = participants[participant]+[link]
+          elif participant.replace('0', '') in fn:
+            participants[participant] = participants[participant]+[link]
+      all_links[link] = fn
+  except:
+        do_nothing = True
+
+with open('participant_links_2.dict', 'wb') as f:
+    pickle.dump(participants, f)
+    
+with open('all_links.dict', 'wb') as f:
+    pickle.dump(all_links, f)
+```
+
+This time I ended up adding to too many because I removed too many zeroes when checking which participant to add the link to, so I fixed it like this:
+```{python, eval=FALSE}
+import os
+import subprocess
+import pickle
+
+with open('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/run_on_server/sort_links/participant_links_2.dict', 'rb') as f:
+    participants = pickle.load(f)
+    
+with open('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/run_on_server/sort_links/all_links.dict', 'rb') as f:
+    all_links = pickle.load(f)
+
+new_participants = {}
+for participant in participants:
+    new_links = []
+    for link in participants[participant]:
+        if link in all_links:
+            file = all_links[link]
+            if '.md5' not in file and participant in file:
+                print(participant, file)
+            elif '.md5' not in file and 'PGPC_'+participant[7:] in file:
+                new_links.append(link)
+        else:
+            new_links.append(link)
+    new_participants[participant] = new_links
+
+with open('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/run_on_server/sort_links/participant_links_3.dict', 'wb') as f:
+    pickle.dump(new_participants, f)
+```
+I checked several at random to see that the number of files was correct and it all looks good.
+
+## Run through all participants
+
+```{python, eval=FALSE}
+import os
+import subprocess
+import pickle
+import numpy as np
+from Bio import SeqIO
+
+threads = '40'
+
+with open('participant_links_3.dict', 'rb') as f:
+    participants = pickle.load(f)
+    
+def print_and_log(message, log):
+  log.append(message)
+  print(message)
+  return log
+
+def split_file(file, num_records, total):
+  records = SeqIO.parse(file, "fasta")
+  count, count_file, part, new_file = 0, 1, 1, []
+  fn = file.replace('.fasta', '')
+  files = []
+  for record in records:
+    new_file.append(record)
+    count += 1
+    count_file += 1
+    if count == num_records or count_file == total:
+      SeqIO.write(new_file, fn+'_'+str(part)+'.fasta', "fasta")
+      files.append(fn+'_'+str(part)+'.fasta')
+      count, new_file = 0, []
+      part += 1
+  return files
+    
+def download_files(directory, links, log):
+  log = print_and_log('Downloading links to directory '+directory, log)
+  files = []
+  for link in links:
+    log = print_and_log('Getting '+link, log)
+    #if we already have this file, continue to the next link
+    output = subprocess.check_output("wget --spider --server-response "+link+" 2>&1 | grep -i content-disposition", shell=True)
+    output = str(output)
+    fn = output.split('"')[1]
+    fn = fn.replace('_001.', '.')
+    log = print_and_log('Checking for file '+fn, log)
+    if os.path.exists(directory+'/'+fn): 
+        files.append(fn)
+        log = print_and_log('Already have '+fn, log)
+        continue
+    log = print_and_log("Didn't have it, so downloading "+fn+" from "+link, log)
+    command = 'wget '+link+' -O '+directory+'/'+fn
+    os.system(command)
+    if not os.path.exists(directory+'/'+fn): log = print_and_log("Didn't get "+fn+" from link "+link, log)
+    else: 
+        files.append(fn)
+        log = print_and_log("Got "+fn+" from link "+link, log)
+  
+  #Sort the files into pairs of R1 and R2
+  files = sorted(list(set(files)))
+  sorted_files, already_added = [], []
+  for file in files:
+    if file in already_added: continue
+    if file.replace('R1', 'R2') in files:
+      sorted_files.append(sorted([file, file.replace('R1', 'R2')]))
+      already_added = already_added+[file, file.replace('R1', 'R2')]
+      log = print_and_log('New pair: '+file+', '+file.replace('R1', 'R2'), log)
+    elif file.replace('R2', 'R1') in files:
+      sorted_files.append(sorted([file, file.replace('R2', 'R1')]))
+      already_added = already_added+[file, file.replace('R2', 'R1')]
+      log = print_and_log('New pair: '+file+', '+file.replace('R2', 'R1'), log)
+  return log, sorted_files
+
+def check_and_split_file(directory, files, log):
+  #for each file set - R1 and R2 pair - check if the size is larger than 10 GB. If it is, add it to the list of files that need splitting
+  log = print_and_log('Checking for files that need splitting for '+directory, log)
+  need_splitting = []
+  for file_set in files:
+    size1, size2 = os.stat(directory+'/'+file_set[0]).st_size, os.stat(directory+'/'+file_set[1]).st_size
+    if size1/1000000000 > 10 or size2/1000000000 > 10:
+      need_splitting.append(file_set+[size1/1000000000])
+  new_files = []
+  
+  if need_splitting == []:#if it's not, just return the log file and the file list
+    log = print_and_log("Didn't need to split any files for "+directory, log)
+    return log, files
+  else:
+    for file_set in files:
+      if file_set not in need_splitting:
+        new_files.append(file_set)
+    for file_set in need_splitting:
+      #unzip both files
+      os.system('gunzip '+directory+'/'+file_set[0])
+      os.system('gunzip '+directory+'/'+file_set[1])
+      f1, f2 = directory+'/'+file_set[0].replace('.gz', ''), directory+'/'+file_set[1].replace('.gz', '')
+      #check if number of records is the same in each
+      count1, count2 = 0, 0
+      for rec in SeqIO.parse(f1, "fastq"):
+             count1 += 1
+      for rec in SeqIO.parse(f2, "fastq"):
+             count2 += 1    
+      if count1 != count2: 
+        log = print_and_log("Couldn't split files "+file_set[0]+" and "+file_set[1]+" because they didn't have the same number of lines. "+file_set[0]+" has "+str(count1)+" lines while "+file_set[1]+" has "+str(count2)+" lines", log)
+        os.system('gzip '+f1)
+        os.system('gzip '+f2)
+        continue
+      else:
+        num_files = np.ceil(file_set[2]/10)
+        records_per_file = np.ceil(count1/num_files)
+        first = split_file(f1, records_per_file, count1)
+        log = print_and_log('Split the files '+f1+' into '+str(num_files)+' files', log)
+        second = split_file(f2, records_per_file, count1)
+        log = print_and_log('Split the files '+f2+' into '+str(num_files)+' files', log)
+        these_files = []
+        for f in first:
+          if f.replace('R1', 'R2') in second:
+            log = print_and_log('gzipping '+f, log)
+            os.system('gzip '+f)
+            log = print_and_log('gzipping '+f.replace('R1', 'R2'), log)
+            os.system('gzip '+f.replace('R1', 'R2'))
+            these_files.append(sorted([f+'.gz', f.replace('R1', 'R2')+'.gz']))
+          elif f.replace('R2', 'R1') in second:
+            log = print_and_log('gzipping '+f, log)
+            os.system('gzip '+f)
+            log = print_and_log('gzipping '+f.replace('R2', 'R1'), log)
+            os.system('gzip '+f.replace('R2', 'R1'))
+            these_files.append(sorted([f+'.gz', f.replace('R2', 'R1')+'.gz']))
+        log = print_and_log("Successfully split all parts of "+file_set[:2], log)
+            
+        new_files = new_files+these_files
+  for f in range(len(new_files)):
+    if '/' in new_files[f]:
+      new_files[f] = new_files[f].split('/')[1]
+  return log, new_files
+
+def run_kneaddata(directory, files, log):
+  for file_set in files:
+    f1, f2 = directory+'/'+file_set[0], directory+'/'+file_set[1]
+    log = print_and_log('Checking for previous kneaddata file', log)
+    if not os.path.exists(directory+'/'+'kneaddata_out/'+file_set[0].replace('.fastq.qz', '')+'_kneaddata_paired.fastq.gz'):
+        log = print_and_log("Didn't have "+directory+'/'+'kneaddata_out/'+file_set[0].replace('.fastq.qz', '')+'_kneaddata_paired.fastq.gz', log)
+        log = print_and_log('Unzipping '+f1+' and '+f2, log)
+        os.system('gunzip '+f1)
+        os.system('gunzip '+f2)
+        f1, f2 = f1.replace('.gz', ''), f2.replace('.gz', '')
+        log = print_and_log('Running kneaddata with '+f1+' and '+f2, log)
+        command = 'kneaddata -i '+f1+' -i '+f2+' -o '+directory+'/kneaddata_out/ -db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ -t '+threads+' --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" --bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output'
+        os.system(command)
+        log = print_and_log('Zipping '+f1+' and '+f2, log)
+        os.system('gzip '+f1)
+        os.system('gzip '+f2)
+    output_list = os.listdir(directory+'/kneaddata_out/')
+    if output_list == 1: log = print_and_log("Something happened and kneaddata didnt run properly with "+f1+' and '+f2, log)
+    else: log = print_and_log('Looks like kneaddata at least created some files', log)
+    for out in output_list:
+      if '.log' not in out and 'kneaddata_paired' not in out:
+        os.system('rm '+directory+'/'+out)
+        log = print_and_log('Removed '+directory+'/'+out, log)
+      elif '.log' in out:
+        log = print_and_log('Got a kneaddata log file ', log)
+      elif 'kneaddata_paired' in out:
+        if '.gz' not in out:
+            os.system('gzip '+directory+'/kneaddata_out/'+out)
+        log = print_and_log('Got and zipped '+out, log)
+  return log
+
+def remove_fasta(directory, files, log):
+  log = print_and_log('Beginning to remove fasta files from '+directory, log)
+  for file in files:
+    try:
+      os.system('rm '+directory+'/'+file)
+      log = print_and_log('Removed '+directory+'/'+file, log)
+    except:
+      log = print_and_log("Didn't manage to remove "+directory+'/'+file, log)
+  log = print_and_log('Removed all the files we could from '+directory, log)
+  return log
+
+def write_logfile(directory, log):
+  with open(directory+'/log.txt', 'w') as f:
+    for row in log:
+      f.write(row+'\n')
+  return
+    
+for participant in participants:
+  log = []
+  if participant != 'PGPC_0002': continue
+  if os.path.exists(participant): 
+      have_knead = False
+      if os.path.exists(participant+'/kneaddata_out/'):
+          for file in os.listdir(participant+'/kneaddata_out/'):
+              if 'kneaddata_paired' in file:
+                  have_knead = True
+                  break
+      if not have_knead:
+          log = print_and_log('Already had the directory for '+participant+', but no kneaddata_paired file so continuing', log)
+      else:
+          log = print_and_log('Already have at least one kneaddata_paired file for '+participant+', so moving onto the next participant', log)
+          write_logfile(participant, log)
+          break
+  else:
+      os.system('mkdir '+participant)
+      log = print_and_log('Made the directory for '+participant, log)
+  links = list(set(participants[participant]))
+  
+  try:
+    #Download all files to the new directory, returning the log file and a list of the files sorted into R1 and R2 pairs
+    log = print_and_log('Starting the download function for '+participant, log)
+    log, sorted_files = download_files(participant, links, log)
+    log = print_and_log('Finished the download function for '+participant, log)
+  except:
+    log = print_and_log('Something happened with the download function for '+participant, log)
+    write_logfile(participant, log)
+    continue
+
+  try:
+    #Split the files to smaller files if needed
+    log, sorted_files = check_and_split_file(participant, sorted_files, log)
+    log = print_and_log('Finished the split function for '+participant, log)
+  except:
+    log = print_and_log('Something happened with the split function for '+participant, log)
+    write_logfile(participant, log)
+    continue
+    
+  try:
+    #Run kneaddata on each file set
+    log = run_kneaddata(participant, sorted_files, log)
+    log = print_and_log('Finished the kneaddata function for '+participant, log)
+  except:
+    log = print_and_log('Something happened with the kneaddata function for '+participant, log)
+    write_logfile(participant, log)
+    continue
+  
+  try:
+    #Remove the fasta files
+    remove_fasta(participant, sorted_files, log)
+  except:
+    log = print_and_log('Something happened with the remove fasta function for '+participant, log)
+    write_logfile(participant, log)
+    continue
+    
+  #Write log file
+  write_logfile(participant, log)
+```
+
+Keep getting kneaddata/trimmomatic/java errors.
+Tried running kneaddata directly and still get an error:
+```{bash, eval=FALSE}
+kneaddata -i PGPC_0002_S1_L001_R1.fastq -i PGPC_0002_S1_L001_R2.fastq -o kneaddata_out/ -db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ -t 20 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" --bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output
+Reformatting file sequence identifiers ...
+
+Reformatting file sequence identifiers ...
+
+Initial number of reads ( /home/robyn/human_blood/kneaddata_all_participants/PGPC_0002/kneaddata_out/reformatted_identifiersr9ltMI_PGPC_0002_S1_L001_R1 ): 71760200
+Initial number of reads ( /home/robyn/human_blood/kneaddata_all_participants/PGPC_0002/kneaddata_out/reformatted_identifiersrAyq4P_PGPC_0002_S1_L001_R2 ): 71760200
+Running Trimmomatic ... 
+CRITICAL ERROR: Error executing: java -Xmx500m -jar /home/robyn/tools/Trimmomatic-0.39/trimmomatic-0.39.jar PE -threads 20 -phred33 /home/robyn/human_blood/kneaddata_all_participants/PGPC_0002/kneaddata_out/reformatted_identifiersr9ltMI_PGPC_0002_S1_L001_R1 /home/robyn/human_blood/kneaddata_all_participants/PGPC_0002/kneaddata_out/reformatted_identifiersrAyq4P_PGPC_0002_S1_L001_R2 /home/robyn/human_blood/kneaddata_all_participants/PGPC_0002/kneaddata_out/PGPC_0002_S1_L001_R1_kneaddata.trimmed.1.fastq /home/robyn/human_blood/kneaddata_all_participants/PGPC_0002/kneaddata_out/PGPC_0002_S1_L001_R1_kneaddata.trimmed.single.1.fastq /home/robyn/human_blood/kneaddata_all_participants/PGPC_0002/kneaddata_out/PGPC_0002_S1_L001_R1_kneaddata.trimmed.2.fastq /home/robyn/human_blood/kneaddata_all_participants/PGPC_0002/kneaddata_out/PGPC_0002_S1_L001_R1_kneaddata.trimmed.single.2.fastq SLIDINGWINDOW:4:20 MINLEN:50
+
+Error message returned from Trimmomatic :
+java: error while loading shared libraries: libjli.so: cannot open shared object file: No such file or directory
+```
+
+Trying with parallel like usual:
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 20 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: PGPC_0002_S1_L001_R1.fastq ::: PGPC_0002_S1_L001_R2.fastq
+```
+
+Also now not working?
+Trying on a file I know works:
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 20 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: PGPC_0001_S2_L001_R1_001.fastq.gz ::: PGPC_0001_S2_L001_R2_001.fastq.gz
+ 
+Decompressing gzipped file ...
+
+Reformatting file sequence identifiers ...
+
+Reformatting file sequence identifiers ...
+
+Initial number of reads ( /home/robyn/human_blood/kneaddata_all_participants/PGPC_0001/kneaddata_out/reformatted_identifiersKJxCEj_decompressed_u3uQqc_PGPC_0001_S2_L001_R2_001 ): 58716973
+Initial number of reads ( /home/robyn/human_blood/kneaddata_all_participants/PGPC_0001/kneaddata_out/reformatted_identifierskJy0nE_decompressed_JCmV4s_PGPC_0001_S2_L001_R1_001 ): 58716973
+Running Trimmomatic ... 
+CRITICAL ERROR: Error executing: java -Xmx500m -jar /home/robyn/tools/Trimmomatic-0.39/trimmomatic-0.39.jar PE -threads 20 -phred33 /home/robyn/human_blood/kneaddata_all_participants/PGPC_0001/kneaddata_out/reformatted_identifierskJy0nE_decompressed_JCmV4s_PGPC_0001_S2_L001_R1_001 /home/robyn/human_blood/kneaddata_all_participants/PGPC_0001/kneaddata_out/reformatted_identifiersKJxCEj_decompressed_u3uQqc_PGPC_0001_S2_L001_R2_001 /home/robyn/human_blood/kneaddata_all_participants/PGPC_0001/kneaddata_out/PGPC_0001_S2_L001_R1_001_kneaddata.trimmed.1.fastq /home/robyn/human_blood/kneaddata_all_participants/PGPC_0001/kneaddata_out/PGPC_0001_S2_L001_R1_001_kneaddata.trimmed.single.1.fastq /home/robyn/human_blood/kneaddata_all_participants/PGPC_0001/kneaddata_out/PGPC_0001_S2_L001_R1_001_kneaddata.trimmed.2.fastq /home/robyn/human_blood/kneaddata_all_participants/PGPC_0001/kneaddata_out/PGPC_0001_S2_L001_R1_001_kneaddata.trimmed.single.2.fastq SLIDINGWINDOW:4:20 MINLEN:50
+
+Error message returned from Trimmomatic :
+java: error while loading shared libraries: libjli.so: cannot open shared object file: No such file or directory
+
+local:0/1/100%/763.0s 
+
+```
+
+Still having the java issue.
+
+Removed trimmomatic and reinstalled with conda - kneaddata doesn't find it this way so downloaded from binary on the website again
+Installed bowtie2 with conda
+Installed kneaddata with conda
+
+Trying again:
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 20 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: PGPC_0001_S2_L001_R1_001.fastq.gz ::: PGPC_0001_S2_L001_R2_001.fastq.gz
+```
+
+Making a new conda environment and seeing if that works:
+```{bash, eval=FALSE}
+conda create --name kneaddata
+conda activate kneaddata
+conda install -c bioconda kneaddata
+```
+
+Made a new environment with a fresh install and that worked fine. Kneaddata should be installed with conda and not pip (this also installs all dependencies).</br>
+Participants 1-15 were run on vulcan while the others were run on the Compute Canada beluga and graham servers (details in separate R notebook).
+
+# Run everythough through Kraken2 {.tabset}
+
+## Join reads and lanes
+
+Join reads:
+```{python, eval=FALSE}
+import os
+
+base_folder = 'kneaddata_all_participants'
+participants = os.listdir(base_folder)
+
+for participant in participants:
+  if 'PGPC' not in participant: continue
+  if 'PGPC_0001' in participant: continue
+  knead_folder = base_folder+'/'+participant+'/kneaddata_out/'
+  knead_out = os.listdir(knead_folder)
+  unique = []
+  for file in knead_out:
+    if '.fastq.gz' not in file: continue
+    if file.split('_kneaddata')[0] not in unique:
+      unique.append(file.split('_kneaddata')[0])
+      
+      
+  for file in unique:
+    r1_rename, r2_rename = file+'_kneaddata_paired_1.fastq.gz', file+'_kneaddata_paired_2.fastq.gz'
+    r1, r2 = file+'_kneaddata_paired_R1.fastq.gz', file+'_kneaddata_paired_R2.fastq.gz'
+    os.system('mv '+knead_folder+r1_rename+' '+knead_folder+r1)
+    os.system('mv '+knead_folder+r2_rename+' '+knead_folder+r2)
+    os.system('concat_paired_end.pl -p 4 -o '+base_folder+'/joined_reads/ '+knead_folder+file+'_kneaddata_paired_*.fastq.gz -f')
+```
+
+One file didn't join:
+```{bash, eval=FALSE}
+concat_paired_end.pl -p 4 -o joined_reads/ PGPC_0087/kneaddata_out/*_kneaddata_paired_*.fastq.gz -f
+```
+
+Some files don't have the same name format (missing zeroes before the participant number), fix that now:
+```{python, eval=FALSE}
+import os
+
+names_to_change = [51, 53, 54, 55, 56, 57, 59, 61, 62, 67, 69, 70, 71, 72, 73, 74, 76, 77, 78, 82, 87]
+names_to_change = ['PGPC_'+str(name) for name in names_to_change]
+list_files = os.listdir('joined_reads/')
+
+for file in list_files:
+  for name in names_to_change:
+    if name in file:
+      new_fn = file.replace('PGPC_', 'PGPC_00')
+      string = 'mv joined_reads/'+file+' joined_reads/'+new_fn
+      os.system(string)
+```
+
+Join lanes:
+```{python, eval=FALSE}
+import os
+
+participants = range(2,87)
+participants = ['PGPC_'+str(participant).zfill(4) for participant in participants]
+all_files = os.listdir('joined_reads/')
+
+for participant in participants:
+  #os.system('concat_lanes.pl joined_reads/'+participant+'* -o joined_lanes/ -p 4')
+  this_participant = [file for file in all_files if participant in file]
+  if len(this_participant) == 1:
+    os.system('cp joined_reads/'+this_participant[0]+' joined_lanes/')
+```
+
+Now rename files:
+```{python, eval=FALSE}
+import os
+files = sorted(os.listdir('joined_lanes/'))
+
+for file in files:
+  number = file.split('_')[1]
+  new_name = 'PGPC_'+number+'.fastq.gz'
+  os.system('mv joined_lanes/'+file+' joined_lanes/'+new_name)
+```
+
+## Kraken2 + GTDB
+
+Looks like it wouldn't be easy to filter out reads based on confidence afterwards so running all confidence parameters now.
+```{bash, eval=FALSE}
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ --memory-mapping {1} --output kraken2_outraw/{1/.}_gtdb_{2}.kraken.txt --report kraken2_kreport/{1/.}_gtdb_{2}.kreport --confidence {2}) 2> times/time_{1/.}_gtdb_{2}.txt' ::: joined_lanes/*.fastq ::: 0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00
+```
+
+## Kraken2 + RefSeq
+
+```{bash, eval=FALSE}
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93 --memory-mapping {1} --output kraken2_outraw/{1/.}_refseq_{2}.kraken.txt --report kraken2_kreport/{1/.}_refseq_{2}.kreport --confidence {2}) 2> times/time_{1/.}_refseq_{2}.txt' ::: joined_lanes/*.fastq ::: 0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00
+```
+
+## Dustmasker
+
+**Test on single file:**</br>
+Convert fastq to fasta:
+```{bash, eval=FALSE}
+sed -n '1~4s/^@/>/p;2~4p' joined_lanes/PGPC_0001.fastq > joined_lanes/PGPC_0001.fasta
+```
+
+Run dustmasker:
+```{bash, eval=FALSE}
+dustmasker -in joined_lanes/PGPC_0001.fasta -outfmt fasta -out joined_lanes/PGPC_0001_masked.fasta
+```
+
+**Run with all files:**</br>
+Convert fastq to fasta:
+```{python, eval=FALSE}
+import os
+
+files = os.listdir('joined_lanes/')
+files = [file for file in files if '.fastq' in file]
+
+for file in files:
+  os.system("sed -n '1~4s/^@/>/p;2~4p' joined_lanes/"+file+" > joined_lanes/"+file.replace('fastq', 'fasta'))
+
+files = os.listdir('joined_lanes/')
+files = sorted([file for file in files if '.fasta' in file and 'masked' not in file])
+
+for file in files:
+  if 'PGPC_0001' in file: continue
+  os.system('dustmasker -in joined_lanes/'+file+' -outfmt fasta -out joined_lanes/'+file.replace('.fasta', '_masked.fasta'))
+```
+
+This leaves the masked reads in the fasta file but in lower rather than upper case, so they need to be removed:
+```{python, eval=FALSE}
+import os
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
+
+def get_upper(string):
+  upper = ''.join(c for c in string if c.isupper())
+  return upper
+
+files = os.listdir('joined_lanes/')
+files = sorted([file for file in files if 'masked' in file and 'removed' not in file])
+
+for file in files:
+  records = SeqIO.parse('joined_lanes/'+file, "fasta")
+  new_records = []
+  for record in records:
+    upper = get_upper(str(record.seq))
+    if upper != '':
+      new_records.append(SeqRecord(Seq(upper), id=record.id, description=record.description))
+  SeqIO.write(new_records, 'joined_lanes/'+file.replace('.fasta', '_removed.fasta'), "fasta")
+
+```
+
+With the first file (PGPC_0001), this has file sizes of 1.3G > 742M > 749M > 425M for the .fastq > .fasta > _masked.fasta > _masked_removed.fasta
+
+### Kraken2 + GTDB
+
+```{bash, eval=FALSE}
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 24 --db /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ --memory-mapping {1} --output kraken2_outraw/{1/.}_gtdb_{2}.kraken.txt --report kraken2_kreport/{1/.}_gtdb_{2}.kreport --confidence {2}) 2> times/time_{1/.}_gtdb_{2}.txt' ::: joined_lanes/*_masked_removed.fasta ::: 0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00
+```
+
+### Kraken2 + RefSeq
+
+```{bash, eval=FALSE}
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 24 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93 --memory-mapping {1} --output kraken2_outraw/{1/.}_refseq_{2}.kraken.txt --report kraken2_kreport/{1/.}_refseq_{2}.kreport --confidence {2}) 2> times/time_{1/.}_refseq_{2}.txt' ::: joined_lanes/*_masked_removed.fasta ::: 0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00
+```
+
+## Run Bracken
+
+### GTDB
+```{bash, eval=FALSE}
+parallel -j 12 'bracken -d /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*_gtdb_*.kreport
+```
+
+### RefSeq
+```{bash, eval=FALSE}
+parallel -j 12 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93 -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*_refseq_*.kreport
+```
+
+# Basic analysis {.tabset}
+
+## Import data
+
+Get species and taxid/accession dictionaries:
+```{python, results='hide', fig.keep='all', eval=FALSE}
+folder_name = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/kraken2_kreport/'
+results_folder = os.listdir(folder_name)
+bracken = [result for result in results_folder if result[-8:] == '.bracken']
+kreport = [result for result in results_folder if result[-15:] == 'bracken.kreport']
+
+def kreport_gtdb(sp_dict, sp_dom_dict, gtdb_accession):
+  taxa = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/RW_db_samples.tsv', header=0, index_col=0, sep='\t')
+  all_tax = set(taxa.loc[:, 'gtdb_taxonomy'].values)
+  count = 0
+  for tax in all_tax:
+    tax = tax.split(';')
+    new_tax = ''
+    for level in tax: 
+      level = level.split('__')[1]
+      new_tax += level+';'
+    new_tax = new_tax[:-1]
+    sp_dict[new_tax.split(';')[-1]] = new_tax.split(';s__')[0]
+  for sp in sp_dict:
+    sp_dom_dict[sp] = sp_dict[sp].split(';')[0]
+  for row in taxa.index.values:
+    acc = row
+    count += 1
+    row = taxa.loc[row, :].values
+    species = row[0].split('s__')[1]
+    gtdb_accession[species] = acc
+  return sp_dict, sp_dom_dict, gtdb_accession
+
+def kreport_refseq(result, sp_dict, sp_dom_dict, refeq_taxid):
+  keep_levels = ['D', 'P', 'C', 'O', 'F', 'G', 'S']
+  result = pd.read_csv(folder_name+result, sep='\t')
+  result = result.rename(columns={'100.00':'perc', list(result.columns)[1]:'N', '0':'N', 'R':'level', '1':'taxid', 'root':'classification'})
+  result = pd.DataFrame(result.loc[:, ['level', 'classification', 'taxid']])
+  current = {}
+  for lvl in keep_levels: current[lvl] = lvl
+  for i in result.index.values:
+    line = result.loc[i, :].values
+    line[1] = line[1].lstrip()
+    if line[0] not in keep_levels: continue
+    current[line[0]] = line[1]
+    if line[0] == 'S':
+      if line[1] not in refseq_taxid: refseq_taxid[line[1]] = line[2]
+      if line[1] in sp_dict: continue
+      tax = ''
+      for level in current: 
+        if level == 'S': continue
+        if level != 'D': tax += ';'
+        tax += level.lower()+'__'+current[level]
+      sp_dict[line[1]] = tax
+      sp_dom_dict[line[1]] = tax.split(';')[0]
+  return sp_dict, sp_dom_dict, refeq_taxid
+
+sp_dict, sp_dom_dict, refseq_taxid, gtdb_accession = {}, {}, {}, {}
+sp_dict, sp_dom_dict, gtdb_accession = kreport_gtdb(sp_dict, sp_dom_dict, gtdb_accession)
+
+for file in kreport:
+  if 'refseq' in file: 
+    if '0.00' not in file: continue
+    sp_dict, sp_dom_dict, refseq_taxid = kreport_refseq(file, sp_dict, sp_dom_dict, refseq_taxid)
+
+analysis = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/'
+with open(analysis+'gtdb_accession.dict', 'wb') as f:
+    pickle.dump(gtdb_accession, f)
+
+with open(analysis+'refseq_taxid.dict', 'wb') as f:
+    pickle.dump(refseq_taxid, f)
+
+with open(analysis+'sp_dict.dict', 'wb') as f:
+    pickle.dump(sp_dict, f)
+
+with open(analysis+'sp_dom_dict.dict', 'wb') as f:
+    pickle.dump(sp_dom_dict, f)
+```
+
+Run on server:
+```{python, results='hide', fig.keep='all', eval=FALSE}
+folder_name = 'kraken2_kreport/'
+results_folder = os.listdir(folder_name)
+bracken = [result for result in results_folder if result[-8:] == '.bracken']
+
+participants, groups, confidence = [], [], []
+reads = []
+
+count = 0
+for sample in bracken:
+  count += 1
+  result = pd.read_csv(folder_name+sample, sep='\t', header=0, index_col=0)
+  result = result.loc[:, ['new_est_reads']]
+  if 'gtdb' in sample:
+    rename_dict = {}
+    for row in result.index.values:
+      rename_dict[row] = row.split('__')[1]
+    result = result.rename(index=rename_dict)
+  ss = sample.split('_')
+  part = ss[0]+'-'+ss[1]
+  conf = ss[-1]
+  if count % 100 == 0: print(count)
+  if 'masked' in sample and 'refseq' in sample: db = 'refseq-masked'
+  elif 'refseq' in sample: db = 'refseq'
+  elif 'masked' in sample and 'gtdb' in sample: db = 'gtdb-masked'
+  else: db = 'gtdb'
+  sample_name = part+'_'+db+'_'+conf
+  if part not in participants: participants.append(part)
+  if db not in groups: groups.append(db)
+  if conf not in confidence: confidence.append(conf)
+  result = result.rename(columns={'new_est_reads':sample_name})
+  reads.append(result)
+
+reads = pd.concat(reads).fillna(value=0)
+reads = reads.groupby(by=reads.index, axis=0).sum()
+
+cols = sorted(list(reads.columns.values))
+reads = reads.loc[:, cols]
+
+with open('sp_dom_dict.dict', 'rb') as f: sp_dom_dict = pickle.load(f)
+
+domain_reads = reads.rename(index=sp_dom_dict)
+domain_reads = domain_reads.groupby(by=domain_reads.index, axis=0).sum()
+
+pgc = [participants, groups, confidence]
+with open('pgc.list', 'wb') as f: pickle.dump(pgc, f)
+
+reads.to_csv('reads.csv')
+domain_reads.to_csv('domain_reads.csv')
+```
+
+```{python, results='hide', fig.keep='all'}
+with open(analysis+'gtdb_accession.dict', 'rb') as f: gtdb_accession = pickle.load(f)
+with open(analysis+'refseq_taxid.dict', 'rb') as f: refseq_taxid = pickle.load(f)
+with open(analysis+'sp_dict.dict', 'rb') as f: sp_dict = pickle.load(f)
+with open(analysis+'sp_dom_dict.dict', 'rb') as f: sp_dom_dict = pickle.load(f)
+with open(analysis+'pgc.list', 'rb') as f: pgc = pickle.load(f)
+participants, groups, confidence = pgc[0], pgc[1], pgc[2]
+reads = pd.read_csv(analysis+'reads.csv', index_col=0, header=0)
+domain_reads = pd.read_csv(analysis+'domain_reads.csv', index_col=0, header=0)
+reads_bacteria = pd.read_csv(analysis+'reads_bacteria.csv', index_col=0, header=0)
+# 
+# if 'd__Bacteria' in domain_reads.index.values:
+#     rename_dict = {'d__Bacteria':'Bacteria', 'd__Archaea':'Archaea', 'd__Eukaryota':'Eukaryota', 'Animalia':'Eukaryota', 'd__Viruses':'Viruses'}
+#     domain_reads = domain_reads.rename(index=rename_dict)
+#     domain_reads = domain_reads.groupby(by=domain_reads.index, axis=0).sum()
+#     domain_reads.to_csv(analysis+'domain_reads.csv')
+# 
+# if '.bracken' in list(domain_reads.columns)[0]:
+#     rename_dict = {}
+#     for sample in domain_reads.columns:
+#         rename_dict[sample] = sample.replace('.bracken', '')
+#     domain_reads = domain_reads.rename(columns=rename_dict)
+#     reads = reads.rename(columns=rename_dict)
+#     domain_reads.to_csv(analysis+'domain_reads.csv')
+#     reads.to_csv(analysis+'reads.csv')
+# 
+# confidence = [conf.replace('.bracken', '') for conf in confidence]
+# pgc[2] = confidence
+# with open(analysis+'pgc.list', 'wb') as f: pickle.dump(pgc, f)
+
+def get_domain(reads_df, domain):
+  keeping = []
+  for sp in reads_df.index.values:
+    if sp_dom_dict[sp] in domain:
+      keeping.append(sp)
+  reads_return = reads_df.loc[keeping, :]
+  return reads_return
+
+#reads_bacteria = get_domain(reads, ['Bacteria', 'd__Bacteria'])
+#reads_bacteria.to_csv(analysis+'reads_bacteria.csv')
+```
+
+Check taxa overlap and get an idea of how many taxa we might need genomes for:
+```{python, results='hide', fig.keep='all', eval=FALSE}
+gtdb, refseq = [], []
+for sample in reads.columns:
+  if 'gtdb' in sample: gtdb.append(sample)
+  elif 'refseq' in sample: refseq.append(sample)
+
+reads_gtdb = reads.loc[:, gtdb]
+reads_gtdb = reads_gtdb[reads_gtdb.max(axis=1) > 0]
+reads_gtdb_red = reads_gtdb[reads_gtdb.max(axis=1) > 20]
+
+reads_refseq = reads.loc[:, refseq]
+reads_refseq = reads_refseq[reads_refseq.max(axis=1) > 0]
+reads_refseq_red = reads_refseq[reads_refseq.max(axis=1) > 20]
+
+tax_refseq, tax_gtdb = list(reads_refseq.index.values), list(reads_gtdb.index.values)
+both = []
+for tax in tax_refseq:
+  if tax in tax_gtdb:
+    both.append(tax)
+
+print(len(tax_refseq), len(tax_gtdb), len(both))
+print(reads_gtdb_red.shape[0], reads_refseq_red.shape[0])
+
+reads_gtdb_perc = reads_gtdb.divide(reads_gtdb.sum(axis=0), axis=1).multiply(100)
+reads_gtdb_red = reads_gtdb_perc[reads_gtdb_perc.max(axis=1) > 1]
+reads_refseq_perc = reads_refseq.divide(reads_refseq.sum(axis=0), axis=1).multiply(100)
+reads_refseq_red = reads_refseq_perc[reads_refseq_perc.max(axis=1) > 1]
+print(reads_gtdb_red.shape[0], reads_refseq_red.shape[0])
+```
+The number of taxa classified using RefSeq is 14,494, using GTDB is 29,226 and that are the same species between the two is 5,254.</br>
+If I remove taxa with fewer than a maximum of 10 reads in a sample, then there are 12,334 remaining in GTDB and 5,411 remaining in RefSeq.</br>
+If I make this 20, there are 8,760 remaining in GTDB and 3,714 in RefSeq.</br>
+If we use relative abundance instead and remove all with below 0.1%, there are 456 remaining in GTDB and 299 remaining in RefSeq.</br>
+If I make this 1% then there are 128 remaining in GTDB and 96 remaining in RefSeq.</br>
+(Note that this is based on *all* reads, including other domains, and I imagine will be different when looking only at the bacterial reads).</br>
+
+## Reads {.tabset}
+
+### Number of bacterial and human reads
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+fig = plt.figure(figsize=(15,10))
+ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+axes = [ax1, ax2, ax3, ax4]
+flierprops = dict(marker='o', markerfacecolor='k', markersize=2, linestyle='none', markeredgecolor='k')
+medianprops = dict(color='w')
+colors = ['#AF0109', '#01418A']
+for d in range(len(groups)):
+    db, x, data, xloc, count = groups[d], [], [], [], 1
+    for conf in confidence:
+        keeping = []
+        for sample in domain_reads.columns:
+            ss = sample.split('_')
+            if ss[1] == db and ss[2] == conf: keeping.append(sample)
+        domain_red = domain_reads.loc[:, keeping]
+        conf_bac, conf_human = list(domain_red.loc['Bacteria', :].values), list(domain_red.loc['Eukaryota'].values)
+        x.append(count), xloc.append(count+0.5), x.append(count+1), data.append(conf_bac), data.append(conf_human)
+        count += 2
+    bplot = axes[d].boxplot(data, patch_artist=True, showfliers=False, medianprops=medianprops)
+    for patch, color in zip(bplot['boxes'], colors*21): patch.set_facecolor(color)
+    plt.sca(axes[d])
+    plt.ylim([0, 8000000])
+    if d == 1 or d == 3: plt.yticks([])
+    else: plt.ylabel('Number of reads')
+    if d < 2: plt.xticks([])
+    else: plt.xticks(xloc, confidence, rotation=90)
+    plt.title(groups[d])
+handles = [Patch(facecolor=colors[0], edgecolor='k', label='Bacteria'), Patch(facecolor=colors[1], edgecolor='k', label='Eukaryota')]
+ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.05,1.05))
+plt.tight_layout()
+plt.show()
+```
+
+### Number of bacterial reads
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+fig = plt.figure(figsize=(15,10))
+ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+axes = [ax1, ax2, ax3, ax4]
+flierprops = dict(marker='o', markerfacecolor='k', markersize=2, linestyle='none', markeredgecolor='k')
+medianprops = dict(color='w')
+colors = ['#AF0109', '#01418A']
+for d in range(len(groups)):
+    db, x, data, xloc, count = groups[d], [], [], [], 1
+    for conf in confidence:
+        keeping = []
+        for sample in domain_reads.columns:
+            ss = sample.split('_')
+            if ss[1] == db and ss[2] == conf: keeping.append(sample)
+        domain_red = domain_reads.loc[:, keeping]
+        conf_bac = list(domain_red.loc['Bacteria', :].values)
+        x.append(count), xloc.append(count), data.append(conf_bac)
+        count += 1
+    bplot = axes[d].boxplot(data, patch_artist=True, showfliers=False, medianprops=medianprops)
+    for patch, color in zip(bplot['boxes'], [colors[0]]*21): patch.set_facecolor(color)
+    plt.sca(axes[d])
+    plt.ylim([0, 4500000])
+    if d == 1 or d == 3: plt.yticks([])
+    else: plt.ylabel('Number of reads')
+    if d < 2: plt.xticks([])
+    else: plt.xticks(xloc, confidence, rotation=90)
+    plt.title(groups[d])
+plt.tight_layout()
+plt.show()
+```
+
+### Proportion of bacterial reads
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+fig = plt.figure(figsize=(15,10))
+ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+axes = [ax1, ax2, ax3, ax4]
+flierprops = dict(marker='o', markerfacecolor='k', markersize=2, linestyle='none', markeredgecolor='k')
+medianprops = dict(color='w')
+colors = ['#AF0109', '#01418A']
+for d in range(len(groups)):
+    db, x, data, xloc, count = groups[d], [], [], [], 1
+    for conf in confidence:
+        keeping = []
+        for sample in domain_reads.columns:
+            ss = sample.split('_')
+            if ss[1] == db and ss[2] == conf: keeping.append(sample)
+        domain_red = domain_reads.loc[:, keeping]
+        domain_red = domain_red.divide(domain_red.sum(axis=0), axis=1).multiply(100)
+        conf_bac = list(domain_red.loc['Bacteria', :].values)
+        x.append(count), xloc.append(count), data.append(conf_bac)
+        count += 1
+    bplot = axes[d].boxplot(data, patch_artist=True, showfliers=False, medianprops=medianprops)
+    for patch, color in zip(bplot['boxes'], [colors[0]]*21): patch.set_facecolor(color)
+    plt.sca(axes[d])
+    plt.ylim([0, 100])
+    if d == 1 or d == 3: plt.yticks([])
+    else: plt.ylabel('Number of reads')
+    if d < 2: plt.xticks([])
+    else: plt.xticks(xloc, confidence, rotation=90)
+    plt.title(groups[d])
+plt.tight_layout()
+plt.show()
+```
+
+## Number of bacterial species
+
+```{python, results='hide', fig.keep='all', eval=FALSE}
+reads_bacteria_perc = reads_bacteria.divide(reads_bacteria.sum(axis=0), axis=1).multiply(100)
+reads_bacteria_red = reads_bacteria_perc[reads_bacteria_perc.max(axis=1) > 0.1]
+print(reads_bacteria_red.shape[0])
+reads_bacteria_red = reads_bacteria_perc[reads_bacteria_perc.max(axis=1) > 1]
+print(reads_bacteria_red.shape[0])
+```
+If we keep bacteria with > 1% abundance, we have 384 species left.</br>
+If we keep bacteria with > 0.1% abundance, we have 1208 species left.</br>
+What is shown here is all bacteria, though.
+
+### Number of species
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+fig = plt.figure(figsize=(15,10))
+ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+axes = [ax1, ax2, ax3, ax4]
+flierprops = dict(marker='o', markerfacecolor='k', markersize=2, linestyle='none', markeredgecolor='k')
+medianprops = dict(color='w')
+colors = ['#AF0109', '#01418A']
+for d in range(len(groups)):
+    db, x, data, xloc, count = groups[d], [], [], [], 1
+    for conf in confidence:
+        keeping = []
+        for sample in reads_bacteria.columns:
+            ss = sample.split('_')
+            if ss[1] == db and ss[2] == conf: keeping.append(sample)
+        domain_red = reads_bacteria.loc[:, keeping]
+        domain_red[domain_red > 0] = 1
+        domain_red = domain_red.sum(axis=0)
+        conf_bac = list(domain_red.values)
+        x.append(count), xloc.append(count), data.append(conf_bac)
+        count += 1
+    bplot = axes[d].boxplot(data, patch_artist=True, showfliers=False, medianprops=medianprops)
+    for patch, color in zip(bplot['boxes'], [colors[0]]*21): patch.set_facecolor(color)
+    plt.sca(axes[d])
+    #plt.semilogy()
+    if d == 1 or d == 3: plt.yticks([])
+    else: plt.ylabel('Number of species')
+    if d < 2: plt.xticks([]), plt.ylim([0, 6500])
+    else: plt.xticks(xloc, confidence, rotation=90), plt.ylim([0, 1200])
+    plt.title(groups[d])
+plt.tight_layout()
+plt.show()
+```
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+fig = plt.figure(figsize=(15,10))
+ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+axes = [ax1, ax2, ax3, ax4]
+flierprops = dict(marker='o', markerfacecolor='k', markersize=2, linestyle='none', markeredgecolor='k')
+medianprops = dict(color='w')
+colors = ['#AF0109', '#01418A']
+for d in range(len(groups)):
+    db, x, data, xloc, count = groups[d], [], [], [], 1
+    for conf in confidence:
+        keeping = []
+        for sample in reads_bacteria.columns:
+            ss = sample.split('_')
+            if ss[1] == db and ss[2] == conf: keeping.append(sample)
+        domain_red = reads_bacteria.loc[:, keeping]
+        domain_red[domain_red > 0] = 1
+        domain_red = domain_red.sum(axis=0)
+        conf_bac = list(domain_red.values)
+        x.append(count), xloc.append(count), data.append(conf_bac)
+        count += 1
+    bplot = axes[d].boxplot(data, patch_artist=True, showfliers=False, medianprops=medianprops)
+    for patch, color in zip(bplot['boxes'], [colors[0]]*21): patch.set_facecolor(color)
+    plt.sca(axes[d])
+    #plt.ylim([0, 6500])
+    plt.semilogy()
+    #if d == 1 or d == 3: plt.yticks([])
+    #else: plt.ylabel('Number of species')
+    if d == 0 or d == 2: plt.ylabel('Number of species')
+    if d < 2: plt.xticks([])
+    else: plt.xticks(xloc, confidence, rotation=90)
+    plt.title(groups[d])
+plt.tight_layout()
+plt.show()
+```
+
+## Beta diversity {.tabset}
+
+### Species
+
+Bray-Curtis of bacteria only at species level
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria.df'):
+  with open(analysis+'npos_bacteria.df', 'rb') as f: npos = pickle.load(f)
+else:
+  pos, npos, stress = transform_for_NMDS(reads_bacteria.transpose())
+  with open(analysis+'npos_bacteria.df', 'wb') as f: pickle.dump(npos, f)
+
+fig = plt.figure(figsize=(15,15))
+ax1, ax2, ax3, ax4, ax5, ax6 = plt.subplot(321), plt.subplot(322), plt.subplot(323), plt.subplot(324), plt.subplot(325), plt.subplot(326)
+colormap = mpl.cm.get_cmap('winter', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=21)
+m1 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+colors = [m1.to_rgba(a) for a in range(21)]
+colors_conf = {}
+for c in range(len(confidence)):
+  colors_conf[confidence[c]] = colors[c]
+colors_db = {'gtdb':'#1A5276', 'gtdb-masked':'#5499C7', 'refseq':'#E67E22', 'refseq-masked':'#F7DC6F'}
+
+for a in range(len(reads_bacteria.columns)):
+  sample = list(reads_bacteria.columns)[a].split('_')
+  t1, t2, t3, t4 = 0.1, 0.1, 0.1, 0.1
+  if sample[1] == 'gtdb': t1 = 1
+  elif sample[1] == 'gtdb-masked': t2 = 1
+  elif sample[1] == 'refseq': t3 = 1
+  elif sample[1] == 'refseq-masked': t4 = 1
+  ax1.scatter(npos[a,0], npos[a,1], color=colors_db[sample[1]], alpha=0.6, edgecolor='k')
+  ax2.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=0.6, edgecolor='k')
+  ax3.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t1, edgecolor='k')
+  ax4.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t2, edgecolor='k')
+  ax5.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t3, edgecolor='k')
+  ax6.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t4, edgecolor='k')
+
+ax = [ax1, ax2, ax3, ax4, ax5, ax6]
+titles = ['Coloured by database', 'Coloured by confidence', 'GTDB coloured by confidence', 'GTDB-masked coloured by confidence', 'RefSeq coloured by confidence', 'RefSeq-masked coloured by confidence']
+for a in range(len(ax)):
+  ax[a].set_title(titles[a])
+  ax[a].set_xlabel('NMDS1')
+  ax[a].set_ylabel('NMDS2')
+
+handles = [Patch(facecolor=colors_db[db], edgecolor='k', label=db) for db in colors_db]
+ax1.legend(handles=handles, loc='best')
+handles = [Patch(facecolor=colors_conf[conf], edgecolor='k', label=conf) for conf in confidence]
+ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.05,1.0))
+plt.tight_layout()
+plt.show()
+```
+
+### Genus
+
+Bray-Curtis of bacteria only at genus level
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria_genus.df'):
+  with open(analysis+'npos_bacteria_genus.df', 'rb') as f: npos = pickle.load(f)
+  reads_bacteria_genus = pd.read_csv(analysis+'reads_bacteria_genus.csv', header=0, index_col=0)
+else:
+  species = list(reads_bacteria.index.values)
+  gen_dict = {}
+  count = 0
+  for sp in species:
+    count += 1
+    gen = sp_dict[sp].split(';')[-2]
+    if '__' in gen: gen = gen.split('__')[1]
+    gen = gen.lstrip().rstrip()
+    gen_dict[sp] = gen
+  reads_bacteria_genus = reads_bacteria.rename(index=gen_dict)
+  reads_bacteria_genus = reads_bacteria_genus.groupby(by=reads_bacteria_genus.index, axis=0).sum()
+  pos, npos, stress = transform_for_NMDS(reads_bacteria_genus.transpose())
+  with open(analysis+'npos_bacteria_genus.df', 'wb') as f: pickle.dump(npos, f)
+  reads_bacteria_genus.to_csv(analysis+'reads_bacteria_genus.csv')
+
+fig = plt.figure(figsize=(15,15))
+ax1, ax2, ax3, ax4, ax5, ax6 = plt.subplot(321), plt.subplot(322), plt.subplot(323), plt.subplot(324), plt.subplot(325), plt.subplot(326)
+colormap = mpl.cm.get_cmap('winter', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=21)
+m1 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+colors = [m1.to_rgba(a) for a in range(21)]
+colors_conf = {}
+for c in range(len(confidence)):
+  colors_conf[confidence[c]] = colors[c]
+colors_db = {'gtdb':'#1A5276', 'gtdb-masked':'#5499C7', 'refseq':'#E67E22', 'refseq-masked':'#F7DC6F'}
+
+for a in range(len(reads_bacteria_genus.columns)):
+  sample = list(reads_bacteria_genus.columns)[a].split('_')
+  t1, t2, t3, t4 = 0.1, 0.1, 0.1, 0.1
+  if sample[1] == 'gtdb': t1 = 1
+  elif sample[1] == 'gtdb-masked': t2 = 1
+  elif sample[1] == 'refseq': t3 = 1
+  elif sample[1] == 'refseq-masked': t4 = 1
+  ax1.scatter(npos[a,0], npos[a,1], color=colors_db[sample[1]], alpha=0.6, edgecolor='k')
+  ax2.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=0.6, edgecolor='k')
+  ax3.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t1, edgecolor='k')
+  ax4.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t2, edgecolor='k')
+  ax5.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t3, edgecolor='k')
+  ax6.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t4, edgecolor='k')
+
+ax = [ax1, ax2, ax3, ax4, ax5, ax6]
+titles = ['Coloured by database', 'Coloured by confidence', 'GTDB coloured by confidence', 'GTDB-masked coloured by confidence', 'RefSeq coloured by confidence', 'RefSeq-masked coloured by confidence']
+for a in range(len(ax)):
+  ax[a].set_title(titles[a])
+  ax[a].set_xlabel('NMDS1')
+  ax[a].set_ylabel('NMDS2')
+
+handles = [Patch(facecolor=colors_db[db], edgecolor='k', label=db) for db in colors_db]
+ax1.legend(handles=handles, loc='best')
+handles = [Patch(facecolor=colors_conf[conf], edgecolor='k', label=conf) for conf in confidence]
+ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.05,1.0))
+plt.tight_layout()
+plt.show()
+```
+
+## Other distance
+
+Show how these distances correlate within the same sample as well as to other samples - heatmap showing average distance values like in meta-analysis? Basically we want to see if confidence parameter, database or sample ID have the largest effect on sample composition.
+
+# Mapping to genomes {.tabset}
+
+## Reduce the number of taxa
+
+We have a total of 7,672,709,444 bacterial reads, which is an average of 1,286,503 per sample. 0.1% of this is 1286.5. </br>
+If we remove taxa with below this number of reads, we have 1028 taxa remaining.</br>
+As we saw above, if we keep bacteria with > 1% abundance (calculated per sample, not overall), we have 384 species left and if we keep bacteria with > 0.1% abundance, we have 1208 species left.</br>
+As there is not a huge difference here, I'll go with the 0.1% per sample.</br>
+Where a species is present in both, I've checked whether the NCBI taxid for the GTDB accession number matches the NCBI taxid I have from kraken. If they match, then I'll just use the GTDB accession as I already have these genomes. If not (only one instance), I'll just take the GTDB genome and the NCBI genome.</br>
+For the NCBI taxid's, if they are in GTDB then I'll just take those genomes. There are only 12 taxid's that are not, so I will probably just download these genomes individually.
+
+```{python, results='hide', fig.keep='all'}
+# max_keep = (np.mean(reads_bacteria.sum(axis=0))/100)*0.1
+# reads_bacteria_reduced = reads_bacteria[reads_bacteria.max(axis=1) > max_keep]
+reads_bacteria_perc = reads_bacteria.divide(reads_bacteria.sum(axis=0), axis=1).multiply(100)
+reads_bacteria_red = reads_bacteria_perc[reads_bacteria_perc.max(axis=1) > 0.1]
+rename_dict = {}
+for sample in reads_bacteria_perc.columns:
+  if 'gtdb' in sample: rename_dict[sample] = 'gtdb'
+  elif 'refseq' in sample: rename_dict[sample] = 'refseq'
+
+reads_bacteria_grouped = reads_bacteria.rename(columns=rename_dict)
+reads_bacteria_grouped = reads_bacteria_grouped.groupby(by=reads_bacteria_grouped.columns, axis=1).sum()
+reads_bacteria_grouped = reads_bacteria_grouped.loc[list(reads_bacteria_red.index.values), :]
+
+gtdb_ncbi_taxid = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/bac120_metadata_r95.tsv', sep='\t', header=0, index_col=0)
+gtdb_ncbi_taxid = pd.DataFrame(gtdb_ncbi_taxid.loc[:, 'ncbi_species_taxid'])
+gtdb_list = {}
+for acc in gtdb_ncbi_taxid.index.values:
+  gtdb_list[acc] = gtdb_ncbi_taxid.loc[acc, :].values[0]
+```
+
+```{python, results='hide', fig.keep='all'}
+species = list(reads_bacteria_red.index.values)
+accession, taxid, both, none = [], [], [], []
+for sp in species:
+  if sp in gtdb_accession and sp in refseq_taxid:
+    both.append([sp, gtdb_accession[sp], refseq_taxid[sp]])
+  elif sp in gtdb_accession:
+    accession.append([sp, gtdb_accession[sp]])
+  elif sp in refseq_taxid:
+    taxid.append([sp, refseq_taxid[sp]])
+  else:
+    none.append(sp)
+
+for sp in both:
+  if reads_bacteria_grouped.loc[sp[0], 'gtdb'] > 0 and reads_bacteria_grouped.loc[sp[0], 'refseq'] > 0:
+    gotit = False
+    for acc in gtdb_list:
+      if sp[1] in acc: gotit = acc
+    if gotit != False:
+      if gtdb_list[gotit] != sp[2]:
+        accession.append([sp[0], sp[1]])
+        taxid.append([sp[0], sp[2]])
+      else:
+        accession.append([sp[0], sp[1]])
+  else:
+    if reads_bacteria_grouped.loc[sp[0], 'gtdb'] > 0:
+      accession.append([sp[0], sp[1]])
+    elif reads_bacteria_grouped.loc[sp[0], 'refseq'] > 0:
+      taxid.append([sp[0], sp[2]])
+
+taxid_gtdb_list = {}
+for acc in gtdb_list:
+  taxid_gtdb_list[gtdb_list[acc]] = acc
+
+need_taxid = []
+
+for tax in taxid:
+  if tax[1] not in taxid_gtdb_list:
+    need_taxid.append(tax)
+  else:
+    accession.append([tax[0], taxid_gtdb_list[tax[1]]])
+
+with open(analysis+'accession_to_get.list', 'wb') as f: pickle.dump(accession, f)
+with open(analysis+'need_taxid.list', 'wb') as f: pickle.dump(need_taxid, f)
+print(len(accession))
+print(need_taxid)
+```
+
+## Get the genomes
+
+So I've saved a list of GTDB accession numbers (1197 in total) and a list of the NCBI taxid's that I need (12 in total) - 1209 total genomes to get.</br>
+So I'll just download the NCBI genomes that I need. Taking the accession numbers from the document that I downloaded already when I was making the protein database. Two of them weren't there, but they were in the [full genbank assembly summary](ftp://ftp.ncbi.nlm.nih.gov/genomes/ASSEMBLY_REPORTS/)
+
+```{bash, eval=FALSE}
+genomes = {1768795:GCF_001557145.1, 1104602:GCF_001006965.1, 2070760:GCF_002915305.1, 2218670, 1339242:GCF_000799035.1, 1306541, 2496651:GCF_003998875.1, 91459:GCF_000333255.1, 1339244:GCF_000800935.1, 2070590:GCF_002883155.1, 2045443:GCF_002700005.1, 1229488:GCF_000335695.1}
+end = _genomic.fna.gz
+#GCF_001557145.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/001/557/145/GCF_001557145.1_ASM155714v1/GCF_001557145.1_ASM155714v1_genomic.fna.gz
+mv GCF_001557145.1_ASM155714v1_genomic.fna.gz 1768795.fna.gz
+
+#GCF_001006965.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/001/006/965/GCF_001006965.1_Aarhus_Bay_SAG_B17/GCF_001006965.1_Aarhus_Bay_SAG_B17_genomic.fna.gz
+mv GCF_001006965.1_Aarhus_Bay_SAG_B17_genomic.fna.gz 1104602.fna.gz
+
+#GCF_002915305.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/002/915/305/GCF_002915305.1_ASM291530v1/GCF_002915305.1_ASM291530v1_genomic.fna.gz
+mv GCF_002915305.1_ASM291530v1_genomic.fna.gz 2070760.fna.gz
+
+#GCF_000799035.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/799/035/GCF_000799035.1_ZNC0008.1/GCF_000799035.1_ZNC0008.1_genomic.fna.gz
+mv GCF_000799035.1_ZNC0008.1_genomic.fna.gz 1339242.fna.gz
+
+#GCF_003998875.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/003/998/875/GCF_003998875.1_ASM399887v1/GCF_003998875.1_ASM399887v1_genomic.fna.gz
+mv GCF_003998875.1_ASM399887v1_genomic.fna.gz 2496651.fna.gz
+
+#GCF_000333255.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/333/255/GCF_000333255.1_ASM33325v1/GCF_000333255.1_ASM33325v1_genomic.fna.gz
+mv GCF_000333255.1_ASM33325v1_genomic.fna.gz 91459.fna.gz
+
+#GCF_000800935.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/800/935/GCF_000800935.1_ZNC0032.1/GCF_000800935.1_ZNC0032.1_genomic.fna.gz
+mv GCF_000800935.1_ZNC0032.1_genomic.fna.gz 1339244.fna.gz
+
+#GCF_002883155.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/002/883/155/GCF_002883155.1_GW460-13/GCF_002883155.1_GW460-13_genomic.fna.gz
+mv GCF_002883155.1_GW460-13_genomic.fna.gz 2070590.fna.gz
+
+#GCF_002700005.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/002/700/005/GCF_002700005.1_ASM270000v1/GCF_002700005.1_ASM270000v1_genomic.fna.gz
+mv GCF_002700005.1_ASM270000v1_genomic.fna.gz 2045443.fna.gz
+
+#GCF_000335695.1
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/335/695/GCF_000335695.1_FWI2.1.0/GCF_000335695.1_FWI2.1.0_genomic.fna.gz
+mv GCF_000335695.1_FWI2.1.0_genomic.fna.gz 1229488.fna.gz
+
+#2218670
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/003/343/325/GCA_003343325.1_ASM334332v1/GCA_003343325.1_ASM334332v1_genomic.fna.gz
+mv GCA_003343325.1_ASM334332v1_genomic.fna.gz 2218670.fna.gz
+
+#1306541
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/900/635/385/GCA_900635385.1_Dg1_Cn_nod/GCA_900635385.1_Dg1_Cn_nod_genomic.fna.gz
+mv GCA_900635385.1_Dg1_Cn_nod_genomic.fna.gz 1306541.fna.gz
+```
+
+I saved the renamed GTDB genomes in the storage folder, so I copied these back.
+Now copy across the right GTDB genomes, and for those not in here (presumably the accessions matching NCBI taxid's), I've used the bacteria assembly summary for NCBI to get the ftp path and downloading:
+```{python, eval=FALSE}
+import os
+import pickle
+import pandas as pd
+
+with open('accession_to_get.list', 'rb') as f: accession = pickle.load(f)
+
+# genome_folder = 'fasta_renamed/'
+# new_folder = 'whole_genomes/'
+# genomes = set(os.listdir(genome_folder))
+# 
+# didnt_get = []
+# for acc in accession:
+#   get_acc, copied = acc[1], False
+#   for genome in genomes:
+#     if get_acc in genome:
+#       os.system('cp '+genome_folder+genome+' '+new_folder)
+#       copied = True
+#       break
+#   if not copied:
+#     if get_acc.count('_') == 2:
+#       get_acc = get_acc.split('_')
+#       get_acc = get_acc[1]+'_'+get_acc[2]
+#     for genome in genomes:
+#       if get_acc in genome:
+#         os.system('cp '+genome_folder+genome+' '+new_folder)
+#         copied = True
+#         break
+#     if not copied:
+#       didnt_get.append(acc)
+# 
+# still_didnt_get = []
+# ncbi_assembly = pd.read_csv('assembly_summary.txt', sep='\t', header=0, index_col=0)
+# for acc in didnt_get:
+#   get_acc = acc[1].split('RS_')[1]
+#   if get_acc in ncbi_assembly.index.values:
+#     ftp = ncbi_assembly.loc[get_acc, 'ftp_path']
+#     ftp = ftp+'/'+ftp.split('/')[-1]+'_genomic.fna.gz'
+#     command = 'wget '+ftp+' -O whole_genomes/'+get_acc+'.fna.gz'
+#     os.system(command)
+
+#check 
+genomes = os.listdir('whole_genomes/')
+not_added = []
+for acc in accession:
+  get_acc = acc[1]
+  if 'RS' in get_acc:
+    get_acc_rs = get_acc.split('RS_')[1]
+  else:
+    get_acc_rs = get_acc
+  added = False
+  for genome in genomes:
+    if get_acc in genome:
+      added = True
+    elif get_acc_rs in genome:
+      added = True
+  if not added:
+    print(get_acc)
+
+all_accession = []
+for acc in accession:
+  if 'RS' not in acc[1]:
+    all_accession.append(acc[1])
+
+for a in range(len(accession)):
+  acc = accession[a]
+  if 'RS' in acc[1]:
+    if acc[1].split('RS_')[1] in all_accession:
+      accession[a] = accession[a]+[acc[1].split('RS_')[1]]
+
+with open('accession_to_get_duplicates.list', 'wb') as f: pickle.dump(accession, f)
+```
+There are 44 duplicates (didn't check if 'RS_' was in the names before adding them to the accession to get list). Added these to the accession list and re-saved.
+
+Only two weren't in there:</br>
+GCF_001556245.1</br>
+GCF_002897075.1</br>
+
+Downloading these separately:
+```{bash, eval=FALSE}
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/001/556/245/GCA_001556245.1_ASM155624v1/GCA_001556245.1_ASM155624v1_genomic.fna.gz -O GCF_001556245.1.fna.gz
+
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/002/897/075/GCA_002897075.1_ASM289707v1/GCA_002897075.1_ASM289707v1_genomic.fna.gz -O GCF_002897075.1.fna.gz
+```
+
+## Run metaSPADES
+
+This needs the reads to be paired end, so combining the lanes for each sample, but not the reads:
+```{python, eval=FALSE}
+import os
+
+participants = sorted(os.listdir('intermediates/'))
+for participant in participants:
+  if 'PGPC' in participant and '0001' not in participant:
+    knead = os.listdir('intermediates/'+participant+'/kneaddata_out/')
+    r1, r2 = [], []
+    for kn in knead:
+      if '.fastq' in kn:
+        if 'R1' in kn.split('_')[-1]:
+          r1.append(kn)
+        else:
+          r2.append(kn)
+    command_r1 = 'cat '
+    for r in r1:
+      command_r1 += 'intermediates/'+participant+'/kneaddata_out/'+r+' '
+    command_r1 += '> joined_lanes_separate_reads/'+participant+'_R1.fastq.gz'
+    command_r2 = 'cat '
+    for r in r2:
+      command_r2 += 'intermediates/'+participant+'/kneaddata_out/'+r+' '
+    command_r2 += '> joined_lanes_separate_reads/'+participant+'_R2.fastq.gz'
+    os.system(command_r1)
+    os.system(command_r2)
+```
+And then I did this separately for PGPC_0001 which was run elsewhere.</br>
+</br>
+Test single participant:
+```{bash, eval=FALSE}
+(/usr/bin/time -v spades.py --meta -1 joined_lanes_separate_reads/PGPC_0002_R1.fastq.gz -2 joined_lanes_separate_reads/PGPC_0002_R2.fastq.gz -o spades_out/PGPC_0002/ -t 20) 2> PGPC_0001_spades_time.txt
+```
+
+Copy all paired reads to Compute Canada Graham:
+```{bash, eval=FALSE}
+scp -r joined_lanes_separate_reads/ rwright@graham.computecanada.ca:/home/rwright/scratch/
+```
+
+Make a conda environment:
+```{bash, eval=FALSE}
+conda create --name spades
+conda activate spades
+```
+
+Followed notes in COVID notebook to install spades, just changed prefix to:
+```{bash, eval=FALSE}
+PREFIX=/home/rwright/anaconda3/ ./spades_compile.sh
+```
+
+Test:
+```{bash, eval=FALSE}
+salloc --time=1:0:0 --ntasks=20 --mem-per-cpu 50G
+```
+
+Then make an sbatch script to run:
+```{python, eval=FALSE}
+import os
+
+participant_names = ['PGPC_0001', 'PGPC_0002', 'PGPC_0003', 'PGPC_0004', 'PGPC_0005', 'PGPC_0006', 'PGPC_0007', 'PGPC_0008', 'PGPC_0009', 'PGPC_0010', 'PGPC_0011', 'PGPC_0012', 'PGPC_0013', 'PGPC_0014', 'PGPC_0015', 'PGPC_0016', 'PGPC_0017', 'PGPC_0018', 'PGPC_0019', 'PGPC_0020', 'PGPC_0021', 'PGPC_0023', 'PGPC_0024', 'PGPC_0025', 'PGPC_0026', 'PGPC_0027', 'PGPC_0028', 'PGPC_0029', 'PGPC_0030', 'PGPC_0031', 'PGPC_0032', 'PGPC_0033', 'PGPC_0034', 'PGPC_0035', 'PGPC_0036', 'PGPC_0037', 'PGPC_0038', 'PGPC_0039', 'PGPC_0040', 'PGPC_0041', 'PGPC_0042', 'PGPC_0043', 'PGPC_0044', 'PGPC_0045', 'PGPC_0046', 'PGPC_0047', 'PGPC_0048', 'PGPC_0049', 'PGPC_0050', 'PGPC_0051', 'PGPC_0052', 'PGPC_0053', 'PGPC_0054', 'PGPC_0055', 'PGPC_0056', 'PGPC_0057', 'PGPC_0059', 'PGPC_0061', 'PGPC_0062', 'PGPC_0067', 'PGPC_0069', 'PGPC_0070', 'PGPC_0071', 'PGPC_0072', 'PGPC_0073', 'PGPC_0074', 'PGPC_0076', 'PGPC_0077', 'PGPC_0078', 'PGPC_0082', 'PGPC_0087']
+direc = '/home/rwright/scratch/'
+
+for participant in participant_names:
+    if participant not in ['PGPC_0024']: continue
+    r1, r2 = direc+'joined_lanes_separate_reads/'+participant+'_R1.fastq.gz', direc+'joined_lanes_separate_reads/'+participant+'_R2.fastq.gz'
+    str = '#!/bin/bash\n'
+    str += '#SBATCH --job-name='+participant+'_spades.job\n'
+    str += '#SBATCH --output='+direc+'out/'+participant+'_spades.out\n'
+    str += '#SBATCH --error='+direc+'out/'+participant+'_spades.err\n'
+    str += '#SBATCH --mem=40G\n'
+    str += '#SBATCH --time=0-2:30\n'
+    str += '#SBATCH --cpus-per-task=40\n'
+    str += '#SBATCH --mail-user=robyn.wright@dal.ca\n'
+    str += '#SBATCH --mail-type=ALL\n'
+    str += 'conda activate spades\n'
+    str += 'source activate spades\n'
+    str += 'mkdir spades_out/'+participant+'\n'
+    str += '/home/rwright/anaconda3/bin/spades.py --meta -1 '+r1+' -2 '+r2+' -o spades_out/'+participant+'/ -t 40'+'\n'
+    with open(participant+'_spades.job', 'w') as f:
+        f.write(str)
+    os.system('sbatch '+participant+'_spades.job')
+```
+
+## metaQUAST
+
+Test with single participant and all genomes:
+```{bash, eval=FALSE}
+(/usr/bin/time -v python /home/robyn/tools/quast-5.0.2/metaquast.py spades_out/contigs.fasta -r whole_genomes/* --threads 20 ) 2> PGPC_0001_quast_time.txt
+```
+This doesn't look promising, but I'll run on all of them anyway... QUAST didn't need much memory so I'll do it on Vulcan.
+
+```{python, eval=FALSE}
+import os
+
+participants = os.listdir('graham_spades/')
+for participant in participants:
+  if 'PGPC' not in participant: continue
+  os.system('cp graham_spades/'+participant+'/contigs.fasta graham_spades/all_participants/'+participant+'_contigs.fasta')
+```
+
+Don't have anything for PGPC_0002 so re-running this on Vulcan.</br>
+Took a while to run, but have it now. Now running metaquast on all samples:
+```{bash, eval=FALSE}
+(/usr/bin/time -v python /home/robyn/tools/quast-5.0.2/metaquast.py graham_spades/all_participants/*_contigs.fasta -r whole_genomes/* --threads 12 ) 2> all_participants_quast_time.txt
+```
+
+Many samples end up with no contigs aligned - I think the problem is that many don't have any contigs that are larger than the default 500 bp option. Re-running with a minimum contig size of 100 bp:
+```{bash, eval=FALSE}
+(/usr/bin/time -v python /home/robyn/tools/quast-5.0.2/metaquast.py graham_spades/all_participants/*_contigs.fasta -r whole_genomes/* --threads 12 --min-contig 100) 2> all_participants_quast_100_time.txt
+```
+
+## Assembly results
+
+
+
+## PGPC 0022
+
+We didn't have this one originally and it is only available as a bam file, so need to convert this before running.
+
+Download:
+```{bash, eval=FALSE}
+wget https://personalgenomes.ca/v1/public/files/804/download
+mv download PGPC_0022_human.bam
+```
+
+Get the reads in the right order (needed for outputting to R1 and R2 files):
+```{bash, eval=FALSE}
+samtools collate PGPC_0022_human.bam PGPC_0022_human_collate.bam
+```
+
+Then split:
+```{bash, eval=FALSE}
+#samtools fastq [options] file.bam
+samtools fastq -1 PGPC_0022_human_R1.fastq -2 PGPC_0022_human_R2.fastq PGPC_0022_human_collate.bam
+```
+
+# Anvio
+
+Started 
+

@@ -1,0 +1,2021 @@
+---
+title: "Kraken confidence testing"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+# Run Kraken
+
+Have taken some samples from the AsheMetaG and MirallesMetaG projects - selected 4 files from each that are a range of sizes to see how this affects the outcome. </br>
+
+ZymoMock kneaddata:
+```{bash, eval=FALSE}
+parallel -j 1 --link 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 40 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-fast --dovetail" --remove-intermediate-output' \
+ ::: ZymoMock/*_R1_001.fastq.gz ::: ZymoMock/*_R2_001.fastq.gz
+```
+Run using human/PhiX because that's what I usually do, but obviously not expecting mapping to human genome. Looks like a small amount of reads were removed (probably PhiX). 
+
+Concatenate lanes and paired ends:
+```{bash, eval=FALSE}
+concat_lanes.pl knead_out/* -o cat_lanes -p 4
+concat_paired_end.pl -p 4 -o cat_reads cat_lanes/*.fastq 
+```
+
+Kraken NCBI RefSeq:
+```{bash, eval=FALSE}
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 40 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {1} --output kraken2_refseq/kraken2_outraw/{1/.}.{2}.kraken.txt --report kraken2_refseq/kraken2_kreport/{1/.}.{2}.kreport --confidence {2}) 2> kraken2_refseq/times/time_{1/.}_{2}.txt' ::: cat_reads/*.fastq ::: 0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_refseq/kraken2_kreport/*.kreport
+```
+
+Kraken GTDB:
+```{bash, eval=FALSE}
+parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 40 --db /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ --memory-mapping {1} --output kraken2_gtdb/kraken2_outraw/{1/.}.{2}.kraken.txt --report kraken2_gtdb/kraken2_kreport/{1/.}.{2}.kreport --confidence {2}) 2> kraken2_gtdb/times/time_{1/.}_{2}.txt' ::: cat_reads/*.fastq ::: 0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_gtdb/kraken2_kreport/*.kreport
+```
+
+# Compare outcomes
+
+```{python, results='hide'}
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import pickle
+import numpy as np
+from scipy.spatial import distance
+from sklearn import manifold
+from sklearn.decomposition import PCA
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+import matplotlib as mpl
+from scipy.cluster import hierarchy
+import scipy.spatial.distance as ssd
+```
+
+## NCBI RefSeq v93 {.tabset}
+
+Import data (including on the higher taxonomy levels for each species):
+```{python, results='hide', fig.keep='all', eval=FALSE}
+folder_name = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/kraken_confidence_testing/kraken2_refseq/kraken2_kreport/'
+results_folder = os.listdir(folder_name)
+bracken = [result for result in results_folder if result[-8:] == '.bracken']
+kreport = [result for result in results_folder if result[-15:] == 'bracken.kreport']
+
+sp_dict, sp_dom_dict = {}, {}
+keep_levels = ['D', 'P', 'C', 'O', 'F', 'G', 'S']
+for result in kreport:
+  result = pd.read_csv(folder_name+result, sep='\t')
+  result = result.rename(columns={'100.00':'perc', list(result.columns)[1]:'N', '0':'N', 'R':'level', '1':'taxid', 'root':'classification'})
+  result = pd.DataFrame(result.loc[:, ['level', 'classification']])
+  current = {}
+  for lvl in keep_levels: current[lvl] = lvl
+  for i in result.index.values:
+    line = result.loc[i, :].values
+    line[1] = line[1].lstrip()
+    if line[0] not in keep_levels: continue
+    current[line[0]] = line[1]
+    if line[0] == 'S': 
+      if line[1] in sp_dict: continue
+      tax = ''
+      for level in current: 
+        if level == 'S': continue
+        if level != 'D': tax += ';'
+        tax += level.lower()+'__'+current[level]
+      sp_dict[line[1]] = tax
+      sp_dom_dict[line[1]] = tax.split(';')[0]
+
+samples, confidence = [], []
+reads = []
+for sample in bracken:
+  result = pd.read_csv(folder_name+sample, sep='\t', header=0, index_col=0)
+  result = result.loc[:, ['new_est_reads']]
+  sample_name = sample.split('.', 1)
+  sample_name[1] = sample_name[1].replace('.bracken', '').replace('assembled_kneaddata.', '')
+  sample_name[1] = str(float(sample_name[1]))
+  if len(sample_name[1]) == 3: sample_name[1] = sample_name[1]+'0'
+  if sample_name[0] not in samples: samples.append(sample_name[0])
+  if sample_name[1] not in confidence: confidence.append(sample_name[1])
+  sample_name = sample_name[0]+'/'+sample_name[1]
+  if isinstance(reads, list):
+    reads = result.rename(columns={'new_est_reads':sample_name})
+  else:
+    reads = pd.concat([reads, result.rename(columns={'new_est_reads':sample_name})]).fillna(value=0)
+    reads = reads.groupby(by=reads.index, axis=0).sum()
+    
+samples, confidence = sorted(samples), sorted(confidence)
+cols, ind = sorted(list(reads.columns.values)), sorted(list(reads.index.values))
+reads = reads.loc[ind, cols]
+
+domain_reads = reads.rename(index=sp_dom_dict)
+domain_reads = domain_reads.groupby(by=domain_reads.index, axis=0).sum()
+
+save_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/kraken_confidence_testing/kraken2_refseq/'
+reads.to_csv(save_folder+'reads.csv')
+domain_reads.to_csv(save_folder+'domain_reads.csv')
+with open(save_folder+'species_dict.dict', 'wb') as f:
+    pickle.dump(sp_dict, f)
+with open(save_folder+'species_domain_dict.dict', 'wb') as f:
+    pickle.dump(sp_dom_dict, f)
+```
+This takes a while, so only doing it once. Other times we can just read in the files we saved:
+```{python}
+save_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/kraken_confidence_testing/kraken2_refseq/'
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+domain_reads = pd.read_csv(save_folder+'domain_reads.csv', index_col=0, header=0)
+with open(save_folder+'species_dict.dict', 'rb') as f:
+    sp_dict = pickle.load(f)
+with open(save_folder+'species_domain_dict.dict', 'rb') as f:
+    sp_dom_dict = pickle.load(f)
+samples = ['AsheMetaG_S1E1_S1', 'AsheMetaG_S1E3_S3', 'AsheMetaG_S2E3_S10', 'AsheMetaG_S3E5_S17', 'MirallesMetaG_N2O', 'MirallesMetaG_P15O', 'MirallesMetaG_P4O', 'MirallesMetaG_P9O', 'PGPC1_very-fast', 'PGPC1_fast', 'PGPC1_sensitive', 'PGPC1_very-sensitive', 'ZymoMock']
+file_sizes = {'AsheMetaG_S1E1_S1':'105M', 'AsheMetaG_S1E3_S3':'2.0G', 'AsheMetaG_S2E3_S10':'1.6G', 'AsheMetaG_S3E5_S17':'2.0G', 'MirallesMetaG_N2O':'3.9G', 'MirallesMetaG_P15O':'1.8G', 'MirallesMetaG_P4O':'346M', 'MirallesMetaG_P9O':'6.5G', 'PGPC1_very-fast':'2.0G', 'PGPC1_fast':'1.7G', 'PGPC1_sensitive':'1.4G', 'PGPC1_very-sensitive':'1.3G', 'ZymoMock':'3.8G'}
+confidence = ['0.00', '0.05', '0.10', '0.15', '0.20', '0.25', '0.30', '0.35', '0.40', '0.45', '0.50', '0.55', '0.60', '0.65', '0.70', '0.75', '0.80', '0.85', '0.90', '0.95', '1.00']
+```
+
+### Number of reads
+
+**Reads:**
+```{python, results='hide', fig.keep='all'}
+fig = plt.figure(figsize=(20,20))
+ax1, ax2, ax3, ax4 = plt.subplot(4,4,1), plt.subplot(4,4,2), plt.subplot(4,4,3), plt.subplot(4,4,4)
+ax5, ax6, ax7, ax8 = plt.subplot(4,4,5), plt.subplot(4,4,6), plt.subplot(4,4,7), plt.subplot(4,4,8)
+ax9, ax10, ax11, ax12 = plt.subplot(4,4,9), plt.subplot(4,4,10), plt.subplot(4,4,11), plt.subplot(4,4,12)
+ax13 = plt.subplot(4,4,13)
+
+ax = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13]
+colors = {'d__Archaea':'#F1C40F', 'd__Bacteria':'#AF0109', 'd__Eukaryota':'#01418A', 'd__Viruses':'#5F5E5E'}
+
+labels, names = [], []
+for a in range(len(ax)):
+  ax[a].set_title(samples[a]+' ('+file_sizes[samples[a]]+')')
+  count = 0
+  x = []
+  for conf in confidence:
+    bottom = 0
+    for dom in colors:
+      this_sample = domain_reads.loc[dom, samples[a]+'/'+conf]
+      bar = ax[a].bar(count, this_sample, bottom=bottom, color=colors[dom], edgecolor='k', width=0.9)
+      bottom += this_sample
+      if len(labels) < 4: labels.append(bar), names.append(dom)
+    x.append(count)
+    count += 1
+  if a < 4:
+    ax[a].set_ylim([0, 4500000])
+  elif a < 8:
+    ax[a].set_ylim([0, 12000000])
+  elif a < 12:
+    ax[a].set_ylim([0, 7000000])
+  else:
+    ax[a].set_ylim([0, 13000000])
+  #ax[a].semilogy()
+  ax[a].set_xlim([-0.5, count-0.5])
+  plt.sca(ax[a])
+  plt.xticks(x, confidence, rotation=90)
+  if a in [0, 4, 8, 12]:
+    ax[a].set_ylabel('Reads')
+ax[3].legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+plt.tight_layout()
+plt.savefig(save_folder+'domain_level_reads.png', dpi=600, bbox_inches='tight')
+plt.show()
+```
+
+**Log(reads):**
+```{python, results='hide', fig.keep='all'}
+fig = plt.figure(figsize=(20,20))
+ax1, ax2, ax3, ax4 = plt.subplot(4,4,1), plt.subplot(4,4,2), plt.subplot(4,4,3), plt.subplot(4,4,4)
+ax5, ax6, ax7, ax8 = plt.subplot(4,4,5), plt.subplot(4,4,6), plt.subplot(4,4,7), plt.subplot(4,4,8)
+ax9, ax10, ax11, ax12 = plt.subplot(4,4,9), plt.subplot(4,4,10), plt.subplot(4,4,11), plt.subplot(4,4,12)
+ax13 = plt.subplot(4,4,13)
+
+ax = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13]
+colors = {'d__Archaea':'#F1C40F', 'd__Bacteria':'#AF0109', 'd__Eukaryota':'#01418A', 'd__Viruses':'#5F5E5E'}
+
+labels, names = [], []
+for a in range(len(ax)):
+  ax[a].set_title(samples[a]+' ('+file_sizes[samples[a]]+')')
+  count = 0
+  x = []
+  for conf in confidence:
+    bottom = 0
+    for dom in colors:
+      this_sample = domain_reads.loc[dom, samples[a]+'/'+conf]
+      bar = ax[a].bar(count, this_sample, bottom=bottom, color=colors[dom], edgecolor='k', width=0.9)
+      bottom += this_sample
+      if len(labels) < 4: labels.append(bar), names.append(dom)
+    x.append(count)
+    count += 1
+  ax[a].semilogy()
+  ax[a].set_xlim([-0.5, count-0.5])
+  plt.sca(ax[a])
+  plt.xticks(x, confidence, rotation=90)
+  if a in [0, 4, 8, 12]:
+    ax[a].set_ylabel('Log(reads)')
+ax[3].legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+plt.tight_layout()
+plt.savefig(save_folder+'domain_level_reads_log.png', dpi=600, bbox_inches='tight')
+plt.show()
+```
+
+### Number of bacterial reads
+
+```{python, results='hide', fig.keep='all'}
+def make_plot(data, ylabel, log=True):
+  fig = plt.figure(figsize=(20,20))
+  ax1, ax2, ax3, ax4 = plt.subplot(4,4,1), plt.subplot(4,4,2), plt.subplot(4,4,3), plt.subplot(4,4,4)
+  ax5, ax6, ax7, ax8 = plt.subplot(4,4,5), plt.subplot(4,4,6), plt.subplot(4,4,7), plt.subplot(4,4,8)
+  ax9, ax10, ax11, ax12 = plt.subplot(4,4,9), plt.subplot(4,4,10), plt.subplot(4,4,11), plt.subplot(4,4,12)
+  ax13 = plt.subplot(4,4,13)
+  ax = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13]
+  for a in range(len(ax)):
+    ax[a].set_title(samples[a]+' ('+file_sizes[samples[a]]+')')
+    this_plot, x = [], []
+    count = 0
+    for conf in confidence:
+      this_plot.append(data.loc['data', samples[a]+'/'+conf])
+      x.append(count)
+      count += 1
+    ax[a].plot(x, this_plot, 'o-')
+    plt.sca(ax[a])
+    plt.xticks(x, confidence, rotation=90)
+    if log:
+      plt.semilogy()
+    if a in [0, 4, 8, 12]:
+      plt.ylabel(ylabel)
+
+dom_bac = pd.DataFrame(domain_reads.loc['d__Bacteria', :]).transpose().rename(index={'d__Bacteria':'data'})
+make_plot(dom_bac, 'Reads')
+plt.tight_layout()
+plt.show()
+```
+
+### Number of eukaryotic reads
+
+```{python, results='hide', fig.keep='all'}
+dom_euk = pd.DataFrame(domain_reads.loc['d__Eukaryota', :]).transpose().rename(index={'d__Eukaryota':'data'})
+make_plot(dom_euk, 'Reads')
+plt.tight_layout()
+plt.show()
+```
+
+### Diversity {.tabset}
+
+Including all species/domains
+
+#### Richness
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+rich = pd.DataFrame(reads)
+rich[rich > 0] = 1
+rich = pd.DataFrame(rich.sum(axis=0)).transpose().rename(index={0:'data'})
+
+make_plot(rich, 'Richness', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Shannon
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+def get_diversity(diversity, sample):
+    '''
+    function to calculate a range of different diversity metrics
+    It takes as input:
+        - diversity (the name of the diversity metric we want, can be 'Simpsons', 'Shannon', 'Richness', 'Evenness', 'Maximum' (Maximum is not a diversity metric, the function will just return the maximum abundance value given in sample)
+        - sample (a list of abundance values that should correspond to one sample)
+    Returns:
+        - The diversity index for the individual sample
+    '''
+    for a in range(len(sample)):
+        sample[a] = float(sample[a])
+    total = sum(sample)
+    if diversity == 'Simpsons':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)**2
+        simpsons = 1-(sum(sample))
+        return simpsons
+    elif diversity == 'Shannon':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)
+            if sample[b] != 0:
+                sample[b] = -(sample[b] * (np.log(sample[b])))
+        shannon = sum(sample)
+        return shannon
+    elif diversity == 'Richness':
+        rich = 0
+        for b in range(len(sample)):
+            if sample[b] != 0:
+                rich += 1
+        return rich
+    elif diversity == 'Evenness':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)
+            if sample[b] != 0:
+                sample[b] = -(sample[b] * (np.log(sample[b])))
+        shannon = sum(sample)
+        rich = 0
+        for b in range(len(sample)):
+            if sample[b] != 0:
+                rich += 1
+        even = shannon/(np.log(rich))
+        return even
+    elif diversity == 'Maximum':
+        ma = (max(sample)/total)*100
+        return ma
+    return
+
+shannon = []
+for sample in reads.columns.values:
+  this_div = get_diversity('Shannon', reads.loc[:, sample].values)
+  shannon.append(this_div)
+
+diversity = pd.DataFrame(shannon, index=reads.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Shannon', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Simpsons
+
+```{python}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+simpsons = []
+for sample in reads.columns.values:
+  this_div = get_diversity('Simpsons', reads.loc[:, sample].values)
+  simpsons.append(this_div)
+
+diversity = pd.DataFrame(simpsons, index=reads.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Simpsons', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Beta diversity
+
+**NMDS plot using Bray-Curtis distance at species level:**
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+
+def make_nmds(data, conf=confidence):
+  colormap = mpl.cm.get_cmap('winter', 256)
+  norm = mpl.colors.Normalize(vmin=0, vmax=22)
+  m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+  colors = [m.to_rgba(a) for a in range(22)]
+  fig = plt.figure(figsize=(20,20))
+  ax1, ax2, ax3, ax4 = plt.subplot(4,4,1), plt.subplot(4,4,2), plt.subplot(4,4,3), plt.subplot(4,4,4)
+  ax5, ax6, ax7, ax8 = plt.subplot(4,4,5), plt.subplot(4,4,6), plt.subplot(4,4,7), plt.subplot(4,4,8)
+  ax9, ax10, ax11, ax12 = plt.subplot(4,4,9), plt.subplot(4,4,10), plt.subplot(4,4,11), plt.subplot(4,4,12)
+  ax13 = plt.subplot(4,4,13)
+  ax = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13]
+  handles = []
+  for a in range(len(ax)):
+    ax[a].set_title(samples[a]+' ('+file_sizes[samples[a]]+')')
+    sample = samples[a]
+    sample_names = []
+    for conf in conf:
+      sample_names.append(sample+'/'+conf)
+    reduced_df = pd.DataFrame(data.loc[:, sample_names]).transpose()
+    reduced_df = reduced_df[reduced_df.max(axis=1) > 0]
+    pos, npos, stress = transform_for_NMDS(reduced_df)
+    minx, miny, maxx, maxy = 0, 0, 0, 0
+    for b in range(len(conf)):
+      line = ax[a].scatter(npos[b,0], npos[b,1], color=colors[b], marker='o', edgecolor='k')
+      if npos[b,0] < minx: minx = npos[b,0]
+      elif npos[b,0] > maxx: maxx = npos[b,0]
+      if npos[b,1] < miny: miny = npos[b,1]
+      elif npos[b,1] > maxy: maxy = npos[b,1]
+      if a == 0: handles.append(line)
+    #ax[a].text(0.1, 0.95, 'Stress = '+str(round(stress, 3)), transform=ax[a].transAxes)
+    plt.sca(ax[a])
+    plt.xlabel('nMDS1'), plt.ylabel('nMDS2')
+    minx, miny, maxx, maxy = minx*1.1, miny*1.1, maxx*1.1, maxy*1.1
+    plt.xlim([minx, maxx]), plt.ylim([miny, maxy])
+    plt.xticks(rotation=90)
+  ax[3].legend(handles, conf, loc='upper left', bbox_to_anchor=(1, 1.05), title='Confidence')
+  plt.tight_layout()
+
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+  
+make_nmds(reads)
+plt.show()
+```
+**NMDS plot using Bray-Curtis distance at species level with 0.1% filtering:**</br>
+This reduces us from 23771 to 1140 species.
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+
+perc = reads.divide(reads.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+  
+reduced_sp = reads.loc[perc.index.values, :]
+
+make_nmds(reduced_sp)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level:**</br>
+This reduces us from 23771 species to 4938 genera
+```{python, results='hide', fig.keep='all'}
+gen_dict = {}
+for sp in reads.index.values:
+  gen_dict[sp] = sp_dict[sp].split(';')[-1]
+
+genus_reads = reads.rename(index=gen_dict)
+genus_reads = genus_reads.groupby(by=genus_reads.index, axis=0).sum()
+make_nmds(genus_reads)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level with 0.1% filtering:**</br>
+This reduces us from 4938 to 570 genera.
+```{python, results='hide', fig.keep='all'}
+perc = genus_reads.divide(genus_reads.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+reduced_gen = genus_reads.loc[perc.index.values, :]
+
+make_nmds(reduced_gen)
+plt.show()
+```
+
+### Bacterial diversity {.tabset}
+
+This takes us from 23771 species to 19396.
+
+```{python, results='hide', fig.keep='all'}
+def get_domain(reads_df, domain):
+  keeping = []
+  for sp in reads_df.index.values:
+    if sp_dom_dict[sp] == domain:
+      keeping.append(sp)
+  reads_return = reads_df.loc[keeping, :]
+  return reads_return
+```
+
+#### Richness
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+rich = pd.DataFrame(reads_bacteria)
+rich[rich > 0] = 1
+rich = pd.DataFrame(rich.sum(axis=0)).transpose().rename(index={0:'data'})
+
+make_plot(rich, 'Richness', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Shannon
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+shannon = []
+for sample in reads_bacteria.columns.values:
+  this_div = get_diversity('Shannon', reads_bacteria.loc[:, sample].values)
+  shannon.append(this_div)
+
+diversity = pd.DataFrame(shannon, index=reads_bacteria.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Shannon', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Simpsons
+
+```{python}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+simpsons = []
+for sample in reads_bacteria.columns.values:
+  this_div = get_diversity('Simpsons', reads_bacteria.loc[:, sample].values)
+  simpsons.append(this_div)
+
+diversity = pd.DataFrame(simpsons, index=reads_bacteria.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Simpsons', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Beta diversity
+
+**NMDS plot using Bray-Curtis distance at species level:**
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+make_nmds(reads_bacteria)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at species level with 0.1% filtering:**</br>
+This reduces us from 19396 to 1074 species.
+```{python, results='hide', fig.keep='all'}
+perc = reads_bacteria.divide(reads_bacteria.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+reduced_sp = reads_bacteria.loc[perc.index.values, :]
+
+make_nmds(reduced_sp)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level:**</br>
+This reduces us from 19396 species to 2447 genera
+```{python, results='hide', fig.keep='all'}
+gen_dict = {}
+for sp in reads_bacteria.index.values:
+  gen_dict[sp] = sp_dict[sp].split(';')[-1]
+
+genus_reads_bacteria = reads_bacteria.rename(index=gen_dict)
+genus_reads_bacteria = genus_reads_bacteria.groupby(by=genus_reads_bacteria.index, axis=0).sum()
+make_nmds(genus_reads_bacteria)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level with 0.1% filtering:**</br>
+This reduces us from 2447 to 435 genera.
+```{python, results='hide', fig.keep='all'}
+perc = genus_reads_bacteria.divide(genus_reads_bacteria.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+reduced_gen_bacteria = genus_reads_bacteria.loc[perc.index.values, :]
+
+make_nmds(reduced_gen_bacteria)
+plt.show()
+```
+
+
+### Eukaryotic diversity {.tabset}
+
+This takes us from 23771 species to 2718.
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_eukaryotes = get_domain(reads, 'd__Eukaryota')
+```
+
+#### Richness
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_eukaryotes = get_domain(reads, 'd__Eukaryota')
+
+rich = pd.DataFrame(reads_eukaryotes)
+rich[rich > 0] = 1
+rich = pd.DataFrame(rich.sum(axis=0)).transpose().rename(index={0:'data'})
+
+make_plot(rich, 'Richness', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Shannon
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_eukaryotes = get_domain(reads, 'd__Eukaryota')
+
+shannon = []
+for sample in reads_eukaryotes.columns.values:
+  this_div = get_diversity('Shannon', reads_eukaryotes.loc[:, sample].values)
+  shannon.append(this_div)
+
+diversity = pd.DataFrame(shannon, index=reads_eukaryotes.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Shannon', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Simpsons
+
+```{python}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_eukaryotes = get_domain(reads, 'd__Eukaryota')
+
+simpsons = []
+for sample in reads_eukaryotes.columns.values:
+  this_div = get_diversity('Simpsons', reads_eukaryotes.loc[:, sample].values)
+  simpsons.append(this_div)
+
+diversity = pd.DataFrame(simpsons, index=reads_eukaryotes.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Simpsons', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Beta diversity
+
+**NMDS plot using Bray-Curtis distance at species level:**
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_eukaryotes = get_domain(reads, 'd__Eukaryota')
+
+make_nmds(reads_eukaryotes)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at species level with 0.1% filtering:**</br>
+This reduces us from 2718 to 600 species.
+```{python, results='hide', fig.keep='all'}
+perc = reads_eukaryotes.divide(reads_eukaryotes.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+reduced_sp = reads_eukaryotes.loc[perc.index.values, :]
+
+make_nmds(reduced_sp)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level:**</br>
+This reduces us from 2718 species to 1983 genera
+```{python, results='hide', fig.keep='all'}
+gen_dict = {}
+for sp in reads_eukaryotes.index.values:
+  gen_dict[sp] = sp_dict[sp].split(';')[-1]
+
+genus_reads_eukaryotes = reads_eukaryotes.rename(index=gen_dict)
+genus_reads_eukaryotes = genus_reads_eukaryotes.groupby(by=genus_reads_eukaryotes.index, axis=0).sum()
+
+make_nmds(genus_reads_eukaryotes)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level with 0.1% filtering:**</br>
+This reduces us from 1983 to 510 genera.
+```{python, results='hide', fig.keep='all'}
+perc = genus_reads_eukaryotes.divide(genus_reads_eukaryotes.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+reduced_gen_eukaryotes = genus_reads_eukaryotes.loc[perc.index.values, :]
+
+make_nmds(reduced_gen_eukaryotes)
+plt.show()
+```
+
+### Stacked bar at species level {.tabset}
+The abundance filtering here is arbitrary and just to allow a reasonable reduction to the number of species shown.
+
+#### All domains
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+rel_abun_all = reads.divide(reads.sum(axis=0), axis=1).multiply(100)
+
+def get_set(data, sample_set):
+  plt.figure(figsize=(13,10))
+  ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+  ax = [ax1, ax2, ax3, ax4]
+  
+  for s in range(len(sample_set)):
+    sample = sample_set[s]
+    this_set = []
+    for conf in confidence:
+      this_set.append(sample+'/'+conf)
+    set_data = data.loc[:, this_set]
+    if s != 1: 
+      set_data.transpose().plot.bar(stacked=True, ax=ax[s], edgecolor='k', width=0.8, legend=False)
+    else:
+      set_data.transpose().plot.bar(stacked=True, ax=ax[s], edgecolor='k', width=0.8)
+    plt.sca(ax[s])
+    plt.title(sample)
+    plt.ylim([0,100])
+    if s == 0 or s == 2: plt.ylabel('Relative abundance (%)')
+    if s == 0 or s == 1: plt.xticks([])
+    else: 
+      locs, labels = plt.xticks()
+      plt.xticks(locs, confidence)
+  ax2.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='', fontsize=8)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+
+reduced_data['Expected composition'] = 0
+reduced_data['QIIME2 V4V5'] = 0
+real_species, real_composition, real_V4V5 = ['Listeria monocytogenes', 'Pseudomonas aeruginosa', 'Bacillus subtilis', 'Escherichia coli', 'Salmonella enterica', 'Lactobacillus fermentum', 'Enterococcus faecalis', 'Staphylococcus aureus', 'Saccharomyces cerevisiae', 'Cryptococcus neoformans'], [12.6, 14.7, 12.3, 12.6, 12.1, 9.5, 12.6, 10.2, 1.9, 1.5], [4.1, 4.7, 9.6, 14.4, 13.1, 50, 2.2, 1.8, 0, 0]
+for s in range(len(real_species)):
+  reduced_data.loc[real_species[s], 'Expected composition'] = real_composition[s]
+  reduced_data.loc[real_species[s], 'QIIME2 V4V5'] = real_V4V5[s]
+  
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='')
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence+['Expected composition', 'QIIME2 V4V5'])
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**ZymoMock dendrogram**:
+```{python, results='hide', fig.keep='all'}
+ax1 = plt.subplot(211, frameon=False)
+plt.sca(ax1)
+df = pd.DataFrame(reduced_data).transpose()
+X = df.iloc[0:].values
+y = df.iloc[:,0].values
+X_true = X
+similarities = distance.cdist(X_true, X_true, 'braycurtis')
+min_expect, min_V4V5 = 1, 1
+ind_expect, ind_V4V5 = -1, -1
+for a in range(len(similarities[-2])-2):
+  if similarities[-2][a] < min_expect:
+    min_expect = similarities[-2][a]
+    ind_expect = a
+for a in range(len(similarities[-1])-2):
+  if similarities[-1][a] < min_V4V5:
+    min_V4V5 = similarities[-1][a]
+    ind_V4V5 = a
+print('Expected smallest distance: confidence=', confidence[ind_expect], '(', min_expect, ')')
+print('QIIME2 V4V5: confidence=', confidence[ind_V4V5], '(', min_V4V5, ')')
+
+Z = ssd.squareform(similarities)
+Z = hierarchy.linkage(Z, "ward")
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k')
+x_labels, locs, xlocs, labels = list(ax1.get_xticklabels()), list(ax1.get_xticks()), list(ax1.get_yticks()), [] 
+for x in x_labels:
+  labels.append(x.get_text())
+order_names = [list(df.index.values)[int(l)] for l in labels]
+plt.xticks(locs, order_names, rotation=90)
+plt.yticks([])
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+#### Bacteria
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+rel_abun_bacteria = reads_bacteria.divide(reads_bacteria.sum(axis=0), axis=1).multiply(100)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='')
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence)
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.tight_layout()
+plt.show()
+```
+
+
+#### Eukaryotes
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_eukaryotes = get_domain(reads, 'd__Eukaryota')
+
+rel_abun_eukaryotes = reads_eukaryotes.divide(reads_eukaryotes.sum(axis=0), axis=1).multiply(100)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_eukaryotes.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='')
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence)
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_eukaryotes.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_eukaryotes.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_eukaryotes.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+### Stacked bar at genus level {.tabset}
+The abundance filtering here is arbitrary and just to allow a reasonable reduction to the number of genera shown.
+
+#### All domains
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+gen_dict = {}
+for sp in reads.index.values:
+  gen_dict[sp] = sp_dict[sp].split(';')[-1]
+genus_reads = reads.rename(index=gen_dict)
+genus_reads = genus_reads.groupby(by=genus_reads.index, axis=0).sum()
+rel_abun_all = genus_reads.divide(reads.sum(axis=0), axis=1).multiply(100)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='')
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence)
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+#### Bacteria
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+genus_reads_bacteria = reads_bacteria.rename(index=gen_dict)
+genus_reads_bacteria = genus_reads_bacteria.groupby(by=genus_reads_bacteria.index, axis=0).sum()
+
+rel_abun_bacteria = genus_reads_bacteria.divide(genus_reads_bacteria.sum(axis=0), axis=1).multiply(100)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='')
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+
+#### Eukaryotes
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_eukaryotes = get_domain(reads, 'd__Eukaryota')
+
+genus_reads_eukaryotes = reads_eukaryotes.rename(index=gen_dict)
+genus_reads_eukaryotes = genus_reads_eukaryotes.groupby(by=genus_reads_eukaryotes.index, axis=0).sum()
+
+rel_abun_eukaryotes = genus_reads_eukaryotes.divide(genus_reads_eukaryotes.sum(axis=0), axis=1).multiply(100)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_eukaryotes.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='')
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence)
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_eukaryotes.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_eukaryotes.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_eukaryotes.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+
+## GTDB + human genome {.tabset}
+
+This is probably a less appropriate database for several of the sample types given that we are probably also looking at other eukaryotes etc - which this database doesn't currently include - but I thought it would be interesting to see anyway.
+
+Import data (including on the higher taxonomy levels for each species):
+```{python, results='hide', fig.keep='all', eval=FALSE}
+taxa = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/GTDB_human_db/RW_db_samples.tsv', header=0, index_col=0, sep='\t')
+all_tax = set(taxa.loc[:, 'gtdb_taxonomy'].values)
+sp_dict = {}
+for tax in all_tax:
+  sp_dict[tax.split(';')[-1]] = tax.split(';s__')[0]
+  
+sp_dom_dict = {}
+for sp in sp_dict:
+  sp_dom_dict[sp] = sp_dict[sp].split(';')[0]
+
+folder_name = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/kraken_confidence_testing/kraken2_gtdb/kraken2_kreport/'
+results_folder = os.listdir(folder_name)
+bracken = [result for result in results_folder if result[-8:] == '.bracken']
+
+samples, confidence = [], []
+reads = []
+for sample in bracken:
+  result = pd.read_csv(folder_name+sample, sep='\t', header=0, index_col=0)
+  result = result.loc[:, ['new_est_reads']]
+  sample_name = sample.split('.', 1)
+  sample_name[1] = sample_name[1].replace('.bracken', '').replace('assembled_kneaddata.', '')
+  sample_name[1] = str(float(sample_name[1]))
+  if len(sample_name[1]) == 3: sample_name[1] = sample_name[1]+'0'
+  if sample_name[0] not in samples: samples.append(sample_name[0])
+  if sample_name[1] not in confidence: confidence.append(sample_name[1])
+  sample_name = sample_name[0]+'/'+sample_name[1]
+  if isinstance(reads, list):
+    reads = result.rename(columns={'new_est_reads':sample_name})
+  else:
+    reads = pd.concat([reads, result.rename(columns={'new_est_reads':sample_name})]).fillna(value=0)
+    reads = reads.groupby(by=reads.index, axis=0).sum()
+    
+samples, confidence = sorted(samples), sorted(confidence)
+cols, ind = sorted(list(reads.columns.values)), sorted(list(reads.index.values))
+reads = reads.loc[ind, cols]
+
+domain_reads = reads.rename(index=sp_dom_dict)
+domain_reads = domain_reads.groupby(by=domain_reads.index, axis=0).sum()
+
+save_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/kraken_confidence_testing/kraken2_gtdb/'
+reads.to_csv(save_folder+'reads.csv')
+domain_reads.to_csv(save_folder+'domain_reads.csv')
+with open(save_folder+'species_dict.dict', 'wb') as f:
+    pickle.dump(sp_dict, f)
+with open(save_folder+'species_domain_dict.dict', 'wb') as f:
+    pickle.dump(sp_dom_dict, f)
+```
+
+We can just read in the files we saved:
+```{python}
+save_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/kraken_confidence_testing/kraken2_gtdb/'
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+domain_reads = pd.read_csv(save_folder+'domain_reads.csv', index_col=0, header=0)
+with open(save_folder+'species_dict.dict', 'rb') as f:
+    sp_dict = pickle.load(f)
+with open(save_folder+'species_domain_dict.dict', 'rb') as f:
+    sp_dom_dict = pickle.load(f)
+```
+
+### Number of reads
+
+**Reads:**
+```{python, results='hide', fig.keep='all'}
+fig = plt.figure(figsize=(20,20))
+ax1, ax2, ax3, ax4 = plt.subplot(4,4,1), plt.subplot(4,4,2), plt.subplot(4,4,3), plt.subplot(4,4,4)
+ax5, ax6, ax7, ax8 = plt.subplot(4,4,5), plt.subplot(4,4,6), plt.subplot(4,4,7), plt.subplot(4,4,8)
+ax9, ax10, ax11, ax12 = plt.subplot(4,4,9), plt.subplot(4,4,10), plt.subplot(4,4,11), plt.subplot(4,4,12)
+ax13 = plt.subplot(4,4,13)
+
+ax = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13]
+colors = {'d__Archaea':'#F1C40F', 'd__Bacteria':'#AF0109', 'd__Animalia':'#01418A'}
+
+labels, names = [], []
+for a in range(len(ax)):
+  ax[a].set_title(samples[a]+' ('+file_sizes[samples[a]]+')')
+  count = 0
+  x = []
+  for conf in confidence:
+    bottom = 0
+    for dom in colors:
+      this_sample = domain_reads.loc[dom, samples[a]+'/'+conf]
+      bar = ax[a].bar(count, this_sample, bottom=bottom, color=colors[dom], edgecolor='k', width=0.9)
+      bottom += this_sample
+      if len(labels) < 3: labels.append(bar), names.append(dom)
+    x.append(count)
+    count += 1
+  if a < 4:
+    ax[a].set_ylim([0, 3600000])
+  elif a < 8:
+    ax[a].set_ylim([0, 12000000])
+  elif a < 12:
+    ax[a].set_ylim([0, 6000000])
+  else:
+    ax[a].set_ylim([0, 13000000])
+  #ax[a].semilogy()
+  ax[a].set_xlim([-0.5, count-0.5])
+  plt.sca(ax[a])
+  plt.xticks(x, confidence, rotation=90)
+  if a in [0, 4, 8, 12]:
+    ax[a].set_ylabel('Reads')
+ax[3].legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+plt.tight_layout()
+plt.savefig(save_folder+'domain_level_reads.png', dpi=600, bbox_inches='tight')
+plt.show()
+```
+
+**Log(reads):**
+```{python, results='hide', fig.keep='all'}
+fig = plt.figure(figsize=(20,20))
+ax1, ax2, ax3, ax4 = plt.subplot(4,4,1), plt.subplot(4,4,2), plt.subplot(4,4,3), plt.subplot(4,4,4)
+ax5, ax6, ax7, ax8 = plt.subplot(4,4,5), plt.subplot(4,4,6), plt.subplot(4,4,7), plt.subplot(4,4,8)
+ax9, ax10, ax11, ax12 = plt.subplot(4,4,9), plt.subplot(4,4,10), plt.subplot(4,4,11), plt.subplot(4,4,12)
+ax13 = plt.subplot(4,4,13)
+
+ax = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13]
+colors = {'d__Archaea':'#F1C40F', 'd__Bacteria':'#AF0109', 'd__Animalia':'#01418A'}
+
+labels, names = [], []
+for a in range(len(ax)):
+  ax[a].set_title(samples[a]+' ('+file_sizes[samples[a]]+')')
+  count = 0
+  x = []
+  for conf in confidence:
+    bottom = 0
+    for dom in colors:
+      this_sample = domain_reads.loc[dom, samples[a]+'/'+conf]
+      bar = ax[a].bar(count, this_sample, bottom=bottom, color=colors[dom], edgecolor='k', width=0.9)
+      bottom += this_sample
+      if len(labels) < 3: labels.append(bar), names.append(dom)
+    x.append(count)
+    count += 1
+  ax[a].semilogy()
+  ax[a].set_xlim([-0.5, count-0.5])
+  plt.sca(ax[a])
+  plt.xticks(x, confidence, rotation=90)
+  if a in [0, 4, 8, 12]:
+    ax[a].set_ylabel('Log(reads)')
+ax[3].legend(labels, names, loc='upper left', bbox_to_anchor=(1, 1.05))
+
+plt.tight_layout()
+plt.savefig(save_folder+'domain_level_reads_log.png', dpi=600, bbox_inches='tight')
+plt.show()
+```
+
+### Number of bacterial reads
+
+```{python, results='hide', fig.keep='all'}
+def make_plot(data, ylabel, log=True):
+  fig = plt.figure(figsize=(20,20))
+  ax1, ax2, ax3, ax4 = plt.subplot(4,4,1), plt.subplot(4,4,2), plt.subplot(4,4,3), plt.subplot(4,4,4)
+  ax5, ax6, ax7, ax8 = plt.subplot(4,4,5), plt.subplot(4,4,6), plt.subplot(4,4,7), plt.subplot(4,4,8)
+  ax9, ax10, ax11, ax12 = plt.subplot(4,4,9), plt.subplot(4,4,10), plt.subplot(4,4,11), plt.subplot(4,4,12)
+  ax13 = plt.subplot(4,4,13)
+  ax = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11, ax12, ax13]
+  for a in range(len(ax)):
+    ax[a].set_title(samples[a]+' ('+file_sizes[samples[a]]+')')
+    this_plot, x = [], []
+    count = 0
+    for conf in confidence:
+      this_plot.append(data.loc['data', samples[a]+'/'+conf])
+      x.append(count)
+      count += 1
+    ax[a].plot(x, this_plot, 'o-')
+    plt.sca(ax[a])
+    plt.xticks(x, confidence, rotation=90)
+    if log:
+      plt.semilogy()
+    if a in [0, 4, 8, 12]:
+      plt.ylabel(ylabel)
+
+dom_bac = pd.DataFrame(domain_reads.loc['d__Bacteria', :]).transpose().rename(index={'d__Bacteria':'data'})
+make_plot(dom_bac, 'Reads')
+plt.tight_layout()
+plt.show()
+```
+
+### Number of human reads
+
+```{python, results='hide', fig.keep='all'}
+dom_euk = pd.DataFrame(domain_reads.loc['d__Animalia', :]).transpose().rename(index={'d__Animalia':'data'})
+make_plot(dom_euk, 'Reads')
+plt.tight_layout()
+plt.show()
+```
+
+### Diversity {.tabset}
+
+Including all species/domains
+
+#### Richness
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+rich = pd.DataFrame(reads)
+rich[rich > 0] = 1
+rich = pd.DataFrame(rich.sum(axis=0)).transpose().rename(index={0:'data'})
+
+make_plot(rich, 'Richness', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Shannon
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+
+shannon = []
+for sample in reads.columns.values:
+  this_div = get_diversity('Shannon', reads.loc[:, sample].values)
+  shannon.append(this_div)
+
+diversity = pd.DataFrame(shannon, index=reads.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Shannon', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Simpsons
+
+```{python}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+simpsons = []
+for sample in reads.columns.values:
+  this_div = get_diversity('Simpsons', reads.loc[:, sample].values)
+  simpsons.append(this_div)
+
+diversity = pd.DataFrame(simpsons, index=reads.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Simpsons', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Beta diversity
+
+**NMDS plot using Bray-Curtis distance at species level:**
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+      
+make_nmds(reads)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at species level with 0.1% filtering:**</br>
+This reduces us from 31905 to 1033 species.
+```{python, results='hide', fig.keep='all'}
+perc = reads.divide(reads.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+reduced_sp = reads.loc[perc.index.values, :]
+
+make_nmds(reduced_sp)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level:**</br>
+This reduces us from 31905 species to 9429 genera
+```{python, results='hide', fig.keep='all'}
+gen_dict = {}
+for sp in reads.index.values:
+  gen_dict[sp] = sp_dict[sp].split(';')[-1]
+
+genus_reads = reads.rename(index=gen_dict)
+genus_reads = genus_reads.groupby(by=genus_reads.index, axis=0).sum()
+make_nmds(genus_reads)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level with 0.1% filtering:**</br>
+This reduces us from 9429 to 630 genera.
+```{python, results='hide', fig.keep='all'}
+perc = genus_reads.divide(genus_reads.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+reduced_gen = genus_reads.loc[perc.index.values, :]
+
+make_nmds(reduced_gen)
+plt.show()
+```
+
+### Bacterial diversity {.tabset}
+
+This takes us from 31905 species to 30233.
+
+#### Richness
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+rich = pd.DataFrame(reads_bacteria)
+rich[rich > 0] = 1
+rich = pd.DataFrame(rich.sum(axis=0)).transpose().rename(index={0:'data'})
+
+make_plot(rich, 'Richness', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Shannon
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+shannon = []
+for sample in reads_bacteria.columns.values:
+  this_div = get_diversity('Shannon', reads_bacteria.loc[:, sample].values)
+  shannon.append(this_div)
+
+diversity = pd.DataFrame(shannon, index=reads_bacteria.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Shannon', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Simpsons
+
+```{python}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+simpsons = []
+for sample in reads_bacteria.columns.values:
+  this_div = get_diversity('Simpsons', reads_bacteria.loc[:, sample].values)
+  simpsons.append(this_div)
+
+diversity = pd.DataFrame(simpsons, index=reads_bacteria.columns.values).transpose().rename(index={0:'data'})
+
+make_plot(diversity, 'Simpsons', log=False)
+plt.tight_layout()
+plt.show()
+```
+
+#### Beta diversity
+
+**NMDS plot using Bray-Curtis distance at species level:**
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+make_nmds(reads_bacteria)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at species level with 0.1% filtering:**</br>
+This reduces us from 30233 to 5639 species.
+```{python, results='hide', fig.keep='all'}
+perc = reads_bacteria.divide(reads_bacteria.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+reduced_sp = reads_bacteria.loc[perc.index.values, :]
+
+make_nmds(reduced_sp)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level:**</br>
+This reduces us from 30233 species to 8778 genera
+```{python, results='hide', fig.keep='all'}
+gen_dict = {}
+for sp in reads_bacteria.index.values:
+  gen_dict[sp] = sp_dict[sp].split(';')[-1]
+
+genus_reads_bacteria = reads_bacteria.rename(index=gen_dict)
+genus_reads_bacteria = genus_reads_bacteria.groupby(by=genus_reads_bacteria.index, axis=0).sum()
+
+make_nmds(genus_reads_bacteria)
+plt.show()
+```
+
+**NMDS plot using Bray-Curtis distance at genus level with 0.1% filtering:**</br>
+This reduces us from 8778 to 2388 genera.
+```{python, results='hide', fig.keep='all'}
+perc = genus_reads_bacteria.divide(genus_reads_bacteria.sum(axis=0), axis=1).multiply(100)
+perc = perc[perc.max(axis=1) > 0.1]
+reduced_gen_bacteria = genus_reads_bacteria.loc[perc.index.values, :]
+
+make_nmds(reduced_gen_bacteria)
+plt.show()
+```
+
+### Stacked bar at species level {.tabset}
+The abundance filtering here is arbitrary and just to allow a reasonable reduction to the number of species shown.
+
+#### All domains
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+rel_abun_all = reads.divide(reads.sum(axis=0), axis=1).multiply(100)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='', fontsize=8)
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence)
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+#### Bacteria
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+rel_abun_bacteria = reads_bacteria.divide(reads_bacteria.sum(axis=0), axis=1).multiply(100)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='', fontsize=8)
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence)
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+### Stacked bar at genus level {.tabset}
+The abundance filtering here is arbitrary and just to allow a reasonable reduction to the number of genera shown.
+
+#### All domains
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+gen_dict = {}
+for sp in reads.index.values:
+  gen_dict[sp] = sp_dict[sp].split(';')[-1]
+genus_reads = reads.rename(index=gen_dict)
+genus_reads = genus_reads.groupby(by=genus_reads.index, axis=0).sum()
+rel_abun_all = genus_reads.divide(reads.sum(axis=0), axis=1).multiply(100)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='', fontsize=8)
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence)
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_all.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+#### Bacteria
+
+```{python, results='hide', fig.keep='all'}
+reads = pd.read_csv(save_folder+'reads.csv', index_col=0, header=0)
+reads_bacteria = get_domain(reads, 'd__Bacteria')
+
+genus_reads_bacteria = reads_bacteria.rename(index=gen_dict)
+genus_reads_bacteria = genus_reads_bacteria.groupby(by=genus_reads_bacteria.index, axis=0).sum()
+
+rel_abun_bacteria = genus_reads_bacteria.divide(genus_reads_bacteria.sum(axis=0), axis=1).multiply(100)
+```
+
+**ZymoMock:**</br>
+0.1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(8,5))
+ax = plt.subplot(111)
+samples_using = []
+for sample in samples: 
+  if sample != 'ZymoMock': continue
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 0.1]
+reduced_data.transpose().plot.bar(stacked=True, ax=ax, edgecolor='k', width=0.8)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1.025), title='')
+locs, labels = plt.xticks()
+plt.xticks(locs, confidence)
+ax.set_ylim([0,100]), ax.set_ylabel('Relative abundance (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**AsheMetaG:**</br>
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'AsheMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**MirallesMetaG:**
+2% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'MirallesMetaG' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 2]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```
+
+**Personal Genome Project:**
+1% abundance filtering
+```{python, results='hide', fig.keep='all'}
+samples_using, samples_set = [], []
+for sample in samples: 
+  if 'PGPC' not in sample: continue
+  samples_set.append(sample)
+  for conf in confidence: 
+    samples_using.append(sample+'/'+conf)
+reduced_data = rel_abun_bacteria.loc[:, samples_using]
+reduced_data = reduced_data[reduced_data.max(axis=1) > 1]
+
+get_set(reduced_data, samples_set)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+plt.show()
+```

@@ -1,0 +1,524 @@
+---
+title: COVID sample analysis (comparison of variable regions)
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+fig_width: 10
+fig_height: 10
+---
+
+```{R, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(exactRankTests)
+library(nlme)
+library(dplyr)
+library(ggplot2)
+library(compositions)
+library(vegan)
+library(phyloseq)
+```
+
+```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+import numpy as np
+import os
+import pandas as pd
+import math
+import matplotlib.pyplot as plt
+from scipy.cluster import hierarchy
+import matplotlib as mpl
+from matplotlib_venn import venn2
+import csv
+from matplotlib.patches import Patch
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+```
+
+# Sequence processing {.tabset}
+
+## Amplicon {.tabset}
+
+### Activate QIIME2
+Initially used some combination of both 2020.2 and 2020.8, so re-doing all with 2020.8 (not reimporting reads, starting by using the existing reads.qza object)
+```{bash, eval=FALSE}
+conda activate qiime2-2020.8
+```
+
+### Initial quality checks
+```{bash, eval=FALSE}
+mkdir fastqc
+#fastqc -t 4 COVID-TNA-16S_Run380/*fastq.gz -o fastqc/
+fastqc -t 4 reads/*fastq.gz -o fastqc/
+multiqc fastqc/
+```
+
+### Import and summarize
+```{bash, eval=FALSE}
+#qiime tools import \
+#  --type SampleData[PairedEndSequencesWithQuality] \
+#  --input-path COVID-TNA-16S_Run380/ \
+#  --output-path reads.qza \
+#  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path reads/ \
+  --output-path reads.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+  
+qiime demux summarize \
+  --i-data reads.qza  \
+  --o-visualization summary_reads.qzv
+```
+
+### Cutadapt V4V5
+```{bash, eval=FALSE}
+qiime cutadapt trim-paired \
+  --i-demultiplexed-sequences reads.qza \
+  --p-cores 8 \
+  --p-front-f GTGYCAGCMGCCGCGGTAA \
+  --p-front-r CCGYCAATTYMTTTRAGTTT \
+  --p-discard-untrimmed \
+  --p-no-indels \
+  --o-trimmed-sequences trimmed_reads.qza
+  
+qiime demux summarize \
+  --i-data trimmed_reads.qza  \
+  --o-visualization summary_trimmed_reads.qzv
+```
+
+### Cutadapt V6V8
+```{bash, eval=FALSE}
+qiime cutadapt trim-paired \
+  --i-demultiplexed-sequences reads.qza \
+  --p-cores 12 \
+  --p-front-f ACGCGHNRAACCTTACC \
+  --p-front-r ACGGGCRGTGWGTRCAA \
+  --p-discard-untrimmed \
+  --p-no-indels \
+  --o-trimmed-sequences trimmed_reads.qza
+  
+qiime demux summarize \
+  --i-data trimmed_reads.qza  \
+  --o-visualization summary_trimmed_reads.qzv
+```
+
+### DADA2
+```{bash, eval=FALSE}
+mkdir dada2_out
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs trimmed_reads.qza \
+  --p-trunc-len-f 240 \
+  --p-trunc-len-r 180 \
+  --p-max-ee-f 2 \
+  --p-max-ee-r 2 \
+  --p-n-threads 12 \
+  --o-table dada2_out/table.qza \
+  --o-representative-sequences dada2_out/representative_sequences.qza \
+  --o-denoising-stats dada2_out/stats.qza
+  
+qiime metadata tabulate \
+  --m-input-file dada2_out/stats.qza \
+  --o-visualization stats_dada2_out.qzv
+  
+qiime feature-table summarize \
+  --i-table dada2_out/table.qza  \
+  --o-visualization summary_dada2_out.qzv
+```
+
+### Classify
+```{bash, eval=FALSE}
+#wget https://data.qiime2.org/2020.8/common/silva-138-99-nb-classifier.qza
+qiime feature-classifier classify-sklearn \
+  --i-reads dada2_out/representative_sequences.qza \
+  --i-classifier /home/shared/taxa_classifiers/qiime2-2020.8_classifiers/silva-138-99-nb-classifier.qza \
+  --p-n-jobs 12 \
+  --output-dir taxa
+  
+qiime tools export \
+  --input-path taxa/classification.qza \
+  --output-path taxa
+```
+
+### Filter features
+```{bash, eval=FALSE}
+qiime feature-table filter-features \
+  --i-table dada2_out/table.qza \
+  --p-min-frequency 5 \
+  --p-min-samples 1 \
+  --o-filtered-table table_filtered.qza
+  
+qiime feature-table summarize \
+  --i-table table_filtered.qza \
+  --o-visualization summary_table_filtered.qzv
+```
+
+```{bash, eval=FALSE}
+qiime taxa filter-table \
+  --i-table table_filtered.qza \
+  --i-taxonomy taxa/classification.qza \
+  --p-include d__ \
+  --p-exclude mitochondria,chloroplast \
+  --o-filtered-table table_filtered_contamination.qza
+  
+qiime feature-table summarize \
+  --i-table table_filtered_contamination.qza \
+  --o-visualization summary_table_filtered_contamination.qzv
+```
+
+### Get rarefaction curves
+V4V5
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+  --i-table table_filtered_contamination.qza \
+  --p-max-depth 22840 \
+  --p-steps 20 \
+  --p-metrics 'observed_features' \
+  --o-visualization rarefaction_curves.qzv
+```
+This is just a screenshot from the QIIME2 view website:
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/QIIME2_rarefaction_curves.png)
+
+cDNA V6V8
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+  --i-table table_filtered_contamination.qza \
+  --p-max-depth 160269 \
+  --p-steps 20 \
+  --p-metrics 'observed_features' \
+  --o-visualization rarefaction_curves.qzv
+```
+This is just a screenshot from the QIIME2 view website:
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_cDNA_V6V8/QIIME2_rarefaction_curves.png)
+
+TNA V6V8
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+  --i-table table_filtered_contamination.qza \
+  --p-max-depth 464496 \
+  --p-steps 20 \
+  --p-metrics 'observed_features' \
+  --o-visualization rarefaction_curves.qzv
+```
+This is just a screenshot from the QIIME2 view website:
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_TNA_V6V8/QIIME2_rarefaction_curves.png)
+
+## Filter
+*Not rarefying or removing samples with low numbers of reads*
+```{bash, eval=FALSE}
+qiime feature-table filter-seqs \
+  --i-data dada2_out/representative_sequences.qza \
+  --i-table table_filtered_contamination.qza \
+  --o-filtered-data  representative_sequences_filtered_contamination.qza
+```
+
+## Insert sequences into tree
+```{bash, eval=FALSE}
+qiime fragment-insertion sepp \
+  --i-representative-sequences representative_sequences_filtered_contamination.qza \
+  --i-reference-database /home/robyn/tools/sepp/sepp-refs-silva-128.qza \
+  --o-tree insertion_tree.qza \
+  --o-placements insertion_placements.qza \
+  --p-threads 12
+```
+
+## Export all files
+```{bash, eval=FALSE}
+qiime tools export \
+  --input-path representative_sequences_filtered_contamination.qza \
+  --output-path exports
+  
+sed -i -e '1 s/Feature/#Feature/' -e '1 s/Taxon/taxonomy/' taxa/taxonomy.tsv
+
+qiime tools export \
+  --input-path table_filtered_contamination.qza \
+  --output-path exports
+  
+biom add-metadata \
+  -i exports/feature-table.biom \
+  -o exports/feature-table_w_tax.biom \
+  --observation-metadata-fp taxa/taxonomy.tsv \
+  --sc-separated taxonomy
+  
+biom convert \
+  -i exports/feature-table_w_tax.biom \
+  -o exports/feature-table_w_tax.txt \
+  --to-tsv \
+  --header-key taxonomy
+  
+qiime tools export \
+  --input-path insertion_tree.qza \
+  --output-path exports
+```
+
+```{bash, eval=FALSE}
+qiime taxa barplot \
+  --i-table table_filtered_contamination.qza \
+  --i-taxonomy taxa/classification.qza \
+  --m-metadata-file metadata.txt \
+  --o-visualization barplot.qzv
+```
+
+## Metagenome kneaddata/Kraken2 {.tabset}
+
+### Concatenate lanes
+```{bash, eval=FALSE}
+concat_lanes.pl COVID-TNA_cDNA-MetaG_RunNS56/* -o cat_lanes -p 4
+```
+
+### Kneaddata
+```{bash, eval=FALSE}
+parallel -j 2 --link 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 20 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: cat_lanes/*_R1.fastq.gz ::: cat_lanes/*_R2.fastq.gz
+ 
+kneaddata_read_count_table --input kneaddata_out --output kneaddata_read_counts.txt
+```
+
+### Concatenate reads
+```{bach, eval=FALSE}
+concat_paired_end.pl -p 4 --no_R_match -o cat_reads kneaddata_out/*_paired_*.fastq 
+```
+
+### Kraken2 (RefSeq Complete v93)
+```{bash, eval=FALSE}
+mkdir kraken2_outraw_conf
+mkdir kraken2_kreport_conf
+parallel -j 2 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output kraken2_outraw/{/.}.kraken.txt --report kraken2_kreport/{/.}.kreport --confidence 0.1' ::: cat_reads/*.fastq
+```
+
+### Bracken
+```{bash, eval=FALSE}
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*.kreport
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/O3-pos.kreport
+```
+
+### Kraken2 (Standard 19-9-2020 incl. SARS-COV-2)
+```{bash, eval=FALSE}
+mkdir karken_standard/kraken2_outraw
+mkdir kraken_standard/kraken2_kreport
+parallel -j 1 'kraken2 --use-names --threads 12 --db /home/robyn/tools/kraken_db_Nov20/ --memory-mapping {} --output kraken_standard/kraken2_outraw/{/.}.kraken.txt --report kraken_standard/kraken2_kreport/{/.}.kreport --confidence 0.1' ::: cat_reads/*.fastq
+```
+
+### Bracken
+```{bash, eval=FALSE}
+parallel -j 1 'bracken -d /home/robyn/tools/kraken_db_Nov20/ -i {} -l S -o {.}.bracken -r 150' ::: kraken_standard/kraken2_kreport/*.kreport
+
+#parallel -j 1 'bracken -d /home/robyn/tools/kraken_db_Nov20/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/O3-pos.kreport
+```
+
+## Reads mapping to SARS-CoV-2 genome {.tabset}
+
+### Kneaddata/Bowtie2
+
+Make SARS-COV-2 database:
+```{bash, eval=FALSE}
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/009/858/895/GCF_009858895.2_ASM985889v3/GCF_009858895.2_ASM985889v3_genomic.fna.gz
+bowtie2-build GCF_009858895.2_ASM985889v3_genomic.fna.gz SARS-COV-2
+```
+
+Run with the cat_reads MG samples:
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'kneaddata -i {1} -i {2} -o kneaddata_out_covid/ \
+-db covid_ref_genome/ --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 12 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: cat_lanes/*_R1.fastq.gz ::: cat_lanes/*_R2.fastq.gz
+ 
+kneaddata_read_count_table --input kneaddata_out_covid/ --output kneaddata_read_counts_covid_genome.txt
+```
+
+Resulting sample sizes:
+```{python, results='hide', fig.keep='all'}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+samples = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/kneaddata_read_counts_covid_genome.txt', sep='\t', header=0, index_col=0)
+print(samples)
+nonzero = {'cDNA-N1-pos_S75_R1_kneaddata':103, 'cDNA-N2-pos_S76_R1_kneaddata':130, 'cDNA-N3-pos_S77_R1_kneaddata':1.1, 'cDNA-N4-pos_S78_R1_kneaddata':6.9, 'cDNA-N5-pos_S79_R1_kneaddata':20, 'cDNA-O1-pos_S80_R1_kneaddata':1.5, 'cDNA-O2-pos_S61_R1_kneaddata':118, 'cDNA-O3-pos_S62_R1_kneaddata':23, 'cDNA-O4-pos_S63_R1_kneaddata':3.4, 'cDNA-O5-pos_S64_R1_kneaddata':15}
+
+plt.figure(figsize=(10,3))
+ax1 = plt.subplot(111)
+
+count = 0
+names, x = [], []
+for sample in samples.index.values:
+  if sample in nonzero:
+    ax1.bar(count, nonzero[sample], color='k')
+  x.append(count)
+  names.append(sample.split('_')[0])
+  count += 1
+
+plt.xticks(x, names, rotation=90)
+plt.ylabel('File size (Kb)')
+plt.tight_layout()
+plt.show()
+```
+
+### metaSPADES {.tabset}
+
+#### Test
+
+Needs single short-read library, with paired-end reads
+
+Install:
+```{bash, eval=FALSE}
+#Check dependencies
+g++ --version
+g++ (Ubuntu 5.5.0-12ubuntu1~16.04) 5.5.0 20171010
+cmake --version
+cmake version 3.5.1
+conda install zlib #still isn't showing with which or --version, but it says it installed so I'll try the rest anyway.
+conda install libbz2 #also didn't install, so trying anyway
+
+wget http://cab.spbu.ru/files/release3.14.1/SPAdes-3.14.1.tar.gz
+tar -xzf SPAdes-3.14.1.tar.gz
+cd SPAdes-3.14.1
+
+PREFIX=/home/robyn/anaconda3/ ./spades_compile.sh
+```
+
+Test:
+```{bash, eval=FALSE}
+/home/robyn/anaconda3/bin/spades.py --test
+```
+
+Input:
+- paired end reads (using fastq files from concatenating lanes)
+
+Test single sample:
+```{bash, eval=FALSE}
+/home/robyn/anaconda3/bin/spades.py -o test_spades_out --meta -1 cat_lanes/cDNA-N1-pos_S75_R1.fastq.gz -2 cat_lanes/cDNA-N1-pos_S75_R2.fastq.gz -t 12
+```
+
+Run:
+```{bash, eval=FALSE}
+/home/robyn/anaconda3/bin/spades.py -o test_spades_out --meta -1 cat_lanes/cDNA-N1-pos_S75_R1.fastq.gz -2 cat_lanes/cDNA-N1-pos_S75_R2.fastq.gz -t 12
+```
+
+Took ~5 hours to run using 12 threads on vulcan.
+
+Install MetaQUAST:
+```{bash, eval=FALSE}
+wget https://downloads.sourceforge.net/project/quast/quast-5.0.2.tar.gz
+tar -xzf quast-5.0.2.tar.gz
+cd quast-5.0.2
+```
+Seems to work fine.
+
+Run on the sample:
+```{bash, eval=FALSE}
+python /home/robyn/tools/quast-5.0.2/metaquast.py test_spades_out/contigs.fasta --references-list reference-list.txt --threads 10
+```
+
+This gives the following COVID genome alignment graph:
+![](/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/Icarus_test.png)
+The largest contig that aligned was 2747 and the total aligned length was 9760 (32.6% COVID genome coverage).
+
+#### All samples
+
+Pipeline used in [Virome characterisation comparison paper](https://microbiomejournal.biomedcentral.com/articles/10.1186/s40168-019-0626-5):</br>
+1. Trimmomatic</br>
+2. MetaSPAdes</br>
+3. MetaQUAST</br></br>
+
+Because MetaSPAdes took quite a long time to run with the whole sample, I'm going to do this first with "contam" output from Bowtie2 above, so those reads that mapped to the COVID genome (i.e. skipping the Trimmomatic step for not). </br></br>
+
+**MetaSPAdes:**
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress '/home/robyn/anaconda3/bin/spades.py --meta -1 {1} -2 {2} -t 12 -o metaSPADES/{1/.}' ::: kneaddata_covid_contam/*_1.fastq ::: kneaddata_covid_contam/*_2.fastq
+```
+
+**MetaQUAST:**
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'python /home/robyn/tools/quast-5.0.2/metaquast.py {1}/contigs.fasta --references-list reference-list.txt --threads 10 -o quast_results/{1/}' ::: metaSPADES/*
+```
+
+#### Alignment summary
+
+```{python, results='hide', fig.keep='all'}
+samples = ['N1', 'N1', 'N2', 'N4', 'N5', 'O2', 'O3', 'O4', 'O5']
+largest_aligned_contig = [2747, 2721, 4016, 0, 4745, 4743, 502, 0, 0]
+total_aligned = [9760, 8536, 17872, 0, 26891, 12041, 502, 0, 0]
+total_perc_aligned = [32.6, 28.519, 59.8, 0, 89.7, 40.299, 1.68, 0, 0]
+colors = ['w', 'r', 'r', 'r', 'r', 'b', 'b', 'b', 'b']
+label = ['Largest aligned contig (bp)', 'Total aligned (bp)', 'COVID genome coverage (%)']
+
+plt.figure(figsize=(10,4))
+ax1, ax2, ax3 = plt.subplot(131), plt.subplot(132), plt.subplot(133)
+ax = [ax1, ax2, ax3]
+x = []
+for a in range(len(samples)):
+  ax1.bar(a, largest_aligned_contig[a], color=colors[a], width=0.8, edgecolor='k')
+  ax2.bar(a, total_aligned[a], color=colors[a], width=0.8, edgecolor='k')
+  ax3.bar(a, total_perc_aligned[a], color=colors[a], width=0.8, edgecolor='k')
+  x.append(a)
+for a in range(len(ax)):
+  plt.sca(ax[a])
+  plt.xticks(x, samples)
+  plt.ylabel(label[a])
+  
+plt.tight_layout()
+plt.show()
+```
+Note that the white N1 bar is for the test above (i.e. the whole sample was assembled and aligned to the COVID genome) while the red N1 bar is for only the reads that bowtie2 aligned to the COVID genome. For reference, the COVID genome is 29,882 bp.
+
+So the sample with the highest % aligned is N5:
+![](/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/quast/quast_results/cDNA-N5-pos_S79_R1_kneaddata_SARS-COV-2_bowtie2_paired_contam_1/icarus_viewers/alignment.png)
+
+## Coverage of genomes SPAdes/QUAST {.tabset}
+
+### Assemble (SPAdes)
+
+Copied all (kneaddata output) across to Compute Canada server.
+Script to make jobs:
+```{python, eval=FALSE}
+import os 
+
+files = sorted(os.listdir('kneaddata_out_paired/'))
+fns, pairs = [], []
+for f in range(len(files)):
+  fn = files[f].split('_')[0]
+  if fn not in fns:
+    fns.append(fn)
+    for g in range(len(files)):
+      if f != g:
+        gn = files[g].split('_')[0]
+        if fn == gn:
+          pairs.append([files[f], files[g]])
+
+for a in range(len(fns)):
+  fn = fns[a]
+  if fn != 'cDNA-N1-neg': continue
+  script = '#!/bin/bash\n'
+  script += '#SBATCH --job-name='+fn+'_spades.job\n'
+  script += '#SBATCH --output=/home/rwright/scratch/out/'+fn+'_spades.out\n'
+  script += '#SBATCH --error=/home/rwright/scratch/out/'+fn+'_spades.err\n'
+  script += '#SBATCH --mem=80G\n'
+  script += '#SBATCH --time=0-1:30\n'
+  script += '#SBATCH --cpus-per-task=40\n'
+  script += '#SBATCH --mail-user=robyn.wright@dal.ca\n'
+  script += '#SBATCH --mail-type=ALL\n'
+  script += 'conda activate spades\n'
+  script += 'source activate spades\n'
+  script += 'mkdir spades_out/'+fn+'\n'
+  script += '/home/rwright/anaconda3/bin/spades.py --meta -1 /home/rwright/scratch/COVID/kneaddata_out_paired/'+pairs[a][0]+' -2 /home/rwright/scratch/COVID/kneaddata_out_paired/'+pairs[a][1]+'-o spades_out/'+fn+'/ -t 40\n'
+  with open(fn+'.job', 'w') as f:
+    f.write(script)
+  os.system('sbatch '+fn+'.job')
+```
+
+
+## Generating MAGs Anv'io {.tabset}
+
+

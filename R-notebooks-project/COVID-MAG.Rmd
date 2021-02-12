@@ -1,0 +1,813 @@
+---
+title: COVID genome
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+---
+
+# Kneaddata/Bowtie2
+
+Make SARS-COV-2 database:
+```{bash, eval=FALSE}
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/009/858/895/GCF_009858895.2_ASM985889v3/GCF_009858895.2_ASM985889v3_genomic.fna.gz
+bowtie2-build GCF_009858895.2_ASM985889v3_genomic.fna.gz SARS-COV-2
+```
+
+Run with the cat_reads MG samples:
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'kneaddata -i {1} -i {2} -o kneaddata_out_covid/ \
+-db covid_ref_genome/ --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 12 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: cat_lanes/*_R1.fastq.gz ::: cat_lanes/*_R2.fastq.gz
+ 
+kneaddata_read_count_table --input kneaddata_out_covid/ --output kneaddata_read_counts_covid_genome.txt
+```
+
+Resulting sample sizes:
+```{python, results='hide', fig.keep='all'}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+samples = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/kneaddata_read_counts_covid_genome.txt', sep='\t', header=0, index_col=0)
+print(samples)
+nonzero = {'cDNA-N1-pos_S75_R1_kneaddata':103, 'cDNA-N2-pos_S76_R1_kneaddata':130, 'cDNA-N3-pos_S77_R1_kneaddata':1.1, 'cDNA-N4-pos_S78_R1_kneaddata':6.9, 'cDNA-N5-pos_S79_R1_kneaddata':20, 'cDNA-O1-pos_S80_R1_kneaddata':1.5, 'cDNA-O2-pos_S61_R1_kneaddata':118, 'cDNA-O3-pos_S62_R1_kneaddata':23, 'cDNA-O4-pos_S63_R1_kneaddata':3.4, 'cDNA-O5-pos_S64_R1_kneaddata':15}
+
+plt.figure(figsize=(10,3))
+ax1 = plt.subplot(111)
+
+count = 0
+names, x = [], []
+for sample in samples.index.values:
+  if sample in nonzero:
+    ax1.bar(count, nonzero[sample], color='k')
+  x.append(count)
+  names.append(sample.split('_')[0])
+  count += 1
+
+plt.xticks(x, names, rotation=90)
+plt.ylabel('File size (Kb)')
+plt.tight_layout()
+plt.show()
+```
+
+# metaSPADES {.tabset}
+
+## Test
+
+Needs single short-read library, with paired-end reads
+
+Install:
+```{bash, eval=FALSE}
+#Check dependencies
+g++ --version
+g++ (Ubuntu 5.5.0-12ubuntu1~16.04) 5.5.0 20171010
+cmake --version
+cmake version 3.5.1
+conda install zlib #still isn't showing with which or --version, but it says it installed so I'll try the rest anyway.
+conda install libbz2 #also didn't install, so trying anyway
+
+wget http://cab.spbu.ru/files/release3.14.1/SPAdes-3.14.1.tar.gz
+tar -xzf SPAdes-3.14.1.tar.gz
+cd SPAdes-3.14.1
+
+PREFIX=/home/robyn/anaconda3/ ./spades_compile.sh
+```
+
+Test:
+```{bash, eval=FALSE}
+/home/robyn/anaconda3/bin/spades.py --test
+```
+
+Input:
+- paired end reads (using fastq files from concatenating lanes)
+
+Test single sample:
+```{bash, eval=FALSE}
+/home/robyn/anaconda3/bin/spades.py -o test_spades_out --meta -1 cat_lanes/cDNA-N1-pos_S75_R1.fastq.gz -2 cat_lanes/cDNA-N1-pos_S75_R2.fastq.gz -t 12
+```
+
+Run:
+```{bash, eval=FALSE}
+/home/robyn/anaconda3/bin/spades.py -o test_spades_out --meta -1 cat_lanes/cDNA-N1-pos_S75_R1.fastq.gz -2 cat_lanes/cDNA-N1-pos_S75_R2.fastq.gz -t 12
+```
+
+Took ~5 hours to run using 12 threads on vulcan.
+
+Install MetaQUAST:
+```{bash, eval=FALSE}
+wget https://downloads.sourceforge.net/project/quast/quast-5.0.2.tar.gz
+tar -xzf quast-5.0.2.tar.gz
+cd quast-5.0.2
+```
+Seems to work fine.
+
+Run on the sample:
+```{bash, eval=FALSE}
+python /home/robyn/tools/quast-5.0.2/metaquast.py test_spades_out/contigs.fasta --references-list reference-list.txt --threads 10
+```
+
+This gives the following COVID genome alignment graph:
+![](/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/Icarus_test.png)
+The largest contig that aligned was 2747 and the total aligned length was 9760 (32.6% COVID genome coverage).
+
+## All samples
+
+Pipeline used in [Virome characterisation comparison paper](https://microbiomejournal.biomedcentral.com/articles/10.1186/s40168-019-0626-5):</br>
+1. Trimmomatic</br>
+2. MetaSPAdes</br>
+3. MetaQUAST</br></br>
+
+Because MetaSPAdes took quite a long time to run with the whole sample, I'm going to do this first with "contam" output from Bowtie2 above, so those reads that mapped to the COVID genome (i.e. skipping the Trimmomatic step for not). </br></br>
+
+**MetaSPAdes:**
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress '/home/robyn/anaconda3/bin/spades.py --meta -1 {1} -2 {2} -t 12 -o metaSPADES/{1/.}' ::: kneaddata_covid_contam/*_1.fastq ::: kneaddata_covid_contam/*_2.fastq
+```
+
+**MetaQUAST:**
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'python /home/robyn/tools/quast-5.0.2/metaquast.py {1}/contigs.fasta --references-list reference-list.txt --threads 10 -o quast_results/{1/}' ::: metaSPADES/*
+```
+
+**Alignment summary:**
+```{python, results='hide', fig.keep='all'}
+samples = ['N1', 'N1', 'N2', 'N4', 'N5', 'O2', 'O3', 'O4', 'O5']
+largest_aligned_contig = [2747, 2721, 4016, 0, 4745, 4743, 502, 0, 0]
+total_aligned = [9760, 8536, 17872, 0, 26891, 12041, 502, 0, 0]
+total_perc_aligned = [32.6, 28.519, 59.8, 0, 89.7, 40.299, 1.68, 0, 0]
+colors = ['w', 'r', 'r', 'r', 'r', 'b', 'b', 'b', 'b']
+label = ['Largest aligned contig (bp)', 'Total aligned (bp)', 'COVID genome coverage (%)']
+
+plt.figure(figsize=(10,4))
+ax1, ax2, ax3 = plt.subplot(131), plt.subplot(132), plt.subplot(133)
+ax = [ax1, ax2, ax3]
+x = []
+for a in range(len(samples)):
+  ax1.bar(a, largest_aligned_contig[a], color=colors[a], width=0.8, edgecolor='k')
+  ax2.bar(a, total_aligned[a], color=colors[a], width=0.8, edgecolor='k')
+  ax3.bar(a, total_perc_aligned[a], color=colors[a], width=0.8, edgecolor='k')
+  x.append(a)
+for a in range(len(ax)):
+  plt.sca(ax[a])
+  plt.xticks(x, samples)
+  plt.ylabel(label[a])
+  
+plt.tight_layout()
+plt.show()
+```
+Note that the white N1 bar is for the test above (i.e. the whole sample was assembled and aligned to the COVID genome) while the red N1 bar is for only the reads that bowtie2 aligned to the COVID genome. For reference, the COVID genome is 29,882 bp.
+
+So the sample with the highest % aligned is N5:
+![](/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/quast/quast_results/cDNA-N5-pos_S79_R1_kneaddata_SARS-COV-2_bowtie2_paired_contam_1/icarus_viewers/alignment.png)
+
+# ANVIO {.tabset}
+
+## Install ANVIO
+
+Following the instructions [here](https://merenlab.org/2016/06/26/installation-v2/).
+
+```{bash, eval=FALSE}
+conda update conda
+conda create -y --name anvio-6.2 python=3.6
+conda activate anvio-6.2
+conda install -y -c conda-forge -c bioconda anvio==6.2
+```
+
+Check installation:
+```{bash, eval=FALSE}
+conda list | grep anvio-minimal | grep 6.2 | awk '{print $3}'
+```
+
+One more step:
+```{bash, eval=FALSE}
+conda remove -y --force anvio-minimal
+conda install -y -c bioconda -c conda-forge anvio-minimal==6.2=py_1
+```
+
+Test run:
+```{bash, eval=FALSE}
+anvi-self-test --suite mini
+```
+
+## TARA oceans MAGs
+
+Following the tutorial [here](https://merenlab.org/data/tara-oceans-mags/).
+
+### Preparation
+
+They give instructions for their samples, but use two lists for this. One is set (groups of samples that will be co-assembled) and the other sample. I'll make these like this:
+```{python, eval=FALSE}
+import os
+import pandas as pd
+
+sets = ['cDNA-N-neg', 'cDNA-N-pos', 'cDNA-O-neg', 'cDNA-O-pos', 'TNA-N-neg', 'TNA-N-pos', 'TNA-O-neg', 'TNA-O-pos']
+with open('/home/robyn/COVID/metagenome_COVID-TNA_cDNA-MetaG_RunNS56/ANVIO/sets.txt', 'w') as f:
+  for se in sets:
+    f.write(se+'\n')
+
+folder = '/home/robyn/COVID/metagenome_COVID-TNA_cDNA-MetaG_RunNS56/cat_lanes/'
+reads = sorted(os.listdir(folder))
+unique = []
+all_samples = []
+
+for file in reads:
+  if file.split('_')[0] not in unique:
+    unique.append(file.split('_')[0])
+
+for sample in unique:
+  name = ''
+  if 'cDNA' in sample: name = 'cDNA-'
+  else: name = 'TNA-'
+  name += sample.split('-')[-2][0]+'-'
+  name += sample.split('-')[-1]+'_'
+  name += sample.split('-')[-2][1]
+  r1, r2 = '', ''
+  for file in reads:
+    if file.split('_')[0] == sample:
+      if 'R1' in file: r1 = file
+      elif 'R2' in file: r2 = file
+  all_samples.append([name, r1, r2])
+
+sample_df = pd.DataFrame(all_samples, columns=['sample', 'r1', 'r2'])
+sample_df.to_csv('/home/robyn/COVID/metagenome_COVID-TNA_cDNA-MetaG_RunNS56/ANVIO/samples.txt', sep='\t', index=False)
+```
+I have made the sets:</br>
+- cDNA-N-neg (cDNA, nasal, negative)</br>
+- cDNA-N-pos (cDNA, nasal, positive)</br>
+- cDNA-O-neg (cDNA, oral, negative)</br>
+- cDNA-O-pos (cDNA, oral, positive)</br>
+- TNA-N-neg (TNA, nasal, negative)</br>
+- TNA-N-pos (TNA, nasal, positive)</br>
+- TNA-O-neg (TNA, oral, negative)</br>
+- TNA-O-pos (TNA, oral, positive)</br>
+
+### Quality filtering of raw reads
+
+Run illumina-utils:
+```{bash, eval=FALSE}
+iu-gen-configs samples.txt
+```
+
+Quality filtering on samples:
+```{bash, eval=FALSE}
+for sample in `awk '{print $1}' samples.txt`
+do
+    if [ "$sample" == "sample" ]; then continue; fi
+    iu-filter-quality-minoche $sample.ini --ignore-deflines
+done
+```
+
+### Remove human reads
+
+This step obviously isn't in the TARA oceans tutorial, but I'll remove the human/phiX reads now.
+
+Bowtie2:
+```{bash, eval=FALSE}
+parallel --dryrun -j 1 --link --progress 'bowtie2 -x /home/shared/bowtiedb/GRCh38_PhiX {-1 {1} -2 {2}} -S {1.}_filtered.sam --end-to-end --dovetail' ::: *QUALITY_PASSED_R1.fastq ::: *QUALITY_PASSED_R2.fastq
+```
+Apparently the R1 and R2 are identical? Just going to use the output from the previous kneaddata runs instead.
+
+### Filter and remove human reads
+
+Not rerun, just copied from the other R markdown where I initially processed the amplicon sequencing data and did a first pass on the metagenome with kraken/Humann. But I do need to rename the samples and move the other files to a new folder.</br>
+Move:
+```{bash, eval=FALSE}
+for i in /home/robyn/COVID/metagenome_COVID-TNA_cDNA-MetaG_RunNS56/kneaddata_out/*_kneaddata_paired_* ; do cp $i . ; done
+```
+
+Rename:
+```{python, eval=FALSE}
+import os
+
+folder = '/home/robyn/COVID/metagenome_COVID-TNA_cDNA-MetaG_RunNS56/ANVIO/'
+samples = os.listdir(folder)
+
+for sample in samples:
+  if '.fastq' not in sample: continue
+  new_name = sample.split('_')
+  new_name = new_name[0]+'_'+new_name[1]+'_R'+new_name[-1]
+  os.system('mv '+sample+' '+new_name)
+```
+```{python, eval=FALSE}
+import os
+
+folder = '/home/robyn/COVID/metagenome_COVID-TNA_cDNA-MetaG_RunNS56/ANVIO/'
+samples = os.listdir(folder)
+
+for sample in samples:
+  if '.fastq' not in sample: continue
+  new_name = sample.split('-')
+  if len(new_name) == 2: new_name = ['TNA']+new_name
+  sec_half = new_name[2].split('_')
+  new_name = new_name[0]+'-'+new_name[1][0]+'-'+sec_half[0]+'_'+new_name[1][1]+'_'+sec_half[-1]
+  os.system('mv '+sample+' '+new_name)
+```
+
+Gzip:
+```{bash, eval=FALSE}
+for i in *.fastq ; do gzip $i ; done
+```
+
+### Co-assemble metagenomic sets
+
+MEGAHIT (their code):
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    megahit -1 $SET_R1.fastq.gz \
+            -2 $SET_R2.fastq.gz \
+            --min-contig-len 1000 \
+            -o $SET-RAW.fa \
+            --num-cpu-threads 20 \
+            --memory 0.6 \
+            --verbose
+done
+```
+
+This keeps just giving me this error:</br>
+`megahit: Number of paired-end files not match!`
+
+So I've adding the fasta files together for each set of samples (this should be fine as they are already filtered to only be matching reads by kneaddata). </br></br>
+
+This apparently still didn't find the right files. So I'll try just doing them manually:
+```{bash, eval=FALSE}
+megahit -1 cDNA-N-neg_R1.fastq.gz \
+            -2 cDNA-N-neg_R2.fastq.gz \
+            --min-contig-len 1000 \
+            -o cDNA-N-neg-RAW.fa \
+            --num-cpu-threads 20 \
+            --memory 0.6 \
+            --verbose
+```
+
+First one worked fine, so doing the others:
+```{bash, eval=FALSE}
+megahit -1 cDNA-N-pos_R1.fastq.gz \
+            -2 cDNA-N-pos_R2.fastq.gz \
+            --min-contig-len 1000 \
+            -o cDNA-N-pos-RAW.fa \
+            --num-cpu-threads 20 \
+            --memory 0.6 \
+            --verbose
+            
+megahit -1 cDNA-O-neg_R1.fastq.gz \
+            -2 cDNA-O-neg_R2.fastq.gz \
+            --min-contig-len 1000 \
+            -o cDNA-O-neg-RAW.fa \
+            --num-cpu-threads 20 \
+            --memory 0.6 \
+            --verbose
+            
+megahit -1 cDNA-O-pos_R1.fastq.gz \
+            -2 cDNA-O-pos_R2.fastq.gz \
+            --min-contig-len 1000 \
+            -o cDNA-O-pos-RAW.fa \
+            --num-cpu-threads 20 \
+            --memory 0.6 \
+            --verbose
+            
+megahit -1 TNA-N-neg_R1.fastq.gz \
+            -2 TNA-N-neg_R2.fastq.gz \
+            --min-contig-len 1000 \
+            -o TNA-N-neg-RAW.fa \
+            --num-cpu-threads 20 \
+            --memory 0.6 \
+            --verbose
+
+megahit -1 TNA-N-pos_R1.fastq.gz \
+            -2 TNA-N-pos_R2.fastq.gz \
+            --min-contig-len 1000 \
+            -o TNA-N-pos-RAW.fa \
+            --num-cpu-threads 20 \
+            --memory 0.6 \
+            --verbose
+            
+megahit -1 TNA-O-neg_R1.fastq.gz \
+            -2 TNA-O-neg_R2.fastq.gz \
+            --min-contig-len 1000 \
+            -o TNA-O-neg-RAW.fa \
+            --num-cpu-threads 20 \
+            --memory 0.6 \
+            --verbose
+            
+megahit -1 TNA-O-pos_R1.fastq.gz \
+            -2 TNA-O-pos_R2.fastq.gz \
+            --min-contig-len 1000 \
+            -o TNA-O-pos-RAW.fa \
+            --num-cpu-threads 20 \
+            --memory 0.6 \
+            --verbose
+```
+
+### Simplify deflines of fasta files
+
+Seems like the problem with some of these is that my set names should have underscores and not hyphens. So doing this manually and changing the sets file
+```{bash, eval=FALSE}
+anvi-script-reformat-fasta TNA-N-pos-RAW.fa/final.contigs.fa --simplify-names -o TNA-N-pos-RAW-FIXED.fa --prefix TNA_N_pos
+mv TNA-N-pos-RAW.fa intermediates/
+mv TNA-N-pos-RAW-FIXED.fa TNA_N_pos-RAW-FIXED.fa
+
+anvi-script-reformat-fasta TNA-O-pos-RAW.fa/final.contigs.fa --simplify-names -o TNA_O_pos-RAW-FIXED.fa --prefix TNA_O_pos
+mv TNA-O-pos-RAW.fa intermediates/
+
+anvi-script-reformat-fasta TNA-O-neg-RAW.fa/final.contigs.fa --simplify-names -o TNA_O_neg-RAW-FIXED.fa --prefix TNA_O_neg
+mv TNA-O-neg-RAW.fa intermediates/
+
+anvi-script-reformat-fasta TNA-N-neg-RAW.fa/final.contigs.fa --simplify-names -o TNA_N_neg-RAW-FIXED.fa --prefix TNA_N_neg
+mv TNA-N-neg-RAW.fa intermediates/
+
+anvi-script-reformat-fasta cDNA-O-pos-RAW.fa/final.contigs.fa --simplify-names -o cDNA_O_pos-RAW-FIXED.fa --prefix cDNA_O_pos
+mv cDNA-O-pos-RAW.fa intermediates/
+
+anvi-script-reformat-fasta cDNA-N-pos-RAW.fa/final.contigs.fa --simplify-names -o cDNA_N_pos-RAW-FIXED.fa --prefix cDNA_N_pos
+mv cDNA-N-pos-RAW.fa intermediates/
+
+anvi-script-reformat-fasta cDNA-O-neg-RAW.fa/final.contigs.fa --simplify-names -o cDNA_O_neg-RAW-FIXED.fa --prefix cDNA_O_neg
+mv cDNA-O-neg-RAW.fa intermediates/
+
+anvi-script-reformat-fasta cDNA-N-neg-RAW.fa/final.contigs.fa --simplify-names -o cDNA_N_neg-RAW-FIXED.fa --prefix cDNA_N_neg
+mv cDNA-N-neg-RAW.fa intermediates/
+```
+
+### Generate contigs database
+
+Trying with minimum lengths of both 2500 and 1000 (will process 2500 first and see if I want 1000 or not)
+```{bash, eval=FALSE}
+mkdir anvio_databases_2500
+mkdir anvio_databases_1000
+
+for SET in `cat sets.txt`
+do
+    anvi-script-reformat-fasta $SET-RAW-FIXED.fa --min-len 2500 --simplify-names -o $SET.fa
+    anvi-gen-contigs-database -f $SET.fa -o anvio_databases_2500/$SET-CONTIGS.db
+    anvi-gen-contigs-database -f $SET-RAW-FIXED.fa -o anvio_databases_1000/$SET-CONTIGS.db
+done
+
+```
+
+### Identifying single copy core genes
+
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    anvi-run-hmms -c anvio_databases_2500/$SET-CONTIGS.db --num-threads 12
+done
+```
+
+### Get taxonomic annotations of genes
+
+Using Kaiju:
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    anvi-get-sequences-for-gene-calls -c anvio_databases_2500/$SET-CONTIGS.db -o anvio_databases_2500/$SET-gene_calls.fa
+done
+```
+
+Make database (this is for non-redundant NCBI refseq, and will take ~43 GB):
+```{bash, eval=FALSE}
+kaiju-makedb -s refseq -t 12
+```
+This got an error at some point, but luckily the database was already on the server, so just using that.
+
+Classify sequences:
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    kaiju -t /scratch/db/kaiju_db_nr_euk/nodes.dmp \
+          -f /scratch/db/kaiju_db_nr_euk/kaiju_db_nr_euk.fmi \
+          -i anvio_databases_2500/$SET-gene_calls.fa \
+          -o anvio_databases_2500/$SET-gene_calls_nr.out \
+          -z 12 \
+          -v
+done
+```
+
+Add taxon names:
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    kaiju-addTaxonNames -t /scratch/db/kaiju_db_nr_euk/nodes.dmp \
+              -n /scratch/db/kaiju_db_nr_euk/names.dmp \
+              -i anvio_databases_2500/$SET-gene_calls_nr.out \
+              -o anvio_databases_2500/$SET-gene_calls_nr.names \
+              -r superkingdom,phylum,order,class,family,genus,species
+done
+```
+
+Import the taxonomy:
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    anvi-import-taxonomy-for-genes -i anvio_databases_2500/$SET-gene_calls_nr.names \
+                               -c anvio_databases_2500/$SET-CONTIGS.db \
+                               -p kaiju \
+                               --just-do-it
+done
+```
+
+### Recruitment of metagenomic reads
+
+Build bowtie2 database for each set:
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    bowtie2-build $SET.fa $SET
+done
+```
+
+Map each sample against scaffolds recovered from corresponding metagenomic set:
+```{bash, eval=FALSE}
+for sample in `awk '{print $1}' samples.txt`
+do
+    if [ "$sample" == "sample" ]; then continue; fi
+
+    # determine which metagenomic set the $sample belongs to:
+    #SET=`echo $sample | awk 'BEGIN {FS="_"}{print $1}'`
+    SET=${sample::-2}
+
+    # do the bowtie mapping to get the SAM file:
+    bowtie2 --threads 12 \
+            -x $SET \
+            -1 fasta_files/$sample-R1.fastq.gz \
+            -2 fasta_files/$sample-R2.fastq.gz \
+            --no-unal \
+            -S $sample.sam
+
+    # covert the resulting SAM file to a BAM file:
+    samtools view -F 4 -bS $sample.sam > $sample-RAW.bam
+
+    # sort and index the BAM file:
+    samtools sort $sample-RAW.bam -o $sample.bam
+    samtools index $sample.bam
+
+    # remove temporary files:
+    rm $sample.sam $sample-RAW.bam
+
+done
+```
+
+Had to change the sample and fasta names around a bit for this, but basically the sets need to only have underscores separating them while the R1 or R2 must have a hyphen before it or the loops here won't work.
+
+### Profile the mapping results
+
+```{bash, eval=FALSE}
+for sample in `awk '{print $1}' samples.txt`
+do
+    if [ "$sample" == "sample" ]; then continue; fi
+
+    # determine which metagenomic set the $sample bleongs to:
+    SET=${sample::-2}
+
+    anvi-profile -c anvio_databases_2500/$SET-CONTIGS.db \
+                 -i $sample.bam \
+                 --num-threads 12 \
+                 -o $sample
+
+done
+```
+
+### Generate merged Anvio profiles
+
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    anvi-merge $SET*/PROFILE.db -o $SET-MERGED -c anvio_databases_2500/$SET-CONTIGS.db
+done
+```
+
+### Initial automated binning {.tabset}
+
+#### CONCOCT
+
+I think this changed from what was in the tutorial (anvi-cluster-with-concoct), as this command was not found, so I used what Gavin used (anvi-summarize).
+
+First install concoct:
+```{bash, eval=FALSE}
+conda install -c bioconda concoct
+conda install -c bioconda/label/cf201901 concoct
+```
+
+For some reason the installation only seems to work if it is in it's own environment:
+```{bash, eval=FALSE}
+conda config --add channels defaults
+conda config --add channels bioconda
+conda config --add channels conda-forge
+
+conda create -n concoct_env python=3 concoct
+```
+
+And then I just copied the executables from the bin of this environment to the anvio environment:
+```{bash, eval=FALSE}
+for i in /home/robyn/anaconda3/envs/concoct_env/bin/* ; do cp $i /home/robyn/anaconda3/envs/anvio-6.2/bin/ ; done
+```
+
+The run:
+```{bash, eval=FALSE}
+mkdir concoct_summary
+for SET in `cat sets.txt`
+do
+    anvi-cluster-contigs -c anvio_databases_2500/$SET-CONTIGS.db \
+                         -p $SET-MERGED/PROFILE.db \
+                         --collection-name $SET"_concoct" \
+                         --driver concoct \
+                         --num-threads 12 \
+                         --clusters 100 \
+                         --just-do-it
+done
+```
+
+This is just giving the output:
+```{bash, eval=FALSE}
+WARNING
+===============================================
+You are running an experimental workflow not every part of which may be fully
+and thoroughly tested :) Please scrutinize your output carefully after analysis,
+and keep us posted if you see things that surprise you.
+
+Contigs DB ...................................: anvio_databases_2500/TNA_O_pos-CONTIGS.db
+Profile DB ...................................: TNA_O_pos-MERGED/PROFILE.db
+Binning module ...............................: CONCOCT
+Cluster type .................................: contig
+Working directory ............................: /tmp/tmp5kri_3f2
+
+CITATION
+===============================================
+Anvi'o is now passing all your data to the binning module 'CONCOCT'. If you
+publish results from this workflow, please do not forget to reference the
+following citation.
+
+* Johannes Alneberg, Brynjar Smári Bjarnason, Ino de Bruijn, Melanie Schirmer,
+Joshua Quick, Umer Z Ijaz, Leo Lahti, Nicholas J Loman, Anders F Andersson &
+Christopher Quince. 2014. Binning metagenomic contigs by coverage and
+composition. Nature Methods, doi: 10.1038/nmeth.3103
+
+                                                                                                                                                                                  
+
+Config Error: One of the critical output files is missing ('clustering_gt1000.csv'). Please
+              take a look at the log file: /tmp/tmp5kri_3f2/logs.txt  
+```
+
+And I don't know what the problem is, so trying using DAS Tool instead
+
+#### DAS Tool
+
+Install:
+```{bash, eval=FALSE}
+conda install -c bioconda das_tool
+```
+
+Run:
+```{bash,eval=FALSE}
+mkdir dastool_summary
+for SET in `cat sets.txt`
+do
+    anvi-cluster-contigs -c anvio_databases_2500/$SET-CONTIGS.db \
+                         -p $SET-MERGED/PROFILE.db \
+                         -S $SET-MERGED \
+                         --collection-name $SET"_dastool" \
+                         --driver dastool \
+                         --num-threads 12 \
+                         --just-do-it
+done
+```
+
+Here I need a collection that I don't know what it is. 
+
+#### CONCOCT again
+
+I removed the conda environment and reinstalled Anvio and then installing CONCOCT apparently worked fine by just running this:
+```{bash, eval=FALSE}
+conda install -c bioconda concoct
+```
+
+Trying to rerun:
+```{bash, eval=FALSE}
+mkdir concoct_summary
+for SET in `cat sets.txt`
+do
+    anvi-cluster-contigs -c anvio_databases_2500/$SET-CONTIGS.db \
+                         -p $SET-MERGED/PROFILE.db \
+                         --collection-name $SET"_concoct" \
+                         --driver concoct \
+                         --num-threads 12 \
+                         --clusters 100 \
+                         --just-do-it
+done
+```
+
+And this worked fine this time.
+
+### Summarise CONCOCT
+
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    anvi-summarize -c anvio_databases_2500/$SET-CONTIGS.db \
+                   -p $SET-MERGED/PROFILE.db \
+                   -C $SET"_concoct" \
+                   -o concoct_summary/$SET-summary
+done
+```
+
+### Manually refine CONCOCT clusters
+
+Skipping this for now as I have fewer clusters than I specified in all cases (I assume this means that I didn't need the number that I specified but will double check on this later)
+
+An example run:
+```{bash, eval=FALSE}
+anvi-refine -c ANW-CONTIGS.db \
+            -p ANW-MERGED/PROFILE.db \
+            -C CONCOCT \
+            -b Bin_1
+```
+
+### Identification and curation of MAGs
+
+Run first:
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    anvi-rename-bins -c anvio_databases_2500/$SET-CONTIGS.db \
+                     -p $SET-MERGED/PROFILE.db \
+                     --collection-to-read $SET"_concoct" \
+                     --collection-to-write $SET"_FINAL" \
+                     --call-MAGs \
+                     --size-for-MAG 2 \
+                     --min-completion-for-MAG 70 \
+                     --max-redundancy-for-MAG 10 \
+                     --prefix COVID_$SET \
+                     --report-file $SET_renaming_bins.txt
+done
+```
+
+Ran second:
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    anvi-rename-bins -c anvio_databases_2500/$SET-CONTIGS.db \
+                     -p $SET-MERGED/PROFILE.db \
+                     --collection-to-read $SET"_concoct" \
+                     --collection-to-write FINAL \
+                     --call-MAGs \
+                     --size-for-MAG 2 \
+                     --min-completion-for-MAG 70 \
+                     --max-redundancy-for-MAG 10 \
+                     --prefix COVID_$SET \
+                     --report-file $SET_renaming_bins.txt
+done
+```
+
+Not sure how the MAGs are added if I use FINAL - I assume they will all be added to the same collection this way, although not sure on this so kept the other too.
+
+### Binning summary for each metagenomic set
+
+```{bash, eval=FALSE}
+for SET in `cat sets.txt`
+do
+    anvi-summarize -c anvio_databases_2500/$SET-CONTIGS.db \
+                   -p $SET-MERGED/PROFILE.db \
+                   -C FINAL \
+                   -o $SET-SUMMARY
+
+done
+```
+
+### Combining MAGs from the sets
+
+```{bash, eval=FALSE}
+mkdir REDUNDANT-MAGs
+
+for SET in `cat sets.txt`
+do
+    # get each MAG name in the set:
+    MAGs=`anvi-script-get-collection-info -c anvio_databases_2500/$SET"-CONTIGS.db" \
+                                          -p $SET"-MERGED/PROFILE.db" \
+                                          -C FINAL | \
+          grep MAG | \
+          awk '{print $1}'`
+
+    # go through each MAG, in each SUMMARY directory, and store a
+    # copy of the FASTA file with proper deflines in the REDUNDANT-MAGs
+    # directory:
+    for MAG in MAGs
+    do
+        anvi-script-reformat-fasta $SET-SUMMARY/bin_by_bin/$MAG/$MAG"-contigs.fa" \
+                                   --simplify-names \
+                                   --prefix $MAG \
+                                   -o REDUNDANT-MAGs/$MAG".fa"
+    done
+done
+```
+
+This just gives:
+```{}
+File/Path Error: No such file: 'TNA_O_pos-SUMMARY/bin_by_bin/MAGs/MAGs-contigs.fa' :/
+```
+
+So we're somehow not picking up any MAGs - not sure if they needed to be named MAG? Need to look into this next week!

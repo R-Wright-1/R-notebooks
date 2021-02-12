@@ -11,12 +11,11 @@ lattice
 vegan
 phyloseq
 ape
-tensorA
-robustbase
-bayesm
-compositions
 microbiome
 ggnewscale
-ggtree
 taxa
 metacoder
+philr
+coda.base
+ALDEx2
+compositions

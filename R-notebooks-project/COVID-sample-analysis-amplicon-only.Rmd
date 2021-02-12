@@ -1,0 +1,900 @@
+---
+title: COVID sample analysis (comparison of variable regions)
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+fig_width: 10
+fig_height: 10
+---
+
+```{R, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(exactRankTests)
+library(nlme)
+library(dplyr)
+library(ggplot2)
+library(compositions)
+library(vegan)
+library(phyloseq)
+```
+
+```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+import numpy as np
+import os
+import pandas as pd
+import math
+import matplotlib.pyplot as plt
+from scipy.cluster import hierarchy
+import matplotlib as mpl
+from matplotlib_venn import venn2
+import csv
+from matplotlib.patches import Patch
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+```
+
+# Basic summary {.tabset}
+
+## Number of reads
+
+```{python, results='hide', fig.keep='all'}
+samples = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N6-neg', 'N7-neg', 'N8-neg', 'N9-neg', 'N10-neg', 'N11-neg', 'N12-neg', 'N13-neg', 'N14-neg', 'N15-neg', 'N16-neg', 'N17-neg', 'N18-neg', 'N19-neg', 'N20-neg', 'N1-pos', 'N2-pos', 'N3-pos', 'N4-pos', 'N5-pos', 'N6-pos', 'N7-pos', 'N8-pos', 'N9-pos', 'N10-pos', 'N11-pos', 'N12-pos', 'N13-pos', 'N14-pos', 'N15-pos', 'N16-pos', 'N17-pos', 'N18-pos', 'N19-pos', 'N20-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O6-neg', 'O7-neg', 'O8-neg', 'O9-neg', 'O10-neg', 'O11-neg', 'O12-neg', 'O13-neg', 'O14-neg', 'O15-neg', 'O16-neg', 'O17-neg', 'O18-neg', 'O19-neg', 'O20-neg', 'O1-pos', 'O2-pos', 'O3-pos', 'O4-pos', 'O5-pos', 'O6-pos', 'O7-pos', 'O8-pos', 'O9-pos', 'O10-pos', 'O11-pos', 'O12-pos', 'O13-pos', 'O14-pos', 'O15-pos', 'O16-pos', 'O17-pos', 'O18-pos', 'O19-pos', 'O20-pos']
+def get_samples():
+  TNA_V4V5 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/exports/feature-table_w_tax.txt', header=0, index_col=0, sep='\t')
+  TNA_V6V8 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_TNA_V6V8/exports/feature-table_w_tax.txt', header=0, index_col=0, sep='\t')
+  cDNA_V6V8 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_cDNA_V6V8/exports/feature-table_w_tax.txt', header=0, index_col=0, sep='\t')
+
+  TNA_V4V5_tax = TNA_V4V5.loc[:, 'taxonomy']
+  TNA_V4V5.drop('taxonomy', axis=1, inplace=True)
+  TNA_V6V8_tax = TNA_V6V8.loc[:, 'taxonomy']
+  TNA_V6V8.drop('taxonomy', axis=1, inplace=True)
+  cDNA_V6V8_tax = cDNA_V6V8.loc[:, 'taxonomy']
+  cDNA_V6V8.drop('taxonomy', axis=1, inplace=True)
+  return TNA_V4V5, TNA_V6V8, cDNA_V6V8, TNA_V4V5_tax, TNA_V6V8_tax, cDNA_V6V8_tax
+TNA_V4V5, TNA_V6V8, cDNA_V6V8, TNA_V4V5_tax, TNA_V6V8_tax, cDNA_V6V8_tax = get_samples()
+```
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(10,10))
+ax1 =  plt.subplot(311)
+ax2, ax3 = plt.subplot(312, sharey=ax1), plt.subplot(313, sharey=ax1)
+
+TNA_V4V5_sum, TNA_V6V8_sum, cDNA_V6V8_sum = pd.DataFrame(TNA_V4V5.sum(axis=0)).transpose(), pd.DataFrame(TNA_V6V8.sum(axis=0)).transpose(), pd.DataFrame(cDNA_V6V8.sum(axis=0)).transpose()
+
+x = []
+for a in range(len(samples)):
+  if 'neg' in samples[a]:
+    color =  '#0154B2'
+  else:
+    color = '#B20154'
+  if 'N' in samples[a]:
+    fill = color
+  else: 
+    fill = 'w'
+  if samples[a] in TNA_V4V5_sum.columns:
+    ax1.bar(a, TNA_V4V5_sum.loc[:, samples[a]].values[0], color=fill, edgecolor=color)
+  if samples[a] in TNA_V6V8_sum.columns:
+    ax2.bar(a, TNA_V6V8_sum.loc[:, samples[a]].values[0], color=fill, edgecolor=color)
+  if samples[a] in cDNA_V6V8_sum.columns:
+    ax3.bar(a, cDNA_V6V8_sum.loc[:, samples[a]].values[0], color=fill, edgecolor=color)
+  x.append(a)
+
+plt.sca(ax1)
+plt.xticks([]), plt.semilogy(), plt.xlim([-1,x[-1]+1]), plt.ylabel('Number of reads'), plt.title('TNA V4V5')
+plt.sca(ax2)
+plt.xticks([]), plt.semilogy(), plt.xlim([-1,x[-1]+1]), plt.ylabel('Number of reads'), plt.title('TNA V6V8')
+plt.sca(ax3)
+plt.xticks(x, samples, rotation=90, fontsize=8), plt.semilogy(), plt.xlim([-1,x[-1]+1]), plt.ylabel('Number of reads'), plt.title('cDNA V6V8')
+handles = [Patch(facecolor='#B20154', edgecolor='#B20154', label='Positive\nnasopharyngeal'), Patch(facecolor='w', edgecolor='#B20154', label='Positive\noropharyngeal'), Patch(facecolor='#0154B2', edgecolor='#0154B2', label='Negative\nnasopharyngeal'), Patch(facecolor='w', edgecolor='#0154B2', label='Negative\noropharyngeal')]
+ax1.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1))
+
+plt.tight_layout()
+plt.show()
+```
+
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(10,3.5))
+ax1 = plt.subplot(131)
+ax2, ax3 = plt.subplot(132, sharey=ax1), plt.subplot(133, sharey=ax1)
+ax = [ax1, ax2, ax3]
+
+amplicons = [TNA_V4V5_sum, TNA_V6V8_sum, cDNA_V6V8_sum]
+
+for a in range(3):
+  NN, NP, ON, OP = [], [], [], []
+  for b in range(len(samples)):
+    if samples[b] in amplicons[a].columns:
+      if 'N' in samples[b] and 'neg' in samples[b]:
+        NN.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'N' in samples[b] and 'pos' in samples[b]:
+        NP.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'neg' in samples[b]:
+        ON.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'pos' in samples[b]:
+        OP.append(amplicons[a].loc[:, samples[b]].values[0])
+  ax[a].boxplot([NN, NP, ON, OP])
+  
+  t_n, p_n = stats.ttest_ind(NN, NP)
+  t_o, p_o = stats.ttest_ind(ON, OP)
+  for c in [[p_n, NN, NP, 1, 2], [p_o, ON, OP, 3, 4]]:
+    x1, x2 = c[3], c[4]
+    ma = max(max(c[1]), max(c[2]))
+    y1, y2, y3 = ma*2, ma*3, ma*5
+    ax[a].plot([x1, x1, x2, x2], [y1, y2, y2, y1], 'k')
+    if c[0] < 0.05:
+      ax[a].text(c[3]+0.5, y3, '*', ha='center', va='center')
+    else:
+      ax[a].text(c[3]+0.5, y3, 'NS', ha='center', va='center')
+  plt.sca(ax[a])
+  if a == 0: plt.ylabel('Number of reads')
+  plt.semilogy()
+  bottom, top = plt.ylim()
+  plt.ylim(top=top+top*3)
+  plt.xticks([1, 2, 3, 4], ['Negative\nnasal', 'Positive\nnasal', 'Negative\noral', 'Positive\noral'], fontsize=8)
+ax[0].set_title('TNA V4V5'), ax[1].set_title('TNA V6V8'), ax[2].set_title('cDNA V6V8')
+plt.tight_layout()
+plt.show()
+```
+Results of t-tests for statistical significance between negative and positive samples are indicated with asterisks.
+
+## Alpha diversity {.tabset}
+
+### All samples
+```{python, results='hide', fig.keep='all', cache=TRUE}
+TNA_V4V5, TNA_V6V8, cDNA_V6V8, TNA_V4V5_tax, TNA_V6V8_tax, cDNA_V6V8_tax = get_samples()
+TNA_V4V5_sum, TNA_V6V8_sum, cDNA_V6V8_sum = pd.DataFrame(TNA_V4V5), pd.DataFrame(TNA_V6V8), pd.DataFrame(cDNA_V6V8)
+TNA_V4V5_sum[TNA_V4V5_sum > 1] = 1
+TNA_V6V8_sum[TNA_V6V8_sum > 1] = 1
+cDNA_V6V8_sum[cDNA_V6V8_sum > 1] = 1
+
+TNA_V4V5_sum, TNA_V6V8_sum, cDNA_V6V8_sum = pd.DataFrame(TNA_V4V5_sum.sum(axis=0)).transpose(), pd.DataFrame(TNA_V6V8_sum.sum(axis=0)).transpose(), pd.DataFrame(cDNA_V6V8_sum.sum(axis=0)).transpose()
+
+plt.figure(figsize=(10,3.5))
+ax1 = plt.subplot(131)
+ax2, ax3 = plt.subplot(132, sharey=ax1), plt.subplot(133, sharey=ax1)
+ax = [ax1, ax2, ax3]
+
+amplicons = [TNA_V4V5_sum, TNA_V6V8_sum, cDNA_V6V8_sum]
+
+for a in range(3):
+  NN, NP, ON, OP = [], [], [], []
+  for b in range(len(samples)):
+    if samples[b] in amplicons[a].columns:
+      if 'N' in samples[b] and 'neg' in samples[b]: NN.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'N' in samples[b] and 'pos' in samples[b]: NP.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'neg' in samples[b]: ON.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'pos' in samples[b]: OP.append(amplicons[a].loc[:, samples[b]].values[0])
+  ax[a].boxplot([NN, NP, ON, OP])
+  
+  t_n, p_n = stats.ttest_ind(NN, NP)
+  t_o, p_o = stats.ttest_ind(ON, OP)
+  for c in [[p_n, NN, NP, 1, 2, ON, OP], [p_o, ON, OP, 3, 4, NN, NP]]:
+    x1, x2 = c[3], c[4]
+    ma = max(max(c[1]), max(c[2]), max(c[5]), max(c[6]))
+    y1 = ma+40
+    y2, y3 = y1+20, y1+50
+    ax[a].plot([x1, x1, x2, x2], [y1, y2, y2, y1], 'k')
+    if c[0] < 0.05:
+      ax[a].text(c[3]+0.5, y3, '*', ha='center', va='center')
+    else:
+      ax[a].text(c[3]+0.5, y3, 'NS', ha='center', va='center')
+  plt.sca(ax[a])
+  if a == 0: plt.ylabel('Number of ASVs')
+  bottom, top = plt.ylim()
+  plt.ylim(top=650)
+  plt.xticks([1, 2, 3, 4], ['Negative\nnasal', 'Positive\nnasal', 'Negative\noral', 'Positive\noral'], fontsize=8)
+  
+ax[0].set_title('TNA V4V5'), ax[1].set_title('TNA V6V8'), ax[2].set_title('cDNA V6V8')
+plt.tight_layout()
+plt.show()
+```
+Results of t-tests for statistical significance between negative and positive samples are indicated with asterisks.
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+TNA_V4V5, TNA_V6V8, cDNA_V6V8, TNA_V4V5_tax, TNA_V6V8_tax, cDNA_V6V8_tax = get_samples()
+amplicons = [TNA_V4V5, TNA_V6V8, cDNA_V6V8]
+for a in range(len(amplicons)):
+  this_div = []
+  samples, asvs = list(amplicons[a].columns), list(amplicons[a].index.values)
+  for b in samples:
+    this_sample, total = [], amplicons[a].loc[:, b].sum()
+    for c in asvs:
+      this_sample.append((amplicons[a].loc[c, b]/total)**2)
+    this_div.append(1-sum(this_sample))
+  amplicons[a] = pd.DataFrame(this_div, index=samples).transpose()
+
+plt.figure(figsize=(10,3.5))
+ax1 = plt.subplot(131)
+ax2, ax3 = plt.subplot(132, sharey=ax1), plt.subplot(133, sharey=ax1)
+ax = [ax1, ax2, ax3]
+
+for a in range(3):
+  NN, NP, ON, OP = [], [], [], []
+  for b in range(len(samples)):
+    if samples[b] in amplicons[a].columns:
+      if 'N' in samples[b] and 'neg' in samples[b]: NN.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'N' in samples[b] and 'pos' in samples[b]: NP.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'neg' in samples[b]: ON.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'pos' in samples[b]: OP.append(amplicons[a].loc[:, samples[b]].values[0])
+  ax[a].boxplot([NN, NP, ON, OP])
+  
+  t_n, p_n = stats.ttest_ind(NN, NP)
+  t_o, p_o = stats.ttest_ind(ON, OP)
+  for c in [[p_n, NN, NP, 1, 2, ON, OP], [p_o, ON, OP, 3, 4, NN, NP]]:
+    x1, x2 = c[3], c[4]
+    ma = max(max(c[1]), max(c[2]), max(c[5]), max(c[6]))
+    y1 = ma+0.1
+    y2, y3 = y1+0.05, y1+0.1
+    ax[a].plot([x1, x1, x2, x2], [y1, y2, y2, y1], 'k')
+    if c[0] < 0.05:
+      ax[a].text(c[3]+0.5, y3, '*', ha='center', va='center')
+    else:
+      ax[a].text(c[3]+0.5, y3, 'NS', ha='center', va='center')
+  plt.sca(ax[a])
+  if a == 0: plt.ylabel("Simpson's index of diversity")
+  bottom, top = plt.ylim()
+  plt.ylim(top=1.3)
+  plt.xticks([1, 2, 3, 4], ['Negative\nnasal', 'Positive\nnasal', 'Negative\noral', 'Positive\noral'], fontsize=8)
+ax[0].set_title('TNA V4V5'), ax[1].set_title('TNA V6V8'), ax[2].set_title('cDNA V6V8')
+plt.tight_layout()
+plt.show()
+```
+Results of t-tests for statistical significance between negative and positive samples are indicated with asterisks.
+
+### Only samples with > 2000 reads
+```{python, results='hide', fig.keep='all', cache=TRUE}
+TNA_V4V5, TNA_V6V8, cDNA_V6V8, TNA_V4V5_tax, TNA_V6V8_tax, cDNA_V6V8_tax = get_samples()
+TNA_V4V5_2000 = TNA_V4V5.loc[:, TNA_V4V5.sum(axis=0) > 2000]
+TNA_V6V8_2000 = TNA_V6V8.loc[:, TNA_V6V8.sum(axis=0) > 2000]
+cDNA_V6V8_2000 = cDNA_V6V8.loc[:, cDNA_V6V8.sum(axis=0) > 2000]
+TNA_V4V5_sum, TNA_V6V8_sum, cDNA_V6V8_sum = pd.DataFrame(TNA_V4V5_2000), pd.DataFrame(TNA_V6V8_2000), pd.DataFrame(cDNA_V6V8_2000)
+TNA_V4V5_sum[TNA_V4V5_sum > 1] = 1
+TNA_V6V8_sum[TNA_V6V8_sum > 1] = 1
+cDNA_V6V8_sum[cDNA_V6V8_sum > 1] = 1
+
+TNA_V4V5_sum, TNA_V6V8_sum, cDNA_V6V8_sum = pd.DataFrame(TNA_V4V5_sum.sum(axis=0)).transpose(), pd.DataFrame(TNA_V6V8_sum.sum(axis=0)).transpose(), pd.DataFrame(cDNA_V6V8_sum.sum(axis=0)).transpose()
+
+plt.figure(figsize=(10,3.5))
+ax1 = plt.subplot(131)
+ax2, ax3 = plt.subplot(132, sharey=ax1), plt.subplot(133, sharey=ax1)
+ax = [ax1, ax2, ax3]
+
+amplicons = [TNA_V4V5_sum, TNA_V6V8_sum, cDNA_V6V8_sum]
+
+for a in range(3):
+  NN, NP, ON, OP = [], [], [], []
+  for b in range(len(samples)):
+    if samples[b] in amplicons[a].columns:
+      if 'N' in samples[b] and 'neg' in samples[b]: NN.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'N' in samples[b] and 'pos' in samples[b]: NP.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'neg' in samples[b]: ON.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'pos' in samples[b]: OP.append(amplicons[a].loc[:, samples[b]].values[0])
+  ax[a].boxplot([NN, NP, ON, OP])
+  t_n, p_n = stats.ttest_ind(NN, NP)
+  t_o, p_o = stats.ttest_ind(ON, OP)
+  for c in [[p_n, NN, NP, 1, 2, ON, OP], [p_o, ON, OP, 3, 4, NN, NP]]:
+    x1, x2 = c[3], c[4]
+    if len(c[2]) < 1: continue
+    ma = max(max(c[1]), max(c[2]), max(c[5]), max(c[6]))
+    y1 = ma+40
+    y2, y3 = y1+20, y1+50
+    ax[a].plot([x1, x1, x2, x2], [y1, y2, y2, y1], 'k')
+    if c[0] < 0.05:
+      ax[a].text(c[3]+0.5, y3, '*', ha='center', va='center')
+    else:
+      ax[a].text(c[3]+0.5, y3, 'NS', ha='center', va='center')
+  plt.sca(ax[a])
+  if a == 0: plt.ylabel('Number of ASVs')
+  bottom, top = plt.ylim()
+  plt.ylim(top=650)
+  plt.xticks([1, 2, 3, 4], ['Negative\nnasal', 'Positive\nnasal', 'Negative\noral', 'Positive\noral'], fontsize=8)
+  
+ax[0].set_title('TNA V4V5'), ax[1].set_title('TNA V6V8'), ax[2].set_title('cDNA V6V8')
+plt.tight_layout()
+plt.show()
+```
+Results of t-tests for statistical significance between negative and positive samples are indicated with asterisks.
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+TNA_V4V5, TNA_V6V8, cDNA_V6V8, TNA_V4V5_tax, TNA_V6V8_tax, cDNA_V6V8_tax = get_samples()
+TNA_V4V5_2000 = TNA_V4V5.loc[:, TNA_V4V5.sum(axis=0) > 2000]
+TNA_V6V8_2000 = TNA_V6V8.loc[:, TNA_V6V8.sum(axis=0) > 2000]
+cDNA_V6V8_2000 = cDNA_V6V8.loc[:, cDNA_V6V8.sum(axis=0) > 2000]
+amplicons = [TNA_V4V5_2000, TNA_V6V8_2000, cDNA_V6V8_2000]
+for a in range(len(amplicons)):
+  this_div = []
+  samples, asvs = list(amplicons[a].columns), list(amplicons[a].index.values)
+  for b in samples:
+    this_sample, total = [], amplicons[a].loc[:, b].sum()
+    for c in asvs:
+      this_sample.append((amplicons[a].loc[c, b]/total)**2)
+    this_div.append(1-sum(this_sample))
+  amplicons[a] = pd.DataFrame(this_div, index=samples).transpose()
+
+plt.figure(figsize=(10,3.5))
+ax1 = plt.subplot(131)
+ax2, ax3 = plt.subplot(132, sharey=ax1), plt.subplot(133, sharey=ax1)
+ax = [ax1, ax2, ax3]
+
+for a in range(3):
+  NN, NP, ON, OP = [], [], [], []
+  for b in range(len(samples)):
+    if samples[b] in amplicons[a].columns:
+      if 'N' in samples[b] and 'neg' in samples[b]: NN.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'N' in samples[b] and 'pos' in samples[b]: NP.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'neg' in samples[b]: ON.append(amplicons[a].loc[:, samples[b]].values[0])
+      elif 'O' in samples[b] and 'pos' in samples[b]: OP.append(amplicons[a].loc[:, samples[b]].values[0])
+  ax[a].boxplot([NN, NP, ON, OP])
+  t_n, p_n = stats.ttest_ind(NN, NP)
+  t_o, p_o = stats.ttest_ind(ON, OP)
+  for c in [[p_n, NN, NP, 1, 2, ON, OP], [p_o, ON, OP, 3, 4, NN, NP]]:
+    x1, x2 = c[3], c[4]
+    if len(c[2]) < 1: continue
+    ma = max(max(c[1]), max(c[2]), max(c[5]), max(c[6]))
+    y1 = ma+0.1
+    y2, y3 = y1+0.05, y1+0.1
+    ax[a].plot([x1, x1, x2, x2], [y1, y2, y2, y1], 'k')
+    if c[0] < 0.05:
+      ax[a].text(c[3]+0.5, y3, '*', ha='center', va='center')
+    else:
+      ax[a].text(c[3]+0.5, y3, 'NS', ha='center', va='center')
+  plt.sca(ax[a])
+  if a == 0: plt.ylabel("Simpson's index of diversity")
+  bottom, top = plt.ylim()
+  plt.ylim(top=1.3)
+  plt.xticks([1, 2, 3, 4], ['Negative\nnasal', 'Positive\nnasal', 'Negative\noral', 'Positive\noral'], fontsize=8)
+ax[0].set_title('TNA V4V5'), ax[1].set_title('TNA V6V8'), ax[2].set_title('cDNA V6V8')
+plt.tight_layout()
+plt.show()
+```
+
+## Beta diversity {.tabset}
+
+```{python, cache=TRUE}
+TNA_V4V5, TNA_V6V8, cDNA_V6V8, TNA_V4V5_tax, TNA_V6V8_tax, cDNA_V6V8_tax = get_samples()
+TNA_V4V5_2000 = TNA_V4V5.loc[:, TNA_V4V5.sum(axis=0) > 2000]
+TNA_V6V8_2000 = TNA_V6V8.loc[:, TNA_V6V8.sum(axis=0) > 2000]
+cDNA_V6V8_2000 = cDNA_V6V8.loc[:, cDNA_V6V8.sum(axis=0) > 2000]
+```
+
+### Unifrac (all samples)
+```{R, results='hide', fig.keep='all', cache=TRUE}
+asv_TNA_V4V5 <- py$TNA_V4V5
+asv_TNA_V4V5 = as.matrix(asv_TNA_V4V5)
+phy_tree_TNA_V4V5 <- read_tree('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/exports/tree.nwk')
+ASV_TNA_V4V5 = otu_table(asv_TNA_V4V5, taxa_are_rows = TRUE)
+physeq_TNA_V4V5 = phyloseq(ASV_TNA_V4V5,phy_tree_TNA_V4V5)
+w_uf_TNA_V4V5 <- UniFrac(physeq_TNA_V4V5, weighted=TRUE, normalized=FALSE, fast=TRUE)
+uw_uf_TNA_V4V5 <- UniFrac(physeq_TNA_V4V5, weighted=FALSE, normalized=FALSE, fast=TRUE)
+w_uf_TNA_V4V5 = as.data.frame(as.matrix(w_uf_TNA_V4V5))
+uw_uf_TNA_V4V5 = as.data.frame(as.matrix(uw_uf_TNA_V4V5))
+
+asv_cDNA_V6V8 <- py$cDNA_V6V8
+asv_cDNA_V6V8 = as.matrix(asv_cDNA_V6V8)
+phy_tree_cDNA_V6V8 <- read_tree('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_cDNA_V6V8/exports/tree.nwk')
+ASV_cDNA_V6V8 = otu_table(asv_cDNA_V6V8, taxa_are_rows = TRUE)
+physeq_cDNA_V6V8 = phyloseq(ASV_cDNA_V6V8,phy_tree_cDNA_V6V8)
+w_uf_cDNA_V6V8 <- UniFrac(physeq_cDNA_V6V8, weighted=TRUE, normalized=FALSE, fast=TRUE)
+uw_uf_cDNA_V6V8 <- UniFrac(physeq_cDNA_V6V8, weighted=FALSE, normalized=FALSE, fast=TRUE)
+w_uf_cDNA_V6V8 = as.data.frame(as.matrix(w_uf_cDNA_V6V8))
+uw_uf_cDNA_V6V8 = as.data.frame(as.matrix(uw_uf_cDNA_V6V8))
+
+asv_TNA_V6V8 <- py$TNA_V6V8
+asv_TNA_V6V8 = as.matrix(asv_TNA_V6V8)
+phy_tree_TNA_V6V8 <- read_tree('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_TNA_V6V8/exports/tree.nwk')
+ASV_TNA_V6V8 = otu_table(asv_TNA_V6V8, taxa_are_rows = TRUE)
+physeq_TNA_V6V8 = phyloseq(ASV_TNA_V6V8,phy_tree_TNA_V6V8)
+w_uf_TNA_V6V8 <- UniFrac(physeq_TNA_V6V8, weighted=TRUE, normalized=FALSE, fast=TRUE)
+uw_uf_TNA_V6V8 <- UniFrac(physeq_TNA_V6V8, weighted=FALSE, normalized=FALSE, fast=TRUE)
+w_uf_TNA_V6V8 = as.data.frame(as.matrix(w_uf_TNA_V6V8))
+uw_uf_TNA_V6V8 = as.data.frame(as.matrix(uw_uf_TNA_V6V8))
+```
+```{python, results='hide', fig.keep='all', cache=TRUE}
+def transform_for_NMDS(similarities, n_jobs=1): #transform the similarity matrix to 2D space (n_components=2)
+    seed = 3
+    X_true = similarities.iloc[0:].values
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed, dissimilarity="precomputed", n_jobs=n_jobs)
+    similarities = np.nan_to_num(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12, dissimilarity="precomputed", random_state=seed, n_jobs=n_jobs, n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    clf = PCA()
+    npos = clf.fit_transform(npos)
+    return npos, nmds.stress_
+
+def plot_nmds_unifrac(w, uw, names_w, names_uw):
+  plt.figure(figsize=(10, 3.5))
+  ax1, ax2 = plt.subplot(121), plt.subplot(122)
+  for a in range(len(w)):
+    if 'neg' in names_w[a]: color =  '#0154B2'
+    else: color = '#B20154'
+    if 'N' in names_w[a]: fill = color
+    else: fill = 'w'
+    ax1.scatter(w[a, 0], w[a, 1], marker='o', edgecolors=color, color=fill)
+  for a in range(len(uw)):
+    if 'neg' in names_uw[a]: color =  '#0154B2'
+    else: color = '#B20154'
+    if 'N' in names_uw[a]: fill = color
+    else: fill = 'w'
+    ax1.set_title('Weighted unifrac')
+    ax2.set_title('Unweighted unifrac')
+    ax2.scatter(uw[a, 0], uw[a, 1], marker='o', edgecolors=color, color=fill)
+    handles = [Patch(facecolor='#B20154', edgecolor='#B20154', label='Positive\nnasopharyngeal'), Patch(facecolor='w', edgecolor='#B20154', label='Positive\noropharyngeal'), Patch(facecolor='#0154B2', edgecolor='#0154B2', label='Negative\nnasopharyngeal'), Patch(facecolor='w', edgecolor='#0154B2', label='Negative\noropharyngeal')]
+  ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1))
+  ax1.set_xlabel('nMDS1'), ax1.set_ylabel('nMDS2')
+  ax2.set_xlabel('nMDS1'), ax2.set_ylabel('nMDS2')
+```
+```{python, results='hide', fig.keep='all'}
+w_uf_TNA_V4V5, uw_uf_TNA_V4V5, w_uf_TNA_V6V8, uw_uf_TNA_V6V8, w_uf_cDNA_V6V8, uw_uf_cDNA_V6V8 = pd.DataFrame(r.w_uf_TNA_V4V5), pd.DataFrame(r.uw_uf_TNA_V4V5), pd.DataFrame(r.w_uf_TNA_V6V8), pd.DataFrame(r.uw_uf_TNA_V6V8), pd.DataFrame(r.w_uf_cDNA_V6V8), pd.DataFrame(r.uw_uf_cDNA_V6V8)
+```
+
+#### TNA V4V5
+```{python, results='hide', fig.keep='all', cache=TRUE}
+w_npos_TNA_V4V5, stress = transform_for_NMDS(w_uf_TNA_V4V5)
+uw_npos_TNA_V4V5, stress = transform_for_NMDS(uw_uf_TNA_V4V5)
+
+plot_nmds_unifrac(w_npos_TNA_V4V5, uw_npos_TNA_V4V5, list(w_uf_TNA_V4V5.columns), list(uw_uf_TNA_V4V5.columns))
+plt.tight_layout()
+plt.show()
+```
+
+#### TNA V6V8
+```{python, results='hide', fig.keep='all', cache=TRUE}
+w_npos_TNA_V6V8, stress = transform_for_NMDS(w_uf_TNA_V6V8)
+uw_npos_TNA_V6V8, stress = transform_for_NMDS(uw_uf_TNA_V6V8)
+
+plot_nmds_unifrac(w_npos_TNA_V6V8, uw_npos_TNA_V6V8, list(w_uf_TNA_V6V8.columns), list(uw_uf_TNA_V6V8.columns))
+plt.tight_layout()
+plt.show()
+```
+
+#### cDNA V6V8
+```{python, results='hide', fig.keep='all', cache=TRUE}
+w_npos_cDNA_V6V8, stress = transform_for_NMDS(w_uf_cDNA_V6V8)
+uw_npos_cDNA_V6V8, stress = transform_for_NMDS(uw_uf_cDNA_V6V8)
+
+plot_nmds_unifrac(w_npos_cDNA_V6V8, uw_npos_cDNA_V6V8, list(w_uf_cDNA_V6V8.columns), list(uw_uf_cDNA_V6V8.columns))
+plt.tight_layout()
+plt.show()
+```
+
+### Unifrac (only samples > 2000 reads)
+```{R, results='hide', fig.keep='all', cache=TRUE}
+asv_TNA_V4V5 <- py$TNA_V4V5_2000
+asv_TNA_V4V5 = as.matrix(asv_TNA_V4V5)
+phy_tree_TNA_V4V5 <- read_tree('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/exports/tree.nwk')
+ASV_TNA_V4V5 = otu_table(asv_TNA_V4V5, taxa_are_rows = TRUE)
+physeq_TNA_V4V5 = phyloseq(ASV_TNA_V4V5,phy_tree_TNA_V4V5)
+w_uf_TNA_V4V5 <- UniFrac(physeq_TNA_V4V5, weighted=TRUE, normalized=FALSE, fast=TRUE)
+uw_uf_TNA_V4V5 <- UniFrac(physeq_TNA_V4V5, weighted=FALSE, normalized=FALSE, fast=TRUE)
+w_uf_TNA_V4V5_2000 = as.data.frame(as.matrix(w_uf_TNA_V4V5))
+uw_uf_TNA_V4V5_2000 = as.data.frame(as.matrix(uw_uf_TNA_V4V5))
+
+asv_TNA_V6V8 <- py$TNA_V6V8_2000
+asv_TNA_V6V8 = as.matrix(asv_TNA_V6V8)
+phy_tree_TNA_V6V8 <- read_tree('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_TNA_V6V8/exports/tree.nwk')
+ASV_TNA_V6V8 = otu_table(asv_TNA_V6V8, taxa_are_rows = TRUE)
+physeq_TNA_V6V8 = phyloseq(ASV_TNA_V6V8,phy_tree_TNA_V6V8)
+w_uf_TNA_V6V8 <- UniFrac(physeq_TNA_V6V8, weighted=TRUE, normalized=FALSE, fast=TRUE)
+uw_uf_TNA_V6V8 <- UniFrac(physeq_TNA_V6V8, weighted=FALSE, normalized=FALSE, fast=TRUE)
+w_uf_TNA_V6V8_2000 = as.data.frame(as.matrix(w_uf_TNA_V6V8))
+uw_uf_TNA_V6V8_2000 = as.data.frame(as.matrix(uw_uf_TNA_V6V8))
+
+asv_cDNA_V6V8 <- py$cDNA_V6V8_2000
+asv_cDNA_V6V8 = as.matrix(asv_cDNA_V6V8)
+phy_tree_cDNA_V6V8 <- read_tree('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_cDNA_V6V8/exports/tree.nwk')
+ASV_cDNA_V6V8 = otu_table(asv_cDNA_V6V8, taxa_are_rows = TRUE)
+physeq_cDNA_V6V8 = phyloseq(ASV_cDNA_V6V8,phy_tree_cDNA_V6V8)
+w_uf_cDNA_V6V8 <- UniFrac(physeq_cDNA_V6V8, weighted=TRUE, normalized=FALSE, fast=TRUE)
+uw_uf_cDNA_V6V8 <- UniFrac(physeq_cDNA_V6V8, weighted=FALSE, normalized=FALSE, fast=TRUE)
+w_uf_cDNA_V6V8_2000 = as.data.frame(as.matrix(w_uf_cDNA_V6V8))
+uw_uf_cDNA_V6V8_2000 = as.data.frame(as.matrix(uw_uf_cDNA_V6V8))
+```
+```{python, results='hide', fig.keep='all', cache=TRUE}
+w_uf_TNA_V4V5_2000, uw_uf_TNA_V4V5_2000, w_uf_TNA_V6V8_2000, uw_uf_TNA_V6V8_2000, w_uf_cDNA_V6V8_2000, uw_uf_cDNA_V6V8_2000 = pd.DataFrame(r.w_uf_TNA_V4V5_2000), pd.DataFrame(r.uw_uf_TNA_V4V5_2000), pd.DataFrame(r.w_uf_TNA_V6V8_2000), pd.DataFrame(r.uw_uf_TNA_V6V8_2000), pd.DataFrame(r.w_uf_cDNA_V6V8_2000), pd.DataFrame(r.uw_uf_cDNA_V6V8_2000)
+```
+
+#### TNA V4V5
+```{python, results='hide', fig.keep='all', cache=TRUE}
+w_npos_TNA_V4V5_2000, stress = transform_for_NMDS(w_uf_TNA_V4V5_2000)
+uw_npos_TNA_V4V5_2000, stress = transform_for_NMDS(uw_uf_TNA_V4V5_2000)
+
+plot_nmds_unifrac(w_npos_TNA_V4V5_2000, uw_npos_TNA_V4V5_2000, list(w_uf_TNA_V4V5_2000.columns), list(uw_uf_TNA_V4V5_2000.columns))
+plt.tight_layout()
+plt.show()
+```
+
+#### TNA V6V8
+```{python, results='hide', fig.keep='all', cache=TRUE}
+w_npos_TNA_V6V8_2000, stress = transform_for_NMDS(w_uf_TNA_V6V8_2000)
+uw_npos_TNA_V6V8_2000, stress = transform_for_NMDS(uw_uf_TNA_V6V8_2000)
+
+plot_nmds_unifrac(w_npos_TNA_V6V8_2000, uw_npos_TNA_V6V8_2000, list(w_uf_TNA_V6V8_2000.columns), list(uw_uf_TNA_V6V8_2000.columns))
+plt.tight_layout()
+plt.show()
+```
+
+#### cDNA V6V8
+```{python, results='hide', fig.keep='all', cache=TRUE}
+w_npos_cDNA_V6V8_2000, stress = transform_for_NMDS(w_uf_cDNA_V6V8_2000)
+uw_npos_cDNA_V6V8_2000, stress = transform_for_NMDS(uw_uf_cDNA_V6V8_2000)
+
+plot_nmds_unifrac(w_npos_cDNA_V6V8_2000, uw_npos_cDNA_V6V8_2000, list(w_uf_cDNA_V6V8_2000.columns), list(uw_uf_cDNA_V6V8_2000.columns))
+plt.tight_layout()
+plt.show()
+```
+
+# Abundance bar charts {.tabset}
+```{python, results='hide', fig.keep='all'}
+TNA_V4V5, TNA_V6V8, cDNA_V6V8, TNA_V4V5_tax, TNA_V6V8_tax, cDNA_V6V8_tax = get_samples()
+
+def get_tax_dict(tax):
+  asv = list(tax.index.values)
+  tax_dict = {}
+  tax = pd.DataFrame(tax)
+  for a in asv:
+    taxonomy = tax.loc[a, 'taxonomy']
+    taxonomy = taxonomy.split(';')
+    for b in range(len(taxonomy)):
+      try:
+        taxonomy[b] = taxonomy[b].split('__')[1]
+        taxonomy[b] = taxonomy[b].replace('_', ' ')
+        taxonomy[b] = taxonomy[b].replace('Allorhizobium-Neorhizobium-Pararhizobium-Rhizobium', 'Rhizobium')
+        taxonomy[b] = taxonomy[b].replace('Burkholderia-Caballeronia-Paraburkholderia', 'Burkholderia')
+      except:
+        taxonomy[b] = taxonomy[b].replace('_', ' ')
+      tax_dict[a] = taxonomy
+  return tax_dict
+
+TNA_V4V5_tax_dict = get_tax_dict(TNA_V4V5_tax)
+TNA_V6V8_tax_dict = get_tax_dict(TNA_V6V8_tax)
+cDNA_V6V8_tax_dict = get_tax_dict(cDNA_V6V8_tax)
+
+def group_to_level(feat_table, tax_dict, level):
+  rename_dict = {}
+  asv = list(feat_table.index.values)
+  for a in asv:
+    try:
+      rename_dict[a] = tax_dict[a][level]
+    except:
+      rename_dict[a] = tax_dict[a][-1]
+  this_feat_table = feat_table.rename(index=rename_dict)
+  return this_feat_table
+
+def get_colors():
+    colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+    norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+    m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+    colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+    return colors_40+colors_40+colors_40+colors_40
+
+def get_bar(v1, v2, v3, level):
+  TNA_V4V5_level = group_to_level(v1, TNA_V4V5_tax_dict, level)
+  TNA_V4V5_level = TNA_V4V5_level.groupby(by=TNA_V4V5_level.index, axis=0).sum()
+  TNA_V4V5_level = TNA_V4V5_level.divide(TNA_V4V5_level.sum(axis=0))*100
+  TNA_V4V5_level = TNA_V4V5_level.loc[TNA_V4V5_level.max(axis=1) > 1, :]
+  
+  TNA_V6V8_level = group_to_level(v2, TNA_V6V8_tax_dict, level)
+  TNA_V6V8_level = TNA_V6V8_level.groupby(by=TNA_V6V8_level.index, axis=0).sum()
+  TNA_V6V8_level = TNA_V6V8_level.divide(TNA_V6V8_level.sum(axis=0))*100
+  TNA_V6V8_level = TNA_V6V8_level.loc[TNA_V6V8_level.max(axis=1) > 1, :]
+  
+  cDNA_V6V8_level = group_to_level(v3, cDNA_V6V8_tax_dict, level)
+  cDNA_V6V8_level = cDNA_V6V8_level.groupby(by=cDNA_V6V8_level.index, axis=0).sum()
+  cDNA_V6V8_level = cDNA_V6V8_level.divide(cDNA_V6V8_level.sum(axis=0))*100
+  cDNA_V6V8_level = cDNA_V6V8_level.loc[cDNA_V6V8_level.max(axis=1) > 1, :]
+  
+  all_taxa = list(TNA_V4V5_level.index.values)+list(TNA_V6V8_level.index.values)+list(cDNA_V6V8_level.index.values)
+  unique_taxa = []
+  for tax in all_taxa:
+    if tax not in unique_taxa: unique_taxa.append(tax)
+  unique_taxa = sorted(unique_taxa)
+  
+  handles = []
+  tax_colors = get_colors()
+  color_dict = {}
+  for a in range (len(unique_taxa)):
+    color_dict[unique_taxa[a]] = tax_colors[a]
+    handles.append(Patch(facecolor=tax_colors[a], label=unique_taxa[a]))
+  
+  plt.figure(figsize=(10,10))
+  ax1, ax2, ax3 = plt.subplot(311), plt.subplot(312), plt.subplot(313)
+  
+  amplicons, axis = [TNA_V4V5_level, TNA_V6V8_level, cDNA_V6V8_level], [ax1, ax2, ax3]
+  x, xlab = [], []
+  for a in range(len(samples)):
+    x.append(a), xlab.append('')
+    for b in range(len(amplicons)):
+      bottom = 0
+      if samples[a] not in amplicons[b].columns: continue
+      taxa_amp = list(amplicons[b].index.values)
+      for c in range(len(taxa_amp)):
+        val = amplicons[b].loc[taxa_amp[c], samples[a]]
+        axis[b].bar(a, val, bottom=bottom, width=1, color=color_dict[taxa_amp[c]], edgecolor='k')
+        bottom += val
+  for z in range(len(axis)):
+    axis[z].set_xlim([-1, 80]), axis[z].set_ylabel('Relative abundance (%)')
+  plt.sca(ax1)
+  plt.xticks(x, xlab)
+  plt.sca(ax2)
+  plt.xticks(x, xlab)
+  plt.sca(ax3)
+  plt.xticks(x, samples, rotation=90, fontsize=8)
+  ax1.set_title('TNA V4V5'), ax2.set_title('TNA V6V8'), ax3.set_title('cDNA V6V8')
+  nc = math.ceil(len(unique_taxa)/50)
+  ax1.legend(handles=handles, loc='upper left', bbox_to_anchor=(1,1.05), fontsize=8)
+  return
+
+samples = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N6-neg', 'N7-neg', 'N8-neg', 'N9-neg', 'N10-neg', 'N11-neg', 'N12-neg', 'N13-neg', 'N14-neg', 'N15-neg', 'N16-neg', 'N17-neg', 'N18-neg', 'N19-neg', 'N20-neg', 'N1-pos', 'N2-pos', 'N3-pos', 'N4-pos', 'N5-pos', 'N6-pos', 'N7-pos', 'N8-pos', 'N9-pos', 'N10-pos', 'N11-pos', 'N12-pos', 'N13-pos', 'N14-pos', 'N15-pos', 'N16-pos', 'N17-pos', 'N18-pos', 'N19-pos', 'N20-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O6-neg', 'O7-neg', 'O8-neg', 'O9-neg', 'O10-neg', 'O11-neg', 'O12-neg', 'O13-neg', 'O14-neg', 'O15-neg', 'O16-neg', 'O17-neg', 'O18-neg', 'O19-neg', 'O20-neg', 'O1-pos', 'O2-pos', 'O3-pos', 'O4-pos', 'O5-pos', 'O6-pos', 'O7-pos', 'O8-pos', 'O9-pos', 'O10-pos', 'O11-pos', 'O12-pos', 'O13-pos', 'O14-pos', 'O15-pos', 'O16-pos', 'O17-pos', 'O18-pos', 'O19-pos', 'O20-pos']
+
+dir = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/'
+```
+
+## All samples {.tabset}
+
+### Phylum
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5, TNA_V6V8, cDNA_V6V8, 1)
+plt.savefig(dir+'Bar_all_samples_phylum.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_all_samples_phylum.png)
+
+### Class
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5, TNA_V6V8, cDNA_V6V8, 2)
+plt.savefig(dir+'Bar_all_samples_class.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_all_samples_class.png)
+
+### Order
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5, TNA_V6V8, cDNA_V6V8, 3)
+plt.savefig(dir+'Bar_all_samples_order.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_all_samples_order.png)
+
+### Family
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5, TNA_V6V8, cDNA_V6V8, 4)
+plt.savefig(dir+'Bar_all_samples_family.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_all_samples_family.png)
+
+### Genus
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5, TNA_V6V8, cDNA_V6V8, 5)
+plt.savefig(dir+'Bar_all_samples_genus.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_all_samples_genus.png)
+
+## Only samples with > 2000 reads {.tabset}
+```{python}
+TNA_V4V5_2000 = TNA_V4V5.loc[:, TNA_V4V5.sum(axis=0) > 2000]
+TNA_V6V8_2000 = TNA_V6V8.loc[:, TNA_V6V8.sum(axis=0) > 2000]
+cDNA_V6V8_2000 = cDNA_V6V8.loc[:, cDNA_V6V8.sum(axis=0) > 2000]
+```
+
+### Phylum
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5_2000, TNA_V6V8_2000, cDNA_V6V8_2000, 1)
+plt.savefig(dir+'Bar_samples_ab2000_phylum.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_samples_ab2000_phylum.png)
+
+### Class
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5_2000, TNA_V6V8_2000, cDNA_V6V8_2000, 2)
+plt.savefig(dir+'Bar_samples_ab2000_class.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_samples_ab2000_class.png)
+
+### Order
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5_2000, TNA_V6V8_2000, cDNA_V6V8_2000, 3)
+plt.savefig(dir+'Bar_samples_ab2000_order.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_samples_ab2000_order.png)
+
+### Family
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5_2000, TNA_V6V8_2000, cDNA_V6V8_2000, 4)
+plt.savefig(dir+'Bar_samples_ab2000_family.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_samples_ab2000_family.png)
+
+### Genus
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_bar(TNA_V4V5_2000, TNA_V6V8_2000, cDNA_V6V8_2000, 5)
+plt.savefig(dir+'Bar_samples_ab2000_genus.png', bbox_inches='tight', dpi=600)
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/Bar_samples_ab2000_genus.png)
+
+# ANCOM {.tabset}
+
+Now only using the samples that had at least 2000 reads, but I still haven't rarefied, filtered low abundance/prevalence, etc. Note that these results are for the lowest ANCOM2 certainty value of 0.6. ANCOM uses ALR, but I've still plotted with the relative abundance values. 
+
+```{python, results='hide', fig.keep='all'}
+TNA_V4V5, TNA_V6V8, cDNA_V6V8, TNA_V4V5_tax, TNA_V6V8_tax, cDNA_V6V8_tax = get_samples()
+TNA_V4V5_2000 = TNA_V4V5.loc[:, TNA_V4V5.sum(axis=0) > 2000]
+TNA_V6V8_2000 = TNA_V6V8.loc[:, TNA_V6V8.sum(axis=0) > 2000]
+cDNA_V6V8_2000 = cDNA_V6V8.loc[:, cDNA_V6V8.sum(axis=0) > 2000]
+
+def only_oral(feat_table):
+  keeping = []
+  snames = list(feat_table.columns)
+  meta = []
+  for a in range(len(snames)):
+    if 'O' in snames[a]:
+      keeping.append(True)
+      if 'neg' in snames[a]: meta.append([snames[a], 'neg'])
+      elif 'pos' in snames[a]: meta.append([snames[a], 'pos'])
+    else:
+      keeping.append(False)
+  feat_table_oral = feat_table.loc[:, keeping]
+  meta = pd.DataFrame(meta, columns=['Samples', 'Groups'])
+  return feat_table_oral, meta
+
+def get_level(feat_table, tax_dict, level):
+  new_table = group_to_level(feat_table, tax_dict, level)
+  new_table = new_table.groupby(by=new_table.index, axis=0).sum()
+  return new_table
+
+def plot_ancom(ancom_phylum, ancom_class, ancom_order, ancom_family, ancom_genus, ft, meta):
+  ancom_phylum, ancom_class, ancom_order, ancom_family, ancom_genus = ancom_phylum.set_index('taxa_id'), ancom_class.set_index('taxa_id'), ancom_order.set_index('taxa_id'), ancom_family.set_index('taxa_id'), ancom_genus.set_index('taxa_id')
+
+  keeping_col = 'detected_0.6'
+  ancom_phylum, ancom_class, ancom_order, ancom_family, ancom_genus = pd.DataFrame(ancom_phylum.loc[:, keeping_col]).rename(columns={keeping_col:'detected'}), pd.DataFrame(ancom_class.loc[:, keeping_col]).rename(columns={keeping_col:'detected'}), pd.DataFrame(ancom_order.loc[:, keeping_col]).rename(columns={keeping_col:'detected'}), pd.DataFrame(ancom_family.loc[:, keeping_col]).rename(columns={keeping_col:'detected'}), pd.DataFrame(ancom_genus.loc[:, keeping_col]).rename(columns={keeping_col:'detected'})
+  rename = {}
+  rows = list(meta.index.values)
+  for a in range(len(rows)):
+    rename[meta.loc[rows[a], 'Samples']] = meta.loc[rows[a], 'Groups']
+  for b in range(len(ft)):
+    ft[b] = ft[b].rename(columns=rename)
+    ft[b] = ft[b].divide(ft[b].sum(axis=0))*100
+
+  plt.figure(figsize=(15,15))
+  ancom = [ancom_phylum, ancom_class, ancom_order, ancom_family, ancom_genus]
+  level_name = ['Phylum', 'Class', 'Order', 'Family', 'Genus']
+  for a in range(len(ancom)):
+    added = 0
+    taxa = list(ancom[a].index.values)
+    for b in range(len(taxa)):
+      if ancom[a].loc[taxa[b], 'detected'] == True:
+        neg, pos = ft[a].loc[taxa[b], 'neg'].values, ft[a].loc[taxa[b], 'pos'].values
+        ax = plt.subplot2grid((5,3), (a, added))
+        ax.boxplot([neg, pos])
+        ax.set_ylabel('Relative abundance (%)')
+        ax.set_title(level_name[a]+'\n'+taxa[b])
+        plt.sca(ax)
+        plt.xticks([1, 2], ['Negative', 'Positive'])
+        added += 1
+```
+
+## TNA V6V8 oral negative vs positive
+
+```{python, results='hide', fig.keep='all'}
+TNA_V6V8_2000_oral, TNA_V6V8_meta = only_oral(TNA_V6V8_2000)
+
+TNA_V6V8_2000_oral_phylum = get_level(TNA_V6V8_2000_oral, TNA_V6V8_tax_dict, 1)
+TNA_V6V8_2000_oral_class = get_level(TNA_V6V8_2000_oral, TNA_V6V8_tax_dict, 2)
+TNA_V6V8_2000_oral_order = get_level(TNA_V6V8_2000_oral, TNA_V6V8_tax_dict, 3)
+TNA_V6V8_2000_oral_family = get_level(TNA_V6V8_2000_oral, TNA_V6V8_tax_dict, 4)
+TNA_V6V8_2000_oral_genus = get_level(TNA_V6V8_2000_oral, TNA_V6V8_tax_dict, 5)
+TNA_V6V8_2000_oral_species = get_level(TNA_V6V8_2000_oral, TNA_V6V8_tax_dict, 6)
+
+ft = [TNA_V6V8_2000_oral_phylum, TNA_V6V8_2000_oral_class, TNA_V6V8_2000_oral_order, TNA_V6V8_2000_oral_family, TNA_V6V8_2000_oral_genus, TNA_V6V8_2000_oral_species, TNA_V6V8_2000_oral]
+```
+
+```{r}
+source("/Users/robynwright/Documents/OneDrive/Github/R-notebooks/ancom_v2.1.R")
+
+ft = py$ft
+md = py$TNA_V6V8_meta
+
+feature_table = ft[1]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_phylum = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_phylum = ancom_out_phylum$out
+
+feature_table = ft[2]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_class = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_class = ancom_out_class$out
+
+feature_table = ft[3]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_order = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_order = ancom_out_order$out
+
+feature_table = ft[4]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_family = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_family = ancom_out_family$out
+
+feature_table = ft[5]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_genus = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_genus = ancom_out_genus$out
+
+feature_table = ft[6]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_species = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_species = ancom_out_species$out
+
+feature_table = ft[7]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_ASV = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_ASV = ancom_out_ASV$out
+```
+
+```{python, results='hide', fig.keep='all'}
+ancom_phylum, ancom_class, ancom_order, ancom_family, ancom_genus, ancom_species, ancom_ASV = r.ancom_phylum, r.ancom_class, r.ancom_order, r.ancom_family, r.ancom_genus, r.ancom_species, r.ancom_ASV
+
+plot_ancom(ancom_phylum, ancom_class, ancom_order, ancom_family, ancom_genus, ft, TNA_V6V8_meta)
+plt.tight_layout()
+plt.savefig(dir+'ANCOM_TNA_V6V8_oral_pos_neg.png', dpi=600, bbox_inches='tight')
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/ANCOM_TNA_V6V8_oral_pos_neg.png)
+
+## cDNA V6V8 oral negative vs positive
+
+```{python, results='hide', fig.keep='all'}
+cDNA_V6V8_2000_oral, cDNA_V6V8_meta = only_oral(cDNA_V6V8_2000)
+
+cDNA_V6V8_2000_oral_phylum = get_level(cDNA_V6V8_2000_oral, cDNA_V6V8_tax_dict, 1)
+cDNA_V6V8_2000_oral_class = get_level(cDNA_V6V8_2000_oral, cDNA_V6V8_tax_dict, 2)
+cDNA_V6V8_2000_oral_order = get_level(cDNA_V6V8_2000_oral, cDNA_V6V8_tax_dict, 3)
+cDNA_V6V8_2000_oral_family = get_level(cDNA_V6V8_2000_oral, cDNA_V6V8_tax_dict, 4)
+cDNA_V6V8_2000_oral_genus = get_level(cDNA_V6V8_2000_oral, cDNA_V6V8_tax_dict, 5)
+
+ft = [cDNA_V6V8_2000_oral_phylum, cDNA_V6V8_2000_oral_class, cDNA_V6V8_2000_oral_order, cDNA_V6V8_2000_oral_family, cDNA_V6V8_2000_oral_genus]
+```
+
+```{r}
+source("/Users/robynwright/Documents/OneDrive/Github/R-notebooks/ancom_v2.1.R")
+
+ft = py$ft
+md = py$cDNA_V6V8_meta
+
+feature_table = ft[1]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_phylum = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_phylum = ancom_out_phylum$out
+
+feature_table = ft[2]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_class = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_class = ancom_out_class$out
+
+feature_table = ft[3]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_order = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_order = ancom_out_order$out
+
+feature_table = ft[4]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_family = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_family = ancom_out_family$out
+
+feature_table = ft[5]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out_genus = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_genus = ancom_out_genus$out
+```
+
+```{python, results='hide', fig.keep='all'}
+ancom_phylum, ancom_class, ancom_order, ancom_family, ancom_genus = r.ancom_phylum, r.ancom_class, r.ancom_order, r.ancom_family, r.ancom_genus
+
+plot_ancom(ancom_phylum, ancom_class, ancom_order, ancom_family, ancom_genus, ft, cDNA_V6V8_meta) 
+plt.tight_layout()
+plt.savefig(dir+'ANCOM_cDNA_V6V8_oral_pos_neg.png', dpi=600, bbox_inches='tight')
+```
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/amplicon_analysis/figures/ANCOM_cDNA_V6V8_oral_pos_neg.png)

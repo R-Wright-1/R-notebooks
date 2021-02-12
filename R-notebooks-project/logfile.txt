@@ -1,0 +1,2 @@
+.DS_Store: not a .fna file, skipped this file
+GCF_004341725.1_genomic.tax.fna.gz: already had a .tax.fna.gz, skipped this file

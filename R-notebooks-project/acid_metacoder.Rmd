@@ -1,0 +1,164 @@
+## Metacoder {.tabset}
+
+[Metacoder]() is an R package that allows you to plot differential abundance between groups across all phylogenetic levels. The plots look kind of like a phylogenetic tree - they are ordered by phylogeny, but the branch legnths aren't related to how each taxon is related to one another. Each node corresponds to a taxonomic level. The larger the node, the larger the number of ASVs within that node. Each edge is coloured by whether there is a *statistically significant* difference in the abundance between the two treatments being compared. Whether a taxon is considered differentially abundant is based on a Wilcoxon rank sum test p<0.05 and the fold change shown is between the two centered log ratios.</br>
+Prepare feature table for metacoder:
+```{python, results='hide', fig.keep='all'}
+ft_clr = pd.read_csv(folder+'otu_table_clr.csv', header=0, index_col=0)
+ft_mc = pd.DataFrame(ft_clr)
+ft_mc['lineage'] = ''
+count = 0
+for row in ft_mc.index.values:
+  lineage = tax_dict[row]
+  line = ''
+  for a in range(len(lineage)):
+    if '__' in lineage[a]:
+      lineage[a] = lineage[a].split('__')[1]
+    if line != '': line += ';'
+    line += lineage[a]
+  ft_mc.loc[row, 'lineage'] = line
+  count += 1
+
+rename_treat = {}
+rename_loc = {}
+keeping = ['lineage']
+rename_site2, keep_site2 = {}, ['lineage']
+rename_site4, keep_site4 = {}, ['lineage']
+
+for sample in ft_mc.columns:
+  if sample != 'lineage':
+    rename_treat[sample] = md.loc[sample, 'Treatment']
+    rename_loc[sample] = md.loc[sample, 'Location']
+    keeping.append(sample)
+    if md.loc[sample, 'Location'] == 'Site2':
+      keep_site2.append(sample)
+      rename_site2[sample] = md.loc[sample, 'Treatment']
+    elif md.loc[sample, 'Location'] == 'Site4':
+      keep_site4.append(sample)
+      rename_site4[sample] = md.loc[sample, 'Treatment']
+
+ft_treat = ft_mc.loc[:, keeping].rename(columns=rename_treat)
+ft_loc = ft_mc.loc[:, keeping].rename(columns=rename_loc)
+ft_site2 = ft_mc.loc[:, keep_site2].rename(columns=rename_site2)
+ft_site4 = ft_mc.loc[:, keep_site4].rename(columns=rename_site4)
+ft_site2 = ft_site2[ft_site2.max(axis=1) > 0]
+ft_site4 = ft_site4[ft_site4.max(axis=1) > 0]
+```
+
+### Control vs Treatment
+
+Not adjusted for FDR:
+```{R, results='hide', fig.keep='all'}
+asvs_treat <- py$ft_treat
+obj <- parse_tax_data(asvs_treat, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+set.seed(1)
+
+middle = '#C3C3C3'
+color_control = '#1A5276'
+color_treatment  = '#F1C40F'
+color2 = color_treatment 
+color1 = color_control
+
+cn = colnames(obj$data$tax_abund)
+cn = cn[2:length(cn)]
+treats = c()
+for (a in 1:length(cn)) {
+	str = cn[a]
+	if (substr(str, 1,1) == 'T') {
+	  treats = c(treats, 'Treatment')
+	} else {
+	  treats = c(treats, 'Control')
+	}
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols = cn, groups = treats, combinations=list(c('Control', 'Treatment')), func=function(abund_1, abund_2) {
+  log_ratio <- median(abund_1) - median(abund_2)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(abund_1) - median(abund_2),
+       mean_diff = mean(abund_1) - mean(abund_2),
+       wilcox_p_value = wilcox.test(abund_1, abund_2)$p.value)
+})
+
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+#heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, node_color_interval=c(-3,3), node_color_range=c(color2, middle, color1), layout="davidson-harel", initial_layout="reingold-tilford", make_node_legend=FALSE, make_edge_legend=FALSE, output_file="metacoder.pdf", node_label_max=0) 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, node_color_interval=c(-5,5), layout="davidson-harel", initial_layout="reingold-tilford", node_color_range=c(color2, middle, color1)) 
+```
+Unsurprisingly, there are no differences here (as there weren't with the ANCOM tests above). 
+
+Adjusted for FDR:
+
+
+### Site 1 vs Site 2
+```{R, results='hide', fig.keep='all'}
+asvs_treat <- py$ft_loc
+obj <- parse_tax_data(asvs_treat, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+set.seed(1)
+
+middle = '#C3C3C3'
+color_control = '#1A5276'
+color_treatment  = '#F1C40F'
+color2 = color_treatment 
+color1 = color_control
+
+cn = colnames(obj$data$tax_abund)
+cn = cn[2:length(cn)]
+treats = c()
+for (a in 1:length(cn)) {
+	str = cn[a]
+	treats = c(treats, substr(c(str, 1, 5)))
+}
+treats
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols = cn, groups = treats, combinations=list(c('Site1', 'Site2')), func=function(abund_1, abund_2) {
+  log_ratio <- median(abund_1) - median(abund_2)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(abund_1) - median(abund_2),
+       mean_diff = mean(abund_1) - mean(abund_2),
+       wilcox_p_value = wilcox.test(abund_1, abund_2)$p.value)
+})
+
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+#heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, node_color_interval=c(-3,3), node_color_range=c(color2, middle, color1), layout="davidson-harel", initial_layout="reingold-tilford", make_node_legend=FALSE, make_edge_legend=FALSE, output_file="metacoder.pdf", node_label_max=0) 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, node_color_interval=c(-5,5), layout="davidson-harel", initial_layout="reingold-tilford", node_color_range=c(color2, middle, color1)) 
+```
+
+### Site 1 vs Site 3
+
+
+### Site 1 vs Site 4
+
+
+### Site 1 vs Site 5
+
+### Site 2 vs Site 3
+
+### Site 2 vs Site 4
+
+### Site 2 vs Site 5
+
+### Site 3 vs Site 4
+
+### Site 3 vs Site 5
+
+### Site 4 vs Site 5
+
+### Site 2 Control vs Treatment
+
+
+### Site 4 Control vs Treatment
+

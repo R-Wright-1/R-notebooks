@@ -1,0 +1,1856 @@
+---
+title: "Acid Rain Recovery"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+---
+
+```{R, results='hide', fig.keep='all', message=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+library(phyloseq)
+library(microbiome)
+library(philr)
+library(ape)
+library(tidyr)
+library(vegan)
+library(randomcoloR)
+library(gridExtra)
+library(metacoder)
+library("data.table")
+library("plyr")
+options(warn = -1)
+library(DESeq2)
+
+folder <- '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Acid_rain_recovery/'
+```
+
+# Basic processing {.tabset}
+
+This is something like what Andre would have done to process the samples prior to giving the data to you, which is based on the [standard workflow here](https://github.com/LangilleLab/microbiome_helper/wiki/Amplicon-SOP-v2-(qiime2-2020.2)).</br>
+After most steps there is a summarise option, which I would look at as it will likely give a good indication of whether something has gone wrong or not. If you see a large jump in the number of samples or number of features (ASVs) from one step to the next then this would be good to look into.
+
+## Install QIIME2
+
+This requires that QIIME2 is installed (directions for that [here](https://docs.qiime2.org/2020.11/install/)). It can be installed locally, but with larger datasets it is likely to run out of memory if you have less than ~32GB RAM. You should follow the instructions on the website as this will have the most recent version, but will look something like this (run in terminal):
+```{bash, eval=FALSE}
+wget https://repo.anaconda.com/archive/Anaconda3-2019.10-Linux-x86_64.sh
+chmod +x Anaconda3-2019.10-Linux-x86_64.sh
+./ Anaconda3-2019.10-Linux-x86_64.sh
+
+conda update conda
+conda install wget
+
+wget https://data.qiime2.org/distro/core/qiime2-2020.2-py36-linux-conda.yml
+conda env create -n qiime2-2020.2 --file qiime2-2020.2-py36-linux-conda.yml
+rm qiime2-2020.2-py36-linux-conda.yml
+```
+
+Acitvate the environment:
+```{bash, eval=FALSE}
+conda activate qiime2-2020.2
+```
+
+## Quality control of reads
+
+This will give you a .html file showing basic quality metrics for all of the sequences in each of your files.
+```{bash, eval=FALSE}
+mkdir fastqc
+fastqc -t 4 path_to_folder/*.fastq.gz -o path_to_output_folder
+multiqc path_to_output_folder
+```
+
+## Import into QIIME2
+
+Read in your samples to QIIME2:
+```{bash, eval=FALSE}
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path path_to_fastq_files/ \
+  --output-path reads.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+```
+
+Summarise the samples:
+```{bash, eval=FALSE}
+qiime demux summarize \
+  --i-data reads.qza  \
+  --o-visualization summary_reads.qzv
+```
+
+## Run cutadapt
+
+Remove the primers from the ends of reads (you will need to make sure that the sequences match the primers you have used - they will be on the IMR website):
+```{bash, eval=FALSE}
+qiime cutadapt trim-paired \
+  --i-demultiplexed-sequences reads.qza \
+  --p-cores 8 \
+  --p-front-f GTGYCAGCMGCCGCGGTAA \
+  --p-front-r CCGYCAATTYMTTTRAGTTT \
+  --p-discard-untrimmed \
+  --p-no-indels \
+  --o-trimmed-sequences trimmed_reads.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime demux summarize \
+  --i-data trimmed_reads.qza  \
+  --o-visualization summary_trimmed_reads.qzv
+```
+
+## Denoise {.tabset}
+
+Here you can choose whether to run DADA2 or Deblur. These are two different algorithms for denoising the reads - DADA2 must be run only with samples from the same MiSeq run as it looks at a subset of your samples to learn the error profile and correct the reads. Deblur uses a per sample approach and you therefore don't need to know whether the samples were run on the same MiSeq run or not. The results from each will probably be very similar.
+
+### Run DADA2
+
+The --p-trunc-len here need to be edited based on the quality profiles of your reads (you can see them in the summary_trimmed_reads.qzv above). Typically you choose to trim at the point in the reads where the median quality score drops below ~25-30. This always starts sooner on the reverse read. Also keep in mind that your reads must still overlap by enough that they can be joined together. The max-ee options corresponding to the number of errors that you accept in each of the reads.
+```{bash, eval=FALSE}
+mkdir dada2_out
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs trimmed_reads.qza \
+  --p-trunc-len-f 260 \
+  --p-trunc-len-r 160 \
+  --p-max-ee-f 2 \
+  --p-max-ee-r 2 \
+  --p-n-threads 8 \
+  --o-table dada2_out/table.qza \
+  --o-representative-sequences dada2_out/representative_sequences.qza \
+  --o-denoising-stats dada2_out/stats.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime metadata tabulate \
+  --m-input-file dada2_out/stats.qza \
+  --o-visualization stats_dada2_out.qzv
+  
+qiime feature-table summarize \
+  --i-table dada2_out/table.qza  \
+  --o-visualization summary_dada2_out.qzv
+```
+
+### Run Deblur
+
+Join paired end reads:
+```{bash, eval=FALSE}
+qiime vsearch join-pairs \
+  --i-demultiplexed-seqs reads_trimmed.qza \
+  --o-joined-sequences reads_joined.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime demux summarize \
+  --i-data reads_joined.qza \
+  --o-visualization summary_reads_joined.qzv
+```
+
+Filter low quality reads:
+```{bash, eval=FALSE}
+qiime quality-filter q-score-joined \
+  --i-demux reads_joined.qza \
+  --o-filter-stats filt_stats.qza \
+  --o-filtered-sequences reads_joined_filtered.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime demux summarize \
+  --i-data reads_joined_filtered.qza \
+  --o-visualization summary_reads_joined_filtered.qzv
+```
+
+Here you should decide on the length to keep after joining the reads, so looking at where the median quality score drops below ~25-30.</br>
+Run deblur:
+```{bash, eval=FALSE}
+qiime deblur denoise-16S \
+  --i-demultiplexed-seqs reads_joined_filtered.qza \
+  --p-trim-length 402 \
+  --p-left-trim-len 0 \
+  --p-sample-stats \
+  --p-jobs-to-start 12 \
+  --p-min-reads 1 \
+  --output-dir deblur_output
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime feature-table summarize \
+  --i-table deblur_output_quality/table.qza  \
+  --o-visualization deblur_table_summary.qzv
+```
+
+## Merge tables and sequences (only necessary if multiple runs/studies)
+
+```{bash, eval=FALSE}
+qiime feature-table merge \
+  --i-tables dada2_out1/table.qza \
+  --i-tables dada2_out2/table.qza \
+  --i-tables dada2_out3/table.qza \
+  --o-merged-table merged_table.qza
+  
+qiime feature-table merge-seqs \
+  --i-data dada2_out1/representative_sequences.qza \
+  --i-data dada2_out2/representative_sequences.qza \
+  --i-data dada2_out3/representative_sequences.qza \
+  --o-merged-data merged_representative_sequences.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime feature-table summarize \
+  --i-table merged_table.qza  \
+  --o-visualization merged_table_summary.qzv
+```
+
+## Classify features
+
+Classify each of your ASVs (inferred by either DADA2 or Deblur above) to find out what their taxonomy is. This is the step that is likely to use the most memory. If it is a problem you may be able to get around it by filtering out very low abundance - typically where e.g. only 1 read is found in all samples, or less than 10 reads overall. 
+
+Can update classifier/download for the correct region [here](https://docs.qiime2.org/2020.6/data-resources/)
+```{bash, eval=FALSE}
+qiime feature-classifier classify-sklearn \
+  --i-reads merged_representative_sequences.qza \
+  --i-classifier /home/shared/taxa_classifiers/qiime2-2020.2_classifiers/classifier_silva_132_99_16S_V4.V5_515F_926R.qza \
+  --p-n-jobs 8 \
+  --output-dir taxa
+```
+
+Export:
+```{bash, eval=FALSE}
+qiime tools export \
+  --input-path taxa/classification.qza \
+  --output-path taxa
+```
+
+## Filter features
+
+This step removes very low abundance taxa (assuming you didn't do it already above) and also taxa that weren't classified at the phylum/domain level or were classified as mitochondria or chloroplasts.</br>
+I usually either use a minimum frequency of 10, or of 0.1% of the average frequency per sample (which is what 28 represents).
+
+```{bash, eval=FALSE}
+qiime feature-table filter-features \
+  --i-table merged_table.qza \
+  --p-min-frequency 28 \
+  --p-min-samples 1 \
+  --o-filtered-table merged_table_filtered.qza
+  
+qiime taxa filter-table \
+  --i-table merged_table_filtered.qza \
+  --i-taxonomy taxa/classification.qza \
+  --p-include d__ \
+  --p-exclude mitochondria,chloroplast \
+  --o-filtered-table merged_table_filtered_contamination.qza
+```
+
+Summarise:
+```{bash, eval=FALSE}
+qiime feature-table summarize \
+  --i-table merged_table_filtered_contamination.qza \
+  --o-visualization summary_merged_table_filtered_contamination.qzv
+```
+
+## Generate rarefaction curves
+
+This gives a good idea as to whether your samples are sequenced to sufficient depth. --p-max-depth should be edited to be the maximum number of features found in your samples (from the most recent summary). 
+
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+  --i-table merged_table_filtered_contamination.qza \
+  --p-max-depth 99645 \
+  --p-steps 20 \
+  --p-metrics 'observed_otus' \
+  --o-visualization merged_rarefaction_curves.qzv
+```
+
+## Filter and rarefy
+
+Typically, you will now remove samples that have below a certain number of sequences. You should be able to decide this based on where the rarefaction curves start to plateau. If you don't see a plateau then this suggests that your samples weren't sequenced to a sufficient depth to capture all of the diversity present. </br>
+Rarefaction is optional and some people think it should always be done whereas others think it should never be done. Rarefaction is basically a way of dealing with the fact that your samples are not sequenced equally, and there is no way to know whether this is because there were really fewer organisms in each sample, or this is due to some other analysis step (DNA extraction was less efficient, for example). So generally one of several methods for normalisation will be used:</br>
+- conversion to relative abundance</br>
+- rarefaction (resampling of each sample to the same number of sequences - the curves above show how many taxa you have by resampling each sample to a range of different depths)</br>
+- conversion to log ratios</br>
+</br>
+There are several studies suggesting that conversion to log ratios should always be used -because it is best at treating the abundances of organisms in samples as compositions (reflecting that you don't have an absolute measurement of the number of organisms in your sample)- but rarefaction is still the most effective method if the number of sequences per sample is very variable (I would personally define this as more than a magnitude of difference between the smallest and largest depths). So, if you choose to rarefy, you should rarefy to the same number of reads as the smallest sample remaining after removing those with very low numbers of reads.
+```{bash, eval=FALSE}
+qiime feature-table filter-samples \
+  --i-table merged_table_filtered_contamination.qza \
+  --p-min-frequency 5000 \
+  --o-filtered-table  merged_table_final.qza
+  
+###
+#optional#
+qiime feature-table rarefy \
+  --i-table merged_table_final.qza \
+  --p-sampling-depth 5000 \
+  --o-rarefied-table merged_table_final_rarefied.qza
+###
+
+qiime feature-table filter-seqs \
+  --i-data merged_representative_sequences.qza \
+  --i-table merged_table_final.qza \
+  --o-filtered-data  representative_sequences_final.qza
+```
+
+## Insert sequences into tree
+
+This gives you a phylogenetic tree of your sequences based on all of the sequences in the Silva v128 database, which is typically more accurate that constructing a *de novo* tree. 
+```{bash, eval=FALSE}
+qiime fragment-insertion sepp \
+  --i-representative-sequences representative_sequences_final.qza \
+  --i-reference-database ref_alignments/sepp-refs-silva-128.qza \
+  --o-tree insertion_tree_rarefied.qza \
+  --o-placements insertion_placements.qza \
+  --p-threads 8
+```
+
+## Export all files
+
+```{bash, eval=FALSE}
+qiime tools export \
+  --input-path representative_sequences_final.qza \
+  --output-path exports
+  
+sed -i -e '1 s/Feature/#Feature/' -e '1 s/Taxon/taxonomy/' taxa/taxonomy.tsv
+
+qiime tools export \
+  --input-path merged_table_final.qza \
+  --output-path exports
+  
+biom add-metadata \
+  -i exports/feature-table.biom \
+  -o exports/feature-table_w_tax.biom \
+  --observation-metadata-fp taxa/taxonomy.tsv \
+  --sc-separated taxonomy
+  
+biom convert \
+  -i exports/feature-table_w_tax.biom \
+  -o exports/feature-table_w_tax.txt \
+  --to-tsv \
+  --header-key taxonomy
+  
+qiime tools export \
+  --input-path insertion_tree.qza \
+  --output-path exports
+```
+
+## Get stacked barplot
+
+Here you'll need to also input your metadata table, which at a minimum just needs a #SampleID column where the sample names given match the first part of the fasta files that you input for each sample. The other columns can be named whatever you like (although there are sometimes issues with certain characters so it's easier to have all letters/numbers), and you can have as many columns/groups as you like. 
+
+```{bash, eval=FALSE}
+qiime taxa barplot \
+   --i-table merged_table_final.qza \
+   --i-taxonomy taxa/classification.qza \
+   --m-metadata-file metadata.txt \
+   --o-visualization taxa/taxa_barplot.qzv
+```
+
+## Get diversity plots
+
+This will give you a range of PCoA plots etc. I suggest using the same sampling depth as given previously for filtering/rarefying samples. It will automatically rarefy all samples to this depth.
+
+```{bash, eval=FALSE}
+qiime diversity core-metrics-phylogenetic \
+   --i-table merged_table_final.qza \
+   --i-phylogeny insertion_tree.qza \
+   --p-sampling-depth 5000 \
+   --m-metadata-file metadata.txt \
+   --p-n-jobs 4 \
+   --output-dir diversity
+```
+  
+# Notes for further analyses
+
+I have mainly used Python for analysis in the past because this is what I already knew and was comfortable with before analysing any microbiome data, but there are many more packages and tutorials available for microbiome analysis in R (for example, unifrac can't be calculated in Python). I now often use a combination of R and Python because this is relatively easy to do in R notebooks, but here I'll give a typical workflow of what I would usually do in Python and then also doing most of this in only R. </br>
+[This website](https://www.nicholas-ollberding.com/post/introduction-to-the-statistical-analysis-of-microbiome-data-in-r/) looks like it has a nice tutorial for analysis in R, as well as links to other resources.</br>
+[This website](https://www.microbiomeanalyst.ca/MicrobiomeAnalyst/home.xhtml) allows you to upload your data and do analyses this way, which can be great for getting results quickly, but obviously won't allow you to customise analysis very easily.
+
+# R {.tabset}
+
+We'll mainly use [Phyloseq](https://joey711.github.io/phyloseq/) for this analysis as it incorporates a lot of plotting and normalisation functions.
+
+## Import data
+
+I'm starting with the feature table where I removed the first row (the "# constructed from biom file") - this makes it a lot easier to read in. I've also edited the sample names as R doesn't like sample names that begin with a number (so instead of reading 2ndBatch they are now Batch2).
+```{R, results='hide', fig.keep='all'}
+
+asv_table <- read.csv(paste(folder, "exports/feature_table_R.csv", sep="")) #read in table from file
+sampledata <- read.csv(paste(folder, "exports/metadata_R.csv", sep="")) #read in the metadata table
+phy_tree <- read_tree(paste(folder, "exports/tree.nwk", sep='')) #read in the phylogenetic tree
+
+taxonomy = asv_table[, c(1, 22)] #take only the OTU ID and taxonomy column to a new table
+asv_table = asv_table[, 1:21] #take the OTU ID and the other columns to be the ASV table
+
+asv_table_num = data.matrix(asv_table[,2:21]) #convert the ASV table to a numeric matric
+rownames(asv_table_num) = asv_table[,1] #give the matrix row names
+asv_table = as.matrix(asv_table_num) #convert it to a matrix
+
+taxonomy <- separate(data = taxonomy, col = taxonomy, into = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"), sep = "\\;") #separate the taxonomy table so each phylogenetic level is its own column
+taxmat <- taxonomy[,-1] #remove the OTU ID column from the taxonomy table
+rownames(taxmat) <- taxonomy[,1] #and now give the taxonomy table the OTU IDs as row names
+
+samples <- sampledata[, 2:5] #get the metadata columns
+rownames(samples) = sampledata[,1] #and add the sample names as row names
+samples = data.frame(samples, stringsAsFactors = FALSE) #convert this to a data frame
+
+#convert these to phyloseq objects
+ASV = otu_table(asv_table, taxa_are_rows = TRUE)
+TAX = tax_table(taxmat)
+SAMPLE = sample_data(samples)
+taxa_names(TAX) <- taxonomy[,1]
+physeq = phyloseq(ASV,phy_tree,TAX,SAMPLE)
+```
+
+## Normalise
+
+We'll perform all of the normalisations (as we did above) that we will want to use at some point
+```{R, results='hide', fig.keep='all'}
+physeq_rare <- rarefy_even_depth(physeq, sample.size = min(sample_sums(physeq)), replace = TRUE, trimOTUs = TRUE, verbose = TRUE) #rarefy to the lowest sample depth
+physeq_clr <- microbiome::transform(physeq, "clr") #convert to CLR
+physeq_relabun  <- transform_sample_counts(physeq, function(x) (x / sum(x))*100) #convert to relative abundance
+```
+
+## Rarefaction curves
+
+```{R, results='hide', fig.keep='all'}
+rarecurve(t(otu_table(physeq)), step=50, cex=0.5)
+```
+
+## Alpha diversity not normalised {.tabset}
+
+Richness (observed ASVs), Chao1, Simpsons & Shannon diversity.</br>
+The diversity measures can't be calculated on numbers that aren't integers, so we can't calculate these for the relative abundance or CLR transformed data.
+
+### Per sample
+
+```{R, results='hide', fig.keep='all'}
+plot_richness(physeq, measures=c("Observed", "Chao1", "Simpson", "Shannon"))
+```
+
+### Per group
+
+```{R, results='hide', fig.keep='all'}
+plot_richness(physeq, x="Location", measures=c("Observed", "Chao1", "Simpson", "Shannon")) + geom_boxplot()
+```
+```{R, results='hide', fig.keep='all'}
+plot_richness(physeq, x="Treatment", measures=c("Observed", "Chao1", "Simpson", "Shannon")) + geom_boxplot()
+```
+
+## Alpha diversity rarefied {.tabset}
+
+Richness (observed ASVs), Chao1, Simpsons & Shannon diversity.
+
+### Per sample
+
+```{R, results='hide', fig.keep='all'}
+plot_richness(physeq_rare, measures=c("Observed", "Chao1", "Simpson", "Shannon"))
+```
+
+### Per group
+
+```{R, results='hide', fig.keep='all'}
+plot_richness(physeq_rare, x="Location", measures=c("Observed", "Chao1", "Simpson", "Shannon")) + geom_boxplot()
+```
+```{R, results='hide', fig.keep='all'}
+plot_richness(physeq_rare, x="Treatment", measures=c("Observed", "Chao1", "Simpson", "Shannon")) + geom_boxplot()
+```
+
+## Beta diversity ordination plots {.tabset}
+
+We have NMDS plots above (and these will look the same as those if we choose to use NMDS here), so here I'm plotting PCoA, so the % variation explained by each axis is in brackets. The results of adonis (permanova) tests for significant differences between groups are also shown. Location is samples grouped only to sites while Location2 has information on Treatment and Location.
+
+### Bray-Curtis not normalised
+
+```{R, results='hide', fig.keep='all'}
+ps = physeq
+ps.ord <- ordinate(ps, "PCoA", "bray")
+plot_ordination(ps, ps.ord, type="samples", color="Treatment", shape="Location") 
+distance <- phyloseq::distance(ps, method="bray", weighted=F)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+```
+
+### Bray-Curtis rarefied
+
+```{R, results='hide', fig.keep='all'}
+ps = physeq_rare
+ps.ord <- ordinate(ps, "PCoA", "bray")
+plot_ordination(ps, ps.ord, type="samples", color="Treatment", shape="Location")
+distance <- phyloseq::distance(ps, method="bray", weighted=F)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+```
+
+### Bray-Curtis relative abundance
+
+```{R, results='hide', fig.keep='all'}
+ps = physeq_relabun
+ps.ord <- ordinate(ps, "PCoA", "bray")
+plot_ordination(ps, ps.ord, type="samples", color="Treatment", shape="Location") 
+distance <- phyloseq::distance(ps, method="bray", weighted=F)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+```
+
+### Unifrac not normalised
+
+Here the first 3 adonis tests are for weighted unifrac and the second 3 are for unweighed.
+
+```{R, results='hide', fig.keep='all'}
+ps = physeq
+ps.ord.w <- ordinate(ps, "PCoA", "unifrac", weighted=TRUE)
+w <- plot_ordination(ps, ps.ord.w, type="samples", color="Treatment", shape="Location", title="Weighted Unifrac")
+ps.ord.uw <- ordinate(ps, "PCoA", "unifrac", weighted=FALSE)
+uw <- plot_ordination(ps, ps.ord.uw, type="samples", color="Treatment", shape="Location", title="Unweighted Unifrac") 
+grid.arrange(w, uw, nrow = 1)
+distance <- phyloseq::distance(ps, method="unifrac", weighted=T)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+distance <- phyloseq::distance(ps, method="unifrac", weighted=F)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+```
+
+### Unifrac rarefied
+
+Here the first 3 adonis tests are for weighted unifrac and the second 3 are for unweighed.
+
+```{R, results='hide', fig.keep='all'}
+ps = physeq_rare
+ps.ord.w <- ordinate(ps, "PCoA", "unifrac", weighted=TRUE)
+w <- plot_ordination(ps, ps.ord.w, type="samples", color="Treatment", shape="Location", title="Weighted Unifrac")
+ps.ord.uw <- ordinate(ps, "PCoA", "unifrac", weighted=FALSE)
+uw <- plot_ordination(ps, ps.ord.uw, type="samples", color="Treatment", shape="Location", title="Unweighted Unifrac") 
+grid.arrange(w, uw, nrow = 1)
+distance <- phyloseq::distance(ps, method="unifrac", weighted=T)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+distance <- phyloseq::distance(ps, method="unifrac", weighted=F)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+```
+
+### Unifrac relative abundance
+
+Here the first 3 adonis tests are for weighted unifrac and the second 3 are for unweighed.
+
+```{R, results='hide', fig.keep='all'}
+ps = physeq_relabun
+ps.ord.w <- ordinate(ps, "PCoA", "unifrac", weighted=TRUE)
+w <- plot_ordination(ps, ps.ord.w, type="samples", color="Treatment", shape="Location", title="Weighted Unifrac")
+ps.ord.uw <- ordinate(ps, "PCoA", "unifrac", weighted=FALSE)
+uw <- plot_ordination(ps, ps.ord.uw, type="samples", color="Treatment", shape="Location", title="Unweighted Unifrac") 
+grid.arrange(w, uw, nrow = 1)
+distance <- phyloseq::distance(ps, method="unifrac", weighted=T)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+distance <- phyloseq::distance(ps, method="unifrac", weighted=F)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+```
+
+### Aitchison (Euclidean on CLR)
+
+```{R, results='hide', fig.keep='all'}
+ps = physeq_clr
+ps.ord <- ordinate(ps, "PCoA", "euclidean")
+plot_ordination(ps, ps.ord, type="samples", color="Treatment", shape="Location") 
+distance <- phyloseq::distance(ps, method="euclidean", weighted=F)
+adonis(distance ~ sample_data(ps)$Treatment)
+adonis(distance ~ sample_data(ps)$Location)
+adonis(distance ~ sample_data(ps)$Location2)
+```
+
+### PHILR
+
+```{R, results='hide', fig.keep='all'}
+physeq_philr = physeq
+physeq_philr <- transform_sample_counts(physeq_philr, function(x) x+1)
+phy_tree(physeq_philr) <- makeNodeLabel(phy_tree(physeq_philr), method="number", prefix='n')
+otu.table <- t(otu_table(physeq_philr))
+tree <- phy_tree(physeq_philr)
+metadata <- sample_data(physeq_philr)
+tax <- tax_table(physeq_philr)
+ps = physeq_philr
+
+physeq.philr <- philr(otu.table, tree, part.weights='enorm.x.gm.counts', ilr.weights='blw.sqrt')
+philr.dist <- dist(physeq.philr, method="euclidean")
+ps.ord <- ordinate(physeq, 'PCoA', distance=philr.dist)
+plot_ordination(ps, ps.ord, type="samples", color="Treatment", shape="Location") 
+adonis(philr.dist ~ sample_data(ps)$Treatment)
+adonis(philr.dist ~ sample_data(ps)$Location)
+adonis(philr.dist ~ sample_data(ps)$Location2)
+```
+
+## Taxa barplots {.tabset}
+
+### Relative abundance {.tabset}
+
+#### Phylum
+
+```{R, results='hide', fig.keep='all'}
+palette = distinctColorPalette(30)
+rnk = "ta2"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Class
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta3"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Order
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta4"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Family
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta5"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Genus
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta6"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Species
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta7"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+### Rarefied {.tabset}
+
+#### Phylum
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta2"
+ps.rank = tax_glom(physeq_rare, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+#### Class
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta3"
+ps.rank = tax_glom(physeq_rare, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Order
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta4"
+ps.rank = tax_glom(physeq_rare, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Family
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta5"
+ps.rank = tax_glom(physeq_rare, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Genus
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta6"
+ps.rank = tax_glom(physeq_rare, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Species
+
+```{R, results='hide', fig.keep='all'}
+rnk = "ta7"
+ps.rank = tax_glom(physeq_rare, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Treatment, ~Location), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+## Trees showing abundance of taxa {.tabset}
+
+Here we're plotting phylogenetic trees that show the abundance of the top 50 taxa within different sample types. I'm plotting only relative abundance, just to get an idea of what can be done here.
+
+### Location
+
+```{R, results='hide', fig.keep='all', fig.height=5}
+ps = physeq_relabun
+top50 = names(sort(taxa_sums(ps), TRUE))[1:50]
+ps_trim = prune_taxa(top50, ps)
+
+plot_tree(ps_trim, color="Location", label.tips = "ta5", ladderize="left", size="Abundance")
+```
+
+### Treatment
+
+```{R, results='hide', fig.keep='all', fig.height=5}
+ps = physeq_relabun
+top50 = names(sort(taxa_sums(ps), TRUE))[1:50]
+ps_trim = prune_taxa(top50, ps)
+
+plot_tree(ps_trim, color="Treatment", label.tips = "ta5", ladderize="left", size="Abundance")
+```
+
+## Tree and heatmap {.tabset}
+
+### Treatment and location
+
+Here we're plotting colours based on the CLR abundance. We've just plotted the top 75 most abundant ASVs.
+
+```{R, results='hide', fig.keep='all', fig.height=5}
+library(microbiome)
+library(phyloseq)
+ps = physeq_clr
+top75 = names(sort(taxa_sums(ps), TRUE))[1:75]
+ps = prune_taxa(top75, ps)
+tree = phy_tree(ps)
+asv = otu_table(ps)
+tax = tax_table(ps)
+  
+detach("package:microbiome", unload=TRUE, force=TRUE)
+detach("package:phyloseq", unload=TRUE, force=TRUE)
+library("ggtree")
+
+asv_df = as.data.frame(asv)
+tax_df = as.data.frame(tax, stringsAsFactors=F)
+data_plot = asv_df[,sample_names(ps)]
+
+rns <- rownames(samples)
+locs <- samples[["Location2"]]
+cn <- colnames(data_plot)
+rename = c()
+
+for (a in 1:length(cn)) {
+  for (b in 1:length(rns)) {
+    if (cn[a] == rns[b]) {
+      rename = c(rename, as.character(locs[b]))
+    }
+  }
+}
+colnames(data_plot) = rename
+data_mean <- as.data.frame(sapply(unique(names(data_plot)), function(col) rowMeans(data_plot[names(data_plot) == col])))
+
+asv_tax_full <- merge(asv_df, tax_df, by="row.names")
+asv_tax <- asv_tax_full[,c("Row.names", "ta1", "ta2", "ta3", "ta4", "ta5", "ta6", "ta7")]
+
+levels = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+colnames(asv_tax) <- c("label", levels)
+levels = levels[7:1]
+
+labels = tree$tip.label
+species_name = c()
+for (i in 1:length(labels)) {
+  for (j in 1:length(asv_tax$label)) {
+      if (labels[i] == asv_tax$label[j]) {
+        if (is.na(asv_tax$Species[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Species[j])
+        } else if (is.na(asv_tax$Genus[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Genus[j])
+        } else if (is.na(asv_tax$Family[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Family[j])
+        } else if (is.na(asv_tax$Order[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Order[j])
+        } else if (is.na(asv_tax$Class[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Class[j])
+        } else if (is.na(asv_tax$Phylum[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Phylum[j])
+        } else {
+          species_name <- c(species_name, asv_tax$Domain[j])
+        }
+      }
+  }
+}
+d <- data.frame(label=tree$tip.label, species=species_name)
+  
+p <- ggtree(tree, layout="fan", open.angle=15)
+p <- gheatmap(p, data_mean, colnames_angle=90, font.size=2, hjust=1, color="black", offset=1.3) + scale_fill_viridis_b()
+p <- p %<+% d + geom_tiplab(aes(label=species), parse=F, size=2, align=T, linesize=.12)
+p
+```
+
+### Treatment
+
+Here we're plotting colours based on the CLR abundance and showing the name of the lowest classification available for each ASV. We've just plotted the top 75 most abundant ASVs.
+
+```{R, results='hide', fig.keep='all', fig.height=5}
+library(microbiome)
+library(phyloseq)
+ps = physeq_clr
+top75 = names(sort(taxa_sums(ps), TRUE))[1:75]
+ps = prune_taxa(top75, ps)
+tree = phy_tree(ps)
+asv = otu_table(ps)
+tax = tax_table(ps)
+  
+detach("package:microbiome", unload=TRUE, force=TRUE)
+detach("package:phyloseq", unload=TRUE, force=TRUE)
+library("ggtree")
+
+asv_df = as.data.frame(asv)
+tax_df = as.data.frame(tax, stringsAsFactors=F)
+data_plot = asv_df[,sample_names(ps)]
+
+rns <- rownames(samples)
+locs <- samples[["Treatment"]]
+cn <- colnames(data_plot)
+rename = c()
+
+for (a in 1:length(cn)) {
+  for (b in 1:length(rns)) {
+    if (cn[a] == rns[b]) {
+      rename = c(rename, as.character(locs[b]))
+    }
+  }
+}
+colnames(data_plot) = rename
+data_mean <- as.data.frame(sapply(unique(names(data_plot)), function(col) rowMeans(data_plot[names(data_plot) == col])))
+
+asv_tax_full <- merge(asv_df, tax_df, by="row.names")
+asv_tax <- asv_tax_full[,c("Row.names", "ta1", "ta2", "ta3", "ta4", "ta5", "ta6", "ta7")]
+
+levels = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+colnames(asv_tax) <- c("label", levels)
+levels = levels[7:1]
+
+labels = tree$tip.label
+species_name = c()
+for (i in 1:length(labels)) {
+  for (j in 1:length(asv_tax$label)) {
+      if (labels[i] == asv_tax$label[j]) {
+        if (is.na(asv_tax$Species[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Species[j])
+        } else if (is.na(asv_tax$Genus[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Genus[j])
+        } else if (is.na(asv_tax$Family[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Family[j])
+        } else if (is.na(asv_tax$Order[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Order[j])
+        } else if (is.na(asv_tax$Class[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Class[j])
+        } else if (is.na(asv_tax$Phylum[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Phylum[j])
+        } else {
+          species_name <- c(species_name, asv_tax$Domain[j])
+        }
+      }
+  }
+}
+d <- data.frame(label=tree$tip.label, species=species_name)
+  
+p <- ggtree(tree, layout="fan", open.angle=15)
+p <- gheatmap(p, data_mean, colnames_angle=90, font.size=2, hjust=1, color="black", offset=1.3) + scale_fill_viridis_b()
+p <- p %<+% d + geom_tiplab(aes(label=species), parse=F, size=2, align=T, linesize=.12)
+p
+```
+
+### Location
+
+Here we're plotting colours based on the CLR abundance and showing the name of the lowest classification available for each ASV. We've just plotted the top 75 most abundant ASVs.
+
+```{R, results='hide', fig.keep='all', fig.height=5}
+library(microbiome)
+library(phyloseq)
+ps = physeq_clr
+top75 = names(sort(taxa_sums(ps), TRUE))[1:75]
+ps = prune_taxa(top75, ps)
+tree = phy_tree(ps)
+asv = otu_table(ps)
+tax = tax_table(ps)
+  
+detach("package:microbiome", unload=TRUE, force=TRUE)
+detach("package:phyloseq", unload=TRUE, force=TRUE)
+library("ggtree")
+
+asv_df = as.data.frame(asv)
+tax_df = as.data.frame(tax, stringsAsFactors=F)
+data_plot = asv_df[,sample_names(ps)]
+
+rns <- rownames(samples)
+locs <- samples[["Location"]]
+cn <- colnames(data_plot)
+rename = c()
+
+for (a in 1:length(cn)) {
+  for (b in 1:length(rns)) {
+    if (cn[a] == rns[b]) {
+      rename = c(rename, as.character(locs[b]))
+    }
+  }
+}
+colnames(data_plot) = rename
+data_mean <- as.data.frame(sapply(unique(names(data_plot)), function(col) rowMeans(data_plot[names(data_plot) == col])))
+
+asv_tax_full <- merge(asv_df, tax_df, by="row.names")
+asv_tax <- asv_tax_full[,c("Row.names", "ta1", "ta2", "ta3", "ta4", "ta5", "ta6", "ta7")]
+
+levels = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+colnames(asv_tax) <- c("label", levels)
+levels = levels[7:1]
+
+labels = tree$tip.label
+species_name = c()
+for (i in 1:length(labels)) {
+  for (j in 1:length(asv_tax$label)) {
+      if (labels[i] == asv_tax$label[j]) {
+        if (is.na(asv_tax$Species[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Species[j])
+        } else if (is.na(asv_tax$Genus[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Genus[j])
+        } else if (is.na(asv_tax$Family[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Family[j])
+        } else if (is.na(asv_tax$Order[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Order[j])
+        } else if (is.na(asv_tax$Class[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Class[j])
+        } else if (is.na(asv_tax$Phylum[j]) == FALSE) {
+          species_name <- c(species_name, asv_tax$Phylum[j])
+        } else {
+          species_name <- c(species_name, asv_tax$Domain[j])
+        }
+      }
+  }
+}
+d <- data.frame(label=tree$tip.label, species=species_name)
+  
+p <- ggtree(tree, layout="fan", open.angle=15)
+p <- gheatmap(p, data_mean, colnames_angle=90, font.size=2, hjust=1, color="black", offset=1.3) + scale_fill_viridis_b()
+p <- p %<+% d + geom_tiplab(aes(label=species), parse=F, size=2, align=T, linesize=.12)
+p
+```
+
+## Metacoder {.tabset}
+
+[Metacoder](https://grunwaldlab.github.io/metacoder_documentation/index.html) is an R package that allows you to plot differential abundance between groups across all phylogenetic levels. The plots look kind of like a phylogenetic tree - they are ordered by phylogeny, but the branch legnths aren't related to how each taxon is related to one another. Each node corresponds to a taxonomic level. The larger the node, the larger the number of ASVs within that node. Each edge is coloured by whether there is a *statistically significant* difference in the abundance between the two treatments being compared. Whether a taxon is considered differentially abundant is based on a Wilcoxon rank sum test p<0.05 and the fold change shown is between the two centered log ratios.</br>
+
+Sort the phyloseq objects:
+```{R, results='hide', fig.keep='all'}
+asvs = otu_table(physeq_clr)
+tax = data.frame(tax_table(physeq_clr))
+tax_new = apply(tax, MARGIN=c(1,2), function(x) (strsplit(x, "__")[[1]][2]))
+tax_new_coll = data.frame(tax_new)
+tax_new_coll$lineage = paste(tax_new_coll$ta1, tax_new_coll$ta2, tax_new_coll$ta3, tax_new_coll$ta4, tax_new_coll$ta5, tax_new_coll$ta6, tax_new_coll$ta7, sep=";")
+tax_new_coll = tax_new_coll[c("lineage")]
+asv_tax = merge(asvs, tax_new_coll, by="row.names")
+x <- parse_phyloseq(physeq_clr)
+```
+
+### Abundance {.tabset}
+
+Here, node sizes are based on how many ASVs fall underneath that phylogeny while colors are based on the CLR abundance.
+
+#### Control
+
+```{R, results='hide', fig.keep='all'}
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Treatment[j] == "Control") {
+        keeping = c(keeping, cn[i])
+        group = c(group, "Control")
+      } else {
+        keeping = c(keeping, cn[i])
+        group = c(group, "Treatment")
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) mean(x))
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=value, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Treatment
+
+```{R, results='hide', fig.keep='all'}
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) mean(y))
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=value, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+### Differential abundance {.tabset}
+
+Node sizes are again based on the number of ASVs and colours are based on the fold change between the two values.
+
+#### Control vs Treatment
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Treatment[j] == "Control") {
+        keeping = c(keeping, cn[i])
+        group = c(group, "Control")
+      } else {
+        keeping = c(keeping, cn[i])
+        group = c(group, "Treatment")
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 2 Control vs Treatment
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == "Site2") {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Treatment[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 4 Control vs Treatment
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == "Site4") {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Treatment[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 1 vs Site 2
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site1"
+s2 = "Site2"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 1 vs Site 3
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site1"
+s2 = "Site3"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 1 vs Site 4
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site1"
+s2 = "Site4"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 1 vs Site 5
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site1"
+s2 = "Site5"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 2 vs Site 3
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site2"
+s2 = "Site3"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 2 vs Site 4
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site2"
+s2 = "Site4"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 2 vs Site 5
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site2"
+s2 = "Site5"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 3 vs Site 4
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site3"
+s2 = "Site4"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 3 vs Site 5
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site3"
+s2 = "Site5"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+#### Site 4 vs Site 5
+
+Calculate:
+```{R, results='hide', fig.keep='all'}
+s1 = "Site4"
+s2 = "Site5"
+obj <- parse_tax_data(asv_tax, class_cols = "lineage", class_sep = ";") 
+obj$data$tax_data <- calc_obs_props(obj, "tax_data")
+obj$data$tax_abund <- calc_taxon_abund(obj, "tax_data")
+obj$data$sample_data = x$data$sample_data
+set.seed(1)
+
+cn = colnames(obj$data$tax_data)
+rn = rownames(obj$data$sample_data)
+keeping = c()
+group = c()
+
+for (i in 2:length(cn)) {
+  for (j in 1:length(rn)) {
+    if (obj$data$sample_data$sample_id[j] == cn[i]) {
+      if (obj$data$sample_data$Location[j] == s1) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      } else if (obj$data$sample_data$Location[j] == s2) {
+        keeping = c(keeping, cn[i])
+        group = c(group, obj$data$sample_data$Location[j])
+      }
+    }
+  }
+}
+
+obj$data$diff_table <- compare_groups(obj, dataset = "tax_abund", cols=keeping, groups=group, func=function(x, y) {
+  log_ratio <- median(x) - median(y)
+  if (is.nan(log_ratio)) {
+    log_ratio <- 0
+  }
+  list(log2_median_ratio = log_ratio,
+       median_diff = median(x) - median(y),
+       mean_diff = mean(x) - mean(y),
+       wilcox_p_value = wilcox.test(x, y)$p.value)
+})
+```
+
+Fold change only:
+```{R, results='hide', fig.keep='all', cache=TRUE}
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+With testing for significant differences (now the tree is only coloured if differences are significant):
+```{R, results='hide', fig.keep='all', cache=TRUE}
+obj$data$diff_table$wilcox_p_value <- p.adjust(obj$data$diff_table$wilcox_p_value, method="fdr")
+range(obj$data$diff_table$wilcox_p_value, finite=TRUE)
+obj$data$diff_table$log2_median_ratio[obj$data$diff_table$wilcox_p_value > 0.05] <- 0 
+
+heat_tree(obj, node_label=taxon_names, node_size=n_obs, node_color=log2_median_ratio, layout="davidson-harel", initial_layout="reingold-tilford")
+```
+
+## DeSeq2 {.tabset}
+
+This is another method for testing differential abundance
+
+### Treatment
+
+So the resulting plot shows a point for the ASVs that DeSeq finds to be significantly differentially abundant (adjusted p < 0.05).
+
+```{R, results='hide', fig.keep='all'}
+ps = physeq
+sample_data(ps)$Treatment <- as.factor(sample_data(ps)$Treatment)
+ds = phyloseq_to_deseq2(ps, ~ Treatment)
+ds = DESeq(ds)
+alpha = 0.05
+res = results(ds, contrast=c("Treatment", "Treatment", "Control"), alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_sig = res[(res$padj < alpha), ]
+res_sig = cbind(as(res_sig, "data.frame"), as(tax_table(ps)[rownames(res_sig), ], "matrix"))
+ggplot(res_sig, aes(x=ta4, y=log2FoldChange, color=ta2)) +
+    geom_jitter(size=3, width = 0.2) +
+    theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))
+```
+
+### Site 2 Treatment vs Control
+
+As we're looking at fold change we can only look at two at a time, so I've selected the two sites where we have samples from both the treatment and control groups.
+
+```{R, results='hide', fig.keep='all'}
+samples_keeping = c("Batch2DNA1", "Batch2DNA2","Batch2DNA3","Batch2DNA7","Batch2DNA8","Batch2DNA9")
+ps = prune_samples(samples_keeping, physeq)
+sample_data(ps)$Treatment <- as.factor(sample_data(ps)$Treatment)
+ds = phyloseq_to_deseq2(ps, ~ Treatment)
+ds = DESeq(ds)
+alpha = 0.05
+res = results(ds, contrast=c("Treatment", "Control", "Treatment"), alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_sig = res[(res$padj < alpha), ]
+res_sig = cbind(as(res_sig, "data.frame"), as(tax_table(ps)[rownames(res_sig), ], "matrix"))
+ggplot(res_sig, aes(x=ta4, y=log2FoldChange, color=ta2)) +
+    geom_jitter(size=3, width = 0.2) +
+    theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))
+```
+
+### Site 4 Treatment vs Control
+
+```{R, results='hide', fig.keep='all'}
+samples_keeping = c("DNA10","DNA11","DNA12","DNA13","DNA14","DNA15")
+ps = prune_samples(samples_keeping, physeq)
+sample_data(ps)$Treatment <- as.factor(sample_data(ps)$Treatment)
+ds = phyloseq_to_deseq2(ps, ~ Treatment)
+ds = DESeq(ds)
+alpha = 0.05
+res = results(ds, contrast=c("Treatment", "Control", "Treatment"), alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_sig = res[(res$padj < alpha), ]
+res_sig = cbind(as(res_sig, "data.frame"), as(tax_table(ps)[rownames(res_sig), ], "matrix"))
+ggplot(res_sig, aes(x=ta4, y=log2FoldChange, color=ta2)) +
+    geom_jitter(size=3, width = 0.2) +
+    theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))
+```
+

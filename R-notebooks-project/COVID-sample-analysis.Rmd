@@ -1,0 +1,1707 @@
+---
+title: COVID sample analysis
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+---
+
+# QIIME2 commands run 16S V4V5, V6V8 {.tabset}
+
+## Activate QIIME2
+Initially used some combination of both 2020.2 and 2020.8, so re-doing all with 2020.8 (not reimporting reads, starting by using the existing reads.qza object)
+```{bash, eval=FALSE}
+conda activate qiime2-2020.8
+```
+
+## Initial quality checks
+```{bash, eval=FALSE}
+mkdir fastqc
+#fastqc -t 4 COVID-TNA-16S_Run380/*fastq.gz -o fastqc/
+fastqc -t 4 reads/*fastq.gz -o fastqc/
+multiqc fastqc/
+```
+
+## Import and summarize
+```{bash, eval=FALSE}
+#qiime tools import \
+#  --type SampleData[PairedEndSequencesWithQuality] \
+#  --input-path COVID-TNA-16S_Run380/ \
+#  --output-path reads.qza \
+#  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+
+qiime tools import \
+  --type SampleData[PairedEndSequencesWithQuality] \
+  --input-path reads/ \
+  --output-path reads.qza \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt
+  
+qiime demux summarize \
+  --i-data reads.qza  \
+  --o-visualization summary_reads.qzv
+```
+
+## Cutadapt V4V5
+```{bash, eval=FALSE}
+qiime cutadapt trim-paired \
+  --i-demultiplexed-sequences reads.qza \
+  --p-cores 8 \
+  --p-front-f GTGYCAGCMGCCGCGGTAA \
+  --p-front-r CCGYCAATTYMTTTRAGTTT \
+  --p-discard-untrimmed \
+  --p-no-indels \
+  --o-trimmed-sequences trimmed_reads.qza
+  
+qiime demux summarize \
+  --i-data trimmed_reads.qza  \
+  --o-visualization summary_trimmed_reads.qzv
+```
+
+## Cutadapt V6V8
+```{bash, eval=FALSE}
+qiime cutadapt trim-paired \
+  --i-demultiplexed-sequences reads.qza \
+  --p-cores 12 \
+  --p-front-f ACGCGHNRAACCTTACC \
+  --p-front-r ACGGGCRGTGWGTRCAA \
+  --p-discard-untrimmed \
+  --p-no-indels \
+  --o-trimmed-sequences trimmed_reads.qza
+  
+qiime demux summarize \
+  --i-data trimmed_reads.qza  \
+  --o-visualization summary_trimmed_reads.qzv
+```
+
+## DADA2
+```{bash, eval=FALSE}
+mkdir dada2_out
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs trimmed_reads.qza \
+  --p-trunc-len-f 240 \
+  --p-trunc-len-r 180 \
+  --p-max-ee-f 2 \
+  --p-max-ee-r 2 \
+  --p-n-threads 12 \
+  --o-table dada2_out/table.qza \
+  --o-representative-sequences dada2_out/representative_sequences.qza \
+  --o-denoising-stats dada2_out/stats.qza
+  
+qiime metadata tabulate \
+  --m-input-file dada2_out/stats.qza \
+  --o-visualization stats_dada2_out.qzv
+  
+qiime feature-table summarize \
+  --i-table dada2_out/table.qza  \
+  --o-visualization summary_dada2_out.qzv
+```
+
+## Classify
+```{bash, eval=FALSE}
+#wget https://data.qiime2.org/2020.8/common/silva-138-99-nb-classifier.qza
+qiime feature-classifier classify-sklearn \
+  --i-reads dada2_out/representative_sequences.qza \
+  --i-classifier /home/shared/taxa_classifiers/qiime2-2020.8_classifiers/silva-138-99-nb-classifier.qza \
+  --p-n-jobs 12 \
+  --output-dir taxa
+  
+qiime tools export \
+  --input-path taxa/classification.qza \
+  --output-path taxa
+```
+
+## Filter features
+```{bash, eval=FALSE}
+qiime feature-table filter-features \
+  --i-table dada2_out/table.qza \
+  --p-min-frequency 5 \
+  --p-min-samples 1 \
+  --o-filtered-table table_filtered.qza
+  
+qiime feature-table summarize \
+  --i-table table_filtered.qza \
+  --o-visualization summary_table_filtered.qzv
+```
+
+### Skip ahead from this part
+```{bash, eval=FALSE}
+qiime taxa filter-table \
+  --i-table table_filtered.qza \
+  --i-taxonomy taxa/classification.qza \
+  --p-include D_1__ \
+  --p-exclude mitochondria,chloroplast \
+  --o-filtered-table table_filtered_contamination.qza
+  
+qiime feature-table summarize \
+  --i-table table_filtered_contamination.qza \
+  --o-visualization summary_table_filtered_contamination.qzv
+```
+
+Output from this
+```{bash, eval=FALSE}
+Plugin error from taxa:
+
+  All features were filtered, resulting in an empty table.
+
+Debug info has been saved to /tmp/qiime2-q2cli-err-6uwqz2q8.log
+```
+
+Working out what went wrong
+```{bash, eval=FALSE}
+qiime feature-table filter-seqs \
+  --i-data dada2_out/representative_sequences.qza \
+  --i-table table_filtered.qza \
+  --o-filtered-data  representative_sequences_after_filtering.qza
+  
+qiime tools export \
+  --input-path representative_sequences_after_filtering.qza \
+  --output-path exports_filtering
+
+sed -i -e '1 s/Feature/#Feature/' -e '1 s/Taxon/taxonomy/' taxa/taxonomy.tsv
+
+qiime tools export \
+  --input-path table_filtered.qza \
+  --output-path exports_filtering
+  
+biom add-metadata \
+  -i exports_filtering/feature-table.biom \
+  -o exports_filtering/feature-table_w_tax.biom \
+  --observation-metadata-fp taxa/taxonomy.tsv \
+  --sc-separated taxonomy
+  
+biom convert \
+  -i exports_filtering/feature-table_w_tax.biom \
+  -o exports_filtering/feature-table_w_tax.txt \
+  --to-tsv \
+  --header-key taxonomy
+```
+
+### Do this instead
+This all seems to look fine - with all bacteria and no mitochondria/chloroplasts, so I'm not really sure what the problem is? Trying again with a previous version of QIIME2:
+```{bash, eval=FALSE}
+qiime taxa filter-table \
+  --i-table table_filtered.qza \
+  --i-taxonomy taxa/classification.qza \
+  --p-include d__ \
+  --p-exclude mitochondria,chloroplast \
+  --o-filtered-table table_filtered_contamination.qza
+  
+qiime feature-table summarize \
+  --i-table table_filtered_contamination.qza \
+  --o-visualization summary_table_filtered_contamination.qzv
+```
+
+So it seems like the issue is the D_1__ - this must have been changed in the newer versions of QIIME2 to have just d__ etc.
+
+## Get rarefaction curves
+V4V5
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+  --i-table table_filtered_contamination.qza \
+  --p-max-depth 22840 \
+  --p-steps 20 \
+  --p-metrics 'observed_features' \
+  --o-visualization rarefaction_curves.qzv
+```
+This is just a screenshot from the QIIME2 view website:
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/QIIME2_rarefaction_curves.png)
+
+cDNA V6V8
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+  --i-table table_filtered_contamination.qza \
+  --p-max-depth 160269 \
+  --p-steps 20 \
+  --p-metrics 'observed_features' \
+  --o-visualization rarefaction_curves.qzv
+```
+This is just a screenshot from the QIIME2 view website:
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_cDNA_V6V8/QIIME2_rarefaction_curves.png)
+
+TNA V6V8
+```{bash, eval=FALSE}
+qiime diversity alpha-rarefaction \
+  --i-table table_filtered_contamination.qza \
+  --p-max-depth 464496 \
+  --p-steps 20 \
+  --p-metrics 'observed_features' \
+  --o-visualization rarefaction_curves.qzv
+```
+This is just a screenshot from the QIIME2 view website:
+![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_TNA_V6V8/QIIME2_rarefaction_curves.png)
+
+## Filter
+*Not rarefying or removing samples with low numbers of reads*
+```{bash, eval=FALSE}
+"""
+qiime feature-table filter-samples \
+  --i-table table_filtered_contamination.qza \
+  --p-min-frequency 5000 \
+  --o-filtered-table table_final.qza
+
+qiime feature-table rarefy \
+  --i-table merged_table_final.qza \
+  --p-sampling-depth 5000 \
+  --o-rarefied-table merged_table_final_rarefied.qza
+"""
+  
+qiime feature-table filter-seqs \
+  --i-data dada2_out/representative_sequences.qza \
+  --i-table table_filtered_contamination.qza \
+  --o-filtered-data  representative_sequences_filtered_contamination.qza
+```
+
+## Insert sequences into tree
+```{bash, eval=FALSE}
+qiime fragment-insertion sepp \
+  --i-representative-sequences representative_sequences_filtered_contamination.qza \
+  --i-reference-database /home/robyn/tools/sepp/sepp-refs-silva-128.qza \
+  --o-tree insertion_tree.qza \
+  --o-placements insertion_placements.qza \
+  --p-threads 12
+```
+
+## Export all files
+```{bash, eval=FALSE}
+qiime tools export \
+  --input-path representative_sequences_filtered_contamination.qza \
+  --output-path exports
+  
+sed -i -e '1 s/Feature/#Feature/' -e '1 s/Taxon/taxonomy/' taxa/taxonomy.tsv
+
+qiime tools export \
+  --input-path table_filtered_contamination.qza \
+  --output-path exports
+  
+biom add-metadata \
+  -i exports/feature-table.biom \
+  -o exports/feature-table_w_tax.biom \
+  --observation-metadata-fp taxa/taxonomy.tsv \
+  --sc-separated taxonomy
+  
+biom convert \
+  -i exports/feature-table_w_tax.biom \
+  -o exports/feature-table_w_tax.txt \
+  --to-tsv \
+  --header-key taxonomy
+  
+qiime tools export \
+  --input-path insertion_tree.qza \
+  --output-path exports
+```
+
+```{bash, eval=FALSE}
+qiime taxa barplot \
+  --i-table table_filtered_contamination.qza \
+  --i-taxonomy taxa/classification.qza \
+  --m-metadata-file metadata.txt \
+  --o-visualization barplot.qzv
+```
+
+# Basic analysis (16S V4V5) {.tabset}
+```{R, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+library(reticulate)
+library(kableExtra)
+library(knitr)
+```
+
+```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+import numpy as np
+import os
+import pandas as pd
+import math
+import matplotlib.pyplot as plt
+from scipy.cluster import hierarchy
+import matplotlib as mpl
+from matplotlib_venn import venn2
+import csv
+from matplotlib.patches import Patch
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+from matplotlib.pyplot import line2D
+```
+
+## Full data {.tabset}
+
+### Import data
+*Convert to relative abundance*</br>
+There are 176 species in the table (503 ASVs)</br>
+Filtering to 0.1% reduces to this to 161, filtering to 0.5% reduces this to 121 and filtering to 1% reduces it to 108 (I've gone with 1% for now)
+```{python, get_data, results='hide', fig.keep='all', message=FALSE}
+table = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/exports/feature-table_w_tax.txt', sep='\t', header=0, index_col=0)
+taxonomy = list(table.loc[:, 'taxonomy'])
+ASV = list(table.index.values)
+table = table.drop(['taxonomy'], axis=1)
+reads = pd.DataFrame(table)
+table = table.divide(table.sum(axis=0))*100
+tax_dict_sp, tax_dict_full = {}, {}
+
+for a in range(len(taxonomy)):
+  taxonomy[a] = taxonomy[a].split(';')
+  if 's__' in taxonomy[a][-1]:
+    this_tax = taxonomy[a][-1].split('__')[1].replace('_', ' ')
+    if 'uncultured' in this_tax:
+      highest = 0
+      for b in range(len(taxonomy[a])):
+        if 'uncultured' not in taxonomy[a][b]:
+          highest = b
+      this_tax = 'uncultured '+taxonomy[a][highest].split('__')[1]
+      if taxonomy[a][highest] == taxonomy[a][-2]:
+        this_tax += ' sp.'
+  elif 'g__' in taxonomy[a][-1]:
+    this_tax = taxonomy[a][-1].split('__')[1]+' sp.'
+    if 'uncultured' in this_tax:
+      highest = 0
+      for b in range(len(taxonomy[a])):
+        if 'uncultured' not in taxonomy[a][b]:
+          highest = b
+      this_tax = 'uncultured '+taxonomy[a][highest].split('__')[1]
+  while len(taxonomy[a]) < 7:
+    taxonomy[a].append(taxonomy[a][-1])
+  if 'Allorhizobium' in this_tax:
+    this_tax = 'Rhizobium sp.'
+  tax_dict_sp[ASV[a]] = this_tax
+  tax_dict_full[ASV[a]] = taxonomy[a]
+
+table_full = pd.DataFrame(table)
+table = table.rename(index=tax_dict_sp)
+table = table.groupby(by=table.index, axis=0).sum()
+table_all = pd.DataFrame(table)
+table = table.loc[table.max(axis=1) > 1, :]
+```
+
+### Reads per sample
+```{python, reads_sample, results='hide', fig.keep='all', message=FALSE}
+reads_sum = pd.DataFrame(reads.sum(axis=0)).transpose()
+samples = reads_sum.columns
+sample_dict = {}
+for sample in samples:
+  sample_dict[sample] = sample.split('-')[1]
+sample_reads = reads_sum.rename(columns=sample_dict)
+
+plt.boxplot(sample_reads.loc[:, 'neg'], positions=[1])
+plt.boxplot(sample_reads.loc[:, 'pos'], positions=[2])
+plt.xticks([1,2], ['Negative', 'Positive'])
+plt.ylabel('Number of reads')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Stacked barplots {.tabset}
+Here each phylogenetic level is shown, with each one being only the groups that are above 1% abundance.
+```{python, stacked_bars_16S_full, results='hide', fig.keep='all'}
+def rename_at_level(table, td, level):
+  taxa = list(table.index.values)
+  rename_dict = {}
+  for a in range(len(taxa)):
+    rename_dict[taxa[a]] = td[taxa[a]][level].split('__')[1]
+    if 'Allorhizobium' in td[taxa[a]][level].split('__')[1]:
+      rename_dict[taxa[a]] = 'Allorhizobium'
+    elif 'Burkholderia' in td[taxa[a]][level].split('__')[1]:
+      rename_dict[taxa[a]] = 'Burkholderia'
+  return table.rename(index=rename_dict)
+  
+def get_colors(num):
+    colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+    norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+    m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+    colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+    return colors_40+colors_40+colors_40+colors_40
+
+def get_barplot(table, tdict, level, ax=None):
+  new_table = rename_at_level(table_full, tdict, level)
+  new_table = new_table.groupby(by=new_table.index, axis=0).sum()
+  new_table = new_table.loc[new_table.max(axis=1) > 1, :]
+  new_table = new_table.transpose()
+  cols  = math.ceil(new_table.shape[1]/27)
+  nc = 1
+  size = 14
+  while nc < cols:
+    size += 3
+    nc += 1
+  if not ax == None:
+    axes = new_table.plot.bar(stacked=True, color=get_colors(new_table.shape[1]), ax=ax, width=1, edgecolor='k')
+  else:
+    axes = new_table.plot.bar(stacked=True, color=get_colors(new_table.shape[1]), figsize=(size,7), width=1, edgecolor='k')
+  plt.ylim([0, 100]), plt.ylabel('Relative abundance (%)')
+  axes.legend(loc='upper left', bbox_to_anchor=(1, 1.02), ncol=cols)
+  return
+
+sample_order = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N6-neg', 'N7-neg', 'N8-neg', 'N9-neg', 'N10-neg', 'N11-neg', 'N12-neg', 'N13-neg', 'N14-neg', 'N15-neg', 'N16-neg', 'N17-neg', 'N18-neg', 'N19-neg', 'N20-neg', 'N1-pos', 'N6-pos', 'N9-pos', 'N12-pos', 'N14-pos', 'N15-pos', 'N17-pos', 'N20-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O6-neg', 'O7-neg', 'O8-neg', 'O9-neg', 'O10-neg', 'O11-neg', 'O12-neg', 'O13-neg', 'O14-neg', 'O15-neg', 'O16-neg', 'O17-neg', 'O18-neg', 'O19-neg', 'O20-neg', 'O1-pos', 'O2-pos', 'O3-pos', 'O4-pos', 'O5-pos', 'O6-pos', 'O7-pos', 'O8-pos', 'O9-pos', 'O10-pos', 'O11-pos', 'O12-pos', 'O13-pos', 'O14-pos', 'O16-pos', 'O17-pos', 'O18-pos', 'O19-pos', 'O20-pos']
+table_full = table_full.loc[:, sample_order]
+```
+
+#### Phylum
+```{python, phyla_stacked, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 1)
+plt.tight_layout()
+plt.show()
+```
+
+#### Class
+```{python, class_stacked, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 2)
+plt.tight_layout()
+plt.show()
+```
+
+#### Order
+```{python, order_stacked, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 3)
+plt.tight_layout()
+plt.show()
+```
+
+#### Family
+```{python, family_stacked, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 4)
+plt.tight_layout()
+plt.show()
+```
+
+#### Genus
+```{python, genus_stacked, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 5)
+plt.tight_layout()
+plt.show()
+```
+
+#### Species
+```{python, species_stacked, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 6)
+plt.tight_layout()
+plt.show()
+```
+
+### Heatmap
+```{python, heatmap_dendro, results='hide', fig.keep='all', message=FALSE}
+plt.figure(figsize=(10,18))
+dendro = plt.subplot2grid((12,1), (0,0), frameon=False)
+heatmap = plt.subplot2grid((12,1), (1,0), rowspan=11)
+
+plt.sca(dendro)
+Z = hierarchy.linkage(table.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(dendro.get_xticklabels()), list(dendro.get_xticks()), list(dendro.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(table.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+new_table = table[plot_labels]
+plt.xticks([]), plt.yticks([])
+
+plt.sca(heatmap)
+new_table = new_table.divide(new_table.max(axis=1), axis=0)
+new_table = new_table.iloc[::-1]
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=1)
+plt.pcolor(new_table, edgecolor='k', cmap=colormap, norm=norm)
+x = [a+0.5 for a in range(len(new_table.columns))]
+y = [a+0.5 for a in range(len(new_table.index.values))]
+plt.xticks(x, new_table.columns, rotation=90, fontsize=6)
+plt.yticks(y, new_table.index.values, fontsize=6)
+heatmap.xaxis.tick_top()
+
+plt.tight_layout()
+plt.show()
+```
+
+### For fellowship application
+```{python, fellowship_app_funcs, results='hide', fig.keep='all'}
+def get_barplot(table, tdict, level, ax=None):
+  new_table = rename_at_level(table_full, tdict, level)
+  new_table.rename(index={'[Eubacterium]_brachy_group':'Eubacterium'}, inplace=True)
+  new_table = new_table.groupby(by=new_table.index, axis=0).sum()
+  new_table = new_table.loc[new_table.max(axis=1) > 2.5, :]
+  new_table = new_table.transpose()
+  cols  = math.ceil(new_table.shape[1]/27)
+  nc = 1
+  size = 14
+  while nc < cols:
+    size += 3
+    nc += 1
+  if not ax == None:
+    #x = [i for i in range(new_table.shape[0])]
+    #y = [100 for i in range(new_table.shape[0])]
+    #ax.bar(x, y, width=1, color='gray', edgecolor='k')
+    axes = new_table.plot.bar(stacked=True, color=get_colors(new_table.shape[1]), ax=ax, width=1, edgecolor='k')
+  else:
+    axes = new_table.plot.bar(stacked=True, color=get_colors(new_table.shape[1]), figsize=(size,7), width=1, edgecolor='k')
+    axes.legend(loc='upper left', bbox_to_anchor=(1, 1.02), ncol=cols)
+  plt.ylim([0, 100]), plt.ylabel('Relative abundance (%)')
+  return new_table
+  
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+```
+
+```{python, fellowship_app_fig, results='hide', fig.keep='all'}
+plt.figure(figsize=(14,14))
+
+ax_pca = plt.subplot2grid((2,3), (0,0))
+ax_bar = plt.subplot2grid((2,3), (0,1), colspan=2)
+ax_sample = plt.subplot2grid((30,3), (15, 1), rowspan=1, colspan=2, frameon=False)
+plt.sca(ax_bar)
+new_table = get_barplot(table_full, tax_dict_full, 5, ax=ax_bar)
+plt.legend(loc='upper left', bbox_to_anchor=(-0.01,-0.1), ncol=4, fontsize=9)
+names = list(table_full.columns)
+ax_pca.set_title('A', loc='left', fontweight='bold')
+ax_bar.set_title('B', loc='left', fontweight='bold')
+
+plt.sca(ax_bar)
+plt.xticks([])
+for a in range(len(names)):
+  if 'pos' in names[a]: color = '#B20154'
+  else: color = '#0154B2'
+  if names[a][0] == 'N': fill=color
+  else: fill='w'
+  ax_sample.scatter(a, 0, marker='o', edgecolors=color, color=fill)
+ax_sample.set_xlim(-0.5, a+0.5), ax_sample.set_ylim([-0.01, 0.01])
+plt.sca(ax_sample)
+ax_sample.yaxis.tick_right()
+plt.xticks([]), plt.yticks([])#plt.yticks([0], ['Sample type'])
+
+pos, npos, stress = transform_for_NMDS(table_full.transpose())
+for a in range(len(npos)):
+  if 'pos' in names[a]:
+    color = '#B20154'
+  else:
+    color = '#0154B2'
+  if names[a][0] == 'N':
+    ax_pca.scatter(npos[a,0], npos[a,1], marker='o', edgecolors=color, color=color)
+  else:
+    ax_pca.scatter(npos[a,0], npos[a,1], marker='o', edgecolors=color, color='w')
+ax_pca.set_xlabel('nMDS1'), ax_pca.set_ylabel('nMDS2')
+handles = [Line2D([0], [0], marker='o', color='w', label='Positive\nnasopharyngeal', markerfacecolor='#B20154', markeredgecolor='#B20154', markersize=10), Line2D([0], [0], marker='o', color='w', label='Positive\noropharyngeal', markerfacecolor='w', markeredgecolor='#B20154', markersize=10), Line2D([0], [0], marker='o', color='w', label='Negative\nnasopharyngeal', markerfacecolor='#0154B2', markeredgecolor='#0154B2', markersize=10), Line2D([0], [0], marker='o', color='w', label='Negative\noropharyngeal', markerfacecolor='w', markeredgecolor='#0154B2', markersize=10)]
+ax_pca.legend(handles=handles, loc='upper left', bbox_to_anchor=(-0.03,-0.1), ncol=2)
+
+plt.subplots_adjust(hspace=0.01)
+plt.tight_layout()
+plt.show()
+```
+
+### Overlapping taxa
+Now I'm looking at the taxa (species level) that overlap between the positive and negative samples.
+```{python, overlap, results='hide', fig.keep='all', message=FALSE}
+samples = table_all.columns
+sample_dict = {}
+for sample in samples:
+  sample_dict[sample] = sample.split('-')[1]
+sample_table = table_all.rename(columns=sample_dict)
+positive = sample_table.loc[:, 'pos']
+negative = sample_table.loc[:, 'neg']
+positive = positive.loc[positive.max(axis=1) > 0, :]
+negative = negative.loc[negative.max(axis=1) > 0, :]
+
+positive = list(set(positive.index.values))
+negative = list(set(negative.index.values))
+
+venn2([set(positive), set(negative)], set_labels = ('Positive', 'Negative'))
+plt.show()
+```
+
+## Remove samples with few reads {.tabset}
+Now I am removing the samples with fewer than 2000 reads (seems reasonable based on the rarefaction curves above).
+
+### Import data
+*Convert to relative abundance*</br>
+There are 157 species in the table (440 ASVs)</br>
+Filtering to 0.1% reduces to this to 137, filtering to 0.5% reduces this to 85 and filtering to 1% reduces it to 64 (I've gone with 1% for now)
+```{python, get_data_2, results='hide', fig.keep='all', message=FALSE}
+table_2 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/exports/feature-table_w_tax.txt', sep='\t', header=0, index_col=0)
+table_2 = table_2.drop(['taxonomy'], axis=1)
+table_2 = table_2.loc[:, table_2.sum(axis=0) > 2000]
+table_2 = table_2.loc[table_2.max(axis=1) > 0, :]
+table_2 = table_2.divide(table_2.sum(axis=0))*100
+
+table_2 = table_2.rename(index=tax_dict_sp)
+table_2 = table_2.groupby(by=table_2.index, axis=0).sum()
+table_2 = table_2.loc[table_2.max(axis=1) > 1, :]
+```
+
+### Heatmap
+```{python, heatmap_dendro_2, results='hide', fig.keep='all', message=FALSE}
+plt.figure(figsize=(10,18))
+dendro = plt.subplot2grid((12,1), (0,0), frameon=False)
+heatmap = plt.subplot2grid((12,1), (1,0), rowspan=11)
+
+plt.sca(dendro)
+Z = hierarchy.linkage(table_2.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(dendro.get_xticklabels()), list(dendro.get_xticks()), list(dendro.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(table_2.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+new_table_2 = table_2[plot_labels]
+plt.xticks([]), plt.yticks([])
+
+plt.sca(heatmap)
+new_table_2 = new_table_2.divide(new_table_2.max(axis=1), axis=0)
+new_table_2 = new_table_2.iloc[::-1]
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=1)
+plt.pcolor(new_table_2, edgecolor='k', cmap=colormap, norm=norm)
+x = [a+0.5 for a in range(len(new_table_2.columns))]
+y = [a+0.5 for a in range(len(new_table_2.index.values))]
+plt.xticks(x, new_table_2.columns, rotation=90, fontsize=8)
+plt.yticks(y, new_table_2.index.values, fontsize=8)
+heatmap.xaxis.tick_top()
+
+plt.tight_layout()
+plt.show()
+```
+
+## Only samples with few reads {.tabset}
+Now I am only keeping the samples with fewer than 2000 reads.
+
+### Import data
+*Convert to relative abundance*</br>
+There are 110 species in the table (209 ASVs)</br>
+Filtering to 0.1% reduces to this to 110, filtering to 0.5% reduces this to 102 and filtering to 1% reduces it to 92 (I've gone with 1% for now)
+```{python, get_data_3, results='hide', fig.keep='all', message=FALSE}
+table_3 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/exports/feature-table_w_tax.txt', sep='\t', header=0, index_col=0)
+table_3 = table_3.drop(['taxonomy'], axis=1)
+table_3 = table_3.loc[:, table_3.sum(axis=0) < 2000]
+table_3 = table_3.loc[table_3.max(axis=1) > 0, :]
+table_3 = table_3.divide(table_3.sum(axis=0))*100
+
+table_3 = table_3.rename(index=tax_dict_sp)
+table_3 = table_3.groupby(by=table_3.index, axis=0).sum()
+table_3 = table_3.loc[table_3.max(axis=1) > 1, :]
+```
+
+### Heatmap
+```{python, heatmap_dendro_3, results='hide', fig.keep='all', message=FALSE}
+plt.figure(figsize=(10,18))
+dendro = plt.subplot2grid((12,1), (0,0), frameon=False)
+heatmap = plt.subplot2grid((12,1), (1,0), rowspan=11)
+
+plt.sca(dendro)
+Z = hierarchy.linkage(table_3.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(dendro.get_xticklabels()), list(dendro.get_xticks()), list(dendro.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(table_3.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+new_table_3 = table_3[plot_labels]
+plt.xticks([]), plt.yticks([])
+
+plt.sca(heatmap)
+new_table_3 = new_table_3.divide(new_table_3.max(axis=1), axis=0)
+new_table_3 = new_table_3.iloc[::-1]
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=1)
+plt.pcolor(new_table_3, edgecolor='k', cmap=colormap, norm=norm)
+x = [a+0.5 for a in range(len(new_table_3.columns))]
+y = [a+0.5 for a in range(len(new_table_3.index.values))]
+plt.xticks(x, new_table_3.columns, rotation=90, fontsize=8)
+plt.yticks(y, new_table_3.index.values, fontsize=8)
+heatmap.xaxis.tick_top()
+
+plt.tight_layout()
+plt.show()
+```
+
+# Basic analysis (16S TNA V6V8) {.tabset}
+
+## Full data {.tabset}
+
+### Import data
+*Convert to relative abundance*</br>
+There are 239 species in the table (1974 ASVs)</br>
+Filtering to 0.1% reduces to this to 210, filtering to 0.5% reduces this to 169 and filtering to 1% reduces it to 148 (I've gone with 1% for now)
+```{python, get_data_TNAV6V8, results='hide', fig.keep='all', message=FALSE}
+table = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_TNA_V6V8/exports/feature-table_w_tax.txt', sep='\t', header=0, index_col=0)
+taxonomy = list(table.loc[:, 'taxonomy'])
+ASV = list(table.index.values)
+table = table.drop(['taxonomy'], axis=1)
+reads = pd.DataFrame(table)
+table = table.divide(table.sum(axis=0))*100
+tax_dict_sp, tax_dict_full = {}, {}
+
+for a in range(len(taxonomy)):
+  taxonomy[a] = taxonomy[a].split(';')
+  if 'D_6' in taxonomy[a][-1]:
+    this_tax = taxonomy[a][-1].split('__')[1].replace('_', ' ')
+    if 'uncultured' in this_tax:
+      highest = 0
+      for b in range(len(taxonomy[a])):
+        if 'uncultured' not in taxonomy[a][b]:
+          highest = b
+      this_tax = 'uncultured '+taxonomy[a][highest].split('__')[1]
+      if taxonomy[a][highest] == taxonomy[a][-2]:
+        this_tax += ' sp.'
+  elif 'D_5' in taxonomy[a][-1]:
+    this_tax = taxonomy[a][-1].split('__')[1]+' sp.'
+    if 'uncultured' in this_tax:
+      highest = 0
+      for b in range(len(taxonomy[a])):
+        if 'uncultured' not in taxonomy[a][b]:
+          highest = b
+      this_tax = 'uncultured '+taxonomy[a][highest].split('__')[1]
+  while len(taxonomy[a]) < 7:
+    taxonomy[a].append(taxonomy[a][-1])
+  if 'Allorhizobium' in this_tax:
+    this_tax = 'Rhizobium sp.'
+  tax_dict_sp[ASV[a]] = this_tax
+  tax_dict_full[ASV[a]] = taxonomy[a]
+
+
+table_full = pd.DataFrame(table)
+table = table.rename(index=tax_dict_sp)
+table = table.groupby(by=table.index, axis=0).sum()
+table_all = pd.DataFrame(table)
+print(table)
+table = table.loc[table.max(axis=1) > 0.1, :]
+print(table)
+table = table.loc[table.max(axis=1) > 0.5, :]
+print(table)
+table = table.loc[table.max(axis=1) > 1, :]
+print(table)
+```
+
+### Reads per sample
+```{python, reads_sample_TNAV6V8, results='hide', fig.keep='all', message=FALSE}
+reads_sum = pd.DataFrame(reads.sum(axis=0)).transpose()
+samples = reads_sum.columns
+sample_dict = {}
+for sample in samples:
+  sample_dict[sample] = sample.split('-')[1]
+sample_reads = reads_sum.rename(columns=sample_dict)
+
+plt.boxplot(sample_reads.loc[:, 'neg'], positions=[1])
+plt.boxplot(sample_reads.loc[:, 'pos'], positions=[2])
+plt.xticks([1,2], ['Negative', 'Positive'])
+plt.ylabel('Number of reads')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Stacked barplots {.tabset}
+Here each phylogenetic level is shown, with each one being only the groups that are above 1% abundance.
+```{python, stacked_bars_16S_full_TNAV6V8, results='hide', fig.keep='all'}
+def rename_at_level(table, td, level):
+  taxa = list(table.index.values)
+  rename_dict = {}
+  for a in range(len(taxa)):
+    if 'Ambiguous_taxa' in td[taxa[a]][level]:
+      rename_dict[taxa[a]] = 'Ambiguous taxa'
+    else:
+      rename_dict[taxa[a]] = td[taxa[a]][level].split('__')[1]
+  return table.rename(index=rename_dict)
+  
+def get_colors(num):
+    colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+    norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+    m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+    colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+    return colors_40+colors_40+colors_40+colors_40
+
+def get_barplot(table, tdict, level, ax=None):
+  new_table = rename_at_level(table_full, tdict, level)
+  try:
+    new_table = new_table.rename(index={'Allorhizobium-Neorhizobium-Pararhizobium-Rhizobium':'Rhizobium', 'Burkholderia-Caballeronia-Paraburkholderia':'Burkholderia'})
+  except:
+    do_nothing=True
+  new_table = new_table.groupby(by=new_table.index, axis=0).sum()
+  new_table = new_table.loc[new_table.max(axis=1) > 1, :]
+  new_table = new_table.transpose()
+  cols  = math.ceil(new_table.shape[1]/27)
+  nc = 1
+  size = 14
+  while nc < cols:
+    size += 3
+    nc += 1
+  if not ax == None:
+    axes = new_table.plot.bar(stacked=True, color=get_colors(new_table.shape[1]), ax=ax, width=1, edgecolor='k')
+  else:
+    axes = new_table.plot.bar(stacked=True, color=get_colors(new_table.shape[1]), figsize=(size,7), width=1, edgecolor='k')
+  plt.ylim([0, 100]), plt.ylabel('Relative abundance (%)')
+  axes.legend(loc='upper left', bbox_to_anchor=(1, 1.02), ncol=cols)
+  return
+
+sample_order = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N6-neg', 'N7-neg', 'N8-neg', 'N9-neg', 'N10-neg', 'N11-neg', 'N12-neg', 'N13-neg', 'N14-neg', 'N15-neg', 'N16-neg', 'N17-neg', 'N18-neg', 'N19-neg', 'N20-neg', 'N1-pos', 'N2-pos', 'N3-pos', 'N4-pos', 'N5-pos', 'N6-pos', 'N7-pos', 'N8-pos', 'N9-pos', 'N10-pos', 'N11-pos', 'N12-pos', 'N13-pos', 'N14-pos', 'N15-pos', 'N16-pos', 'N17-pos', 'N18-pos', 'N19-pos', 'N20-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O6-neg', 'O7-neg', 'O8-neg', 'O9-neg', 'O10-neg', 'O11-neg', 'O12-neg', 'O13-neg', 'O14-neg', 'O15-neg', 'O16-neg', 'O17-neg', 'O18-neg', 'O19-neg', 'O20-neg', 'O1-pos', 'O2-pos', 'O3-pos', 'O4-pos', 'O5-pos', 'O6-pos', 'O7-pos', 'O8-pos', 'O9-pos', 'O10-pos', 'O11-pos', 'O12-pos', 'O13-pos', 'O14-pos', 'O15-pos', 'O16-pos', 'O17-pos', 'O18-pos', 'O19-pos', 'O20-pos']
+table_full = table_full.loc[:, sample_order]
+```
+
+#### Phylum
+```{python, phyla_stacked_TNAV6V8, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 1)
+plt.tight_layout()
+plt.show()
+```
+
+#### Class
+```{python, class_stacked_TNAV6V8, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 2)
+plt.tight_layout()
+plt.show()
+```
+
+#### Order
+```{python, order_stacked_TNAV6V8, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 3)
+plt.tight_layout()
+plt.show()
+```
+
+#### Family
+```{python, family_stacked_TNAV6V8, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 4)
+plt.tight_layout()
+plt.show()
+```
+
+#### Genus
+```{python, genus_stacked_TNAV6V8, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 5)
+plt.tight_layout()
+plt.show()
+```
+
+#### Species
+```{python, species_stacked_TNAV6V8, results='hide', fig.keep='all'}
+get_barplot(table_full, tax_dict_full, 6)
+plt.tight_layout()
+plt.show()
+```
+
+### Heatmap
+```{python, heatmap_dendro_TNAV6V8, results='hide', fig.keep='all', message=FALSE}
+plt.figure(figsize=(10,18))
+dendro = plt.subplot2grid((12,1), (0,0), frameon=False)
+heatmap = plt.subplot2grid((12,1), (1,0), rowspan=11)
+
+plt.sca(dendro)
+Z = hierarchy.linkage(table.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(dendro.get_xticklabels()), list(dendro.get_xticks()), list(dendro.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(table.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+new_table = table[plot_labels]
+plt.xticks([]), plt.yticks([])
+
+plt.sca(heatmap)
+new_table = new_table.divide(new_table.max(axis=1), axis=0)
+new_table = new_table.iloc[::-1]
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=1)
+plt.pcolor(new_table, edgecolor='k', cmap=colormap, norm=norm)
+x = [a+0.5 for a in range(len(new_table.columns))]
+y = [a+0.5 for a in range(len(new_table.index.values))]
+plt.xticks(x, new_table.columns, rotation=90, fontsize=6)
+plt.yticks(y, new_table.index.values, fontsize=6)
+heatmap.xaxis.tick_top()
+
+plt.tight_layout()
+plt.show()
+```
+
+### For fellowship application
+```{python, fellowship_app_funcs_TNAV6V8, results='hide', fig.keep='all'}
+def get_barplot(table, tdict, level, ax=None):
+  new_table = rename_at_level(table_full, tdict, level)
+  new_table.rename(index={'[Eubacterium]_brachy_group':'Eubacterium'}, inplace=True)
+  new_table = new_table.groupby(by=new_table.index, axis=0).sum()
+  new_table = new_table.loc[new_table.max(axis=1) > 2.5, :]
+  new_table = new_table.transpose()
+  cols  = math.ceil(new_table.shape[1]/27)
+  nc = 1
+  size = 14
+  while nc < cols:
+    size += 3
+    nc += 1
+  if not ax == None:
+    #x = [i for i in range(new_table.shape[0])]
+    #y = [100 for i in range(new_table.shape[0])]
+    #ax.bar(x, y, width=1, color='gray', edgecolor='k')
+    axes = new_table.plot.bar(stacked=True, color=get_colors(new_table.shape[1]), ax=ax, width=1, edgecolor='k')
+  else:
+    axes = new_table.plot.bar(stacked=True, color=get_colors(new_table.shape[1]), figsize=(size,7), width=1, edgecolor='k')
+    axes.legend(loc='upper left', bbox_to_anchor=(1, 1.02), ncol=cols)
+  plt.ylim([0, 100]), plt.ylabel('Relative abundance (%)')
+  return new_table
+  
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+```
+
+```{python, fellowship_app_fig_TNAV6V8, results='hide', fig.keep='all'}
+plt.figure(figsize=(14,14))
+
+ax_pca = plt.subplot2grid((2,3), (0,0))
+ax_bar = plt.subplot2grid((2,3), (0,1), colspan=2)
+ax_sample = plt.subplot2grid((30,3), (15, 1), rowspan=1, colspan=2, frameon=False)
+plt.sca(ax_bar)
+new_table = get_barplot(table_full, tax_dict_full, 5, ax=ax_bar)
+plt.legend(loc='upper left', bbox_to_anchor=(-0.01,-0.1), ncol=4, fontsize=9)
+names = list(table_full.columns)
+ax_pca.set_title('A', loc='left', fontweight='bold')
+ax_bar.set_title('B', loc='left', fontweight='bold')
+
+plt.sca(ax_bar)
+plt.xticks([])
+for a in range(len(names)):
+  if 'pos' in names[a]: color = '#B20154'
+  else: color = '#0154B2'
+  if names[a][0] == 'N': fill=color
+  else: fill='w'
+  ax_sample.scatter(a, 0, marker='o', edgecolors=color, color=fill)
+ax_sample.set_xlim(-0.5, a+0.5), ax_sample.set_ylim([-0.01, 0.01])
+plt.sca(ax_sample)
+ax_sample.yaxis.tick_right()
+plt.xticks([]), plt.yticks([])#plt.yticks([0], ['Sample type'])
+
+pos, npos, stress = transform_for_NMDS(table_full.transpose())
+for a in range(len(npos)):
+  if 'pos' in names[a]:
+    color = '#B20154'
+  else:
+    color = '#0154B2'
+  if names[a][0] == 'N':
+    ax_pca.scatter(npos[a,0], npos[a,1], marker='o', edgecolors=color, color=color)
+  else:
+    ax_pca.scatter(npos[a,0], npos[a,1], marker='o', edgecolors=color, color='w')
+ax_pca.set_xlabel('nMDS1'), ax_pca.set_ylabel('nMDS2')
+handles = [Line2D([0], [0], marker='o', color='w', label='Positive\nnasopharyngeal', markerfacecolor='#B20154', markeredgecolor='#B20154', markersize=10), Line2D([0], [0], marker='o', color='w', label='Positive\noropharyngeal', markerfacecolor='w', markeredgecolor='#B20154', markersize=10), Line2D([0], [0], marker='o', color='w', label='Negative\nnasopharyngeal', markerfacecolor='#0154B2', markeredgecolor='#0154B2', markersize=10), Line2D([0], [0], marker='o', color='w', label='Negative\noropharyngeal', markerfacecolor='w', markeredgecolor='#0154B2', markersize=10)]
+ax_pca.legend(handles=handles, loc='upper left', bbox_to_anchor=(-0.03,-0.1), ncol=2)
+
+plt.subplots_adjust(hspace=0.01)
+plt.tight_layout()
+plt.show()
+```
+
+### Overlapping taxa
+Now I'm looking at the taxa (species level) that overlap between the positive and negative samples.
+```{python, overlap, results='hide', fig.keep='all', message=FALSE}
+samples = table_all.columns
+sample_dict = {}
+for sample in samples:
+  sample_dict[sample] = sample.split('-')[1]
+sample_table = table_all.rename(columns=sample_dict)
+positive = sample_table.loc[:, 'pos']
+negative = sample_table.loc[:, 'neg']
+positive = positive.loc[positive.max(axis=1) > 0, :]
+negative = negative.loc[negative.max(axis=1) > 0, :]
+
+positive = list(set(positive.index.values))
+negative = list(set(negative.index.values))
+
+venn2([set(positive), set(negative)], set_labels = ('Positive', 'Negative'))
+plt.show()
+```
+
+## Remove samples with few reads {.tabset}
+Now I am removing the samples with fewer than 2000 reads (seems reasonable based on the rarefaction curves above).
+
+### Import data
+*Convert to relative abundance*</br>
+There are 157 species in the table (440 ASVs)</br>
+Filtering to 0.1% reduces to this to 137, filtering to 0.5% reduces this to 85 and filtering to 1% reduces it to 64 (I've gone with 1% for now)
+```{python, get_data_2, results='hide', fig.keep='all', message=FALSE}
+table_2 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/exports/feature-table_w_tax.txt', sep='\t', header=0, index_col=0)
+table_2 = table_2.drop(['taxonomy'], axis=1)
+table_2 = table_2.loc[:, table_2.sum(axis=0) > 2000]
+table_2 = table_2.loc[table_2.max(axis=1) > 0, :]
+table_2 = table_2.divide(table_2.sum(axis=0))*100
+
+table_2 = table_2.rename(index=tax_dict_sp)
+table_2 = table_2.groupby(by=table_2.index, axis=0).sum()
+table_2 = table_2.loc[table_2.max(axis=1) > 1, :]
+```
+
+### Heatmap
+```{python, heatmap_dendro_2, results='hide', fig.keep='all', message=FALSE}
+plt.figure(figsize=(10,18))
+dendro = plt.subplot2grid((12,1), (0,0), frameon=False)
+heatmap = plt.subplot2grid((12,1), (1,0), rowspan=11)
+
+plt.sca(dendro)
+Z = hierarchy.linkage(table_2.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(dendro.get_xticklabels()), list(dendro.get_xticks()), list(dendro.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(table_2.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+new_table_2 = table_2[plot_labels]
+plt.xticks([]), plt.yticks([])
+
+plt.sca(heatmap)
+new_table_2 = new_table_2.divide(new_table_2.max(axis=1), axis=0)
+new_table_2 = new_table_2.iloc[::-1]
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=1)
+plt.pcolor(new_table_2, edgecolor='k', cmap=colormap, norm=norm)
+x = [a+0.5 for a in range(len(new_table_2.columns))]
+y = [a+0.5 for a in range(len(new_table_2.index.values))]
+plt.xticks(x, new_table_2.columns, rotation=90, fontsize=8)
+plt.yticks(y, new_table_2.index.values, fontsize=8)
+heatmap.xaxis.tick_top()
+
+plt.tight_layout()
+plt.show()
+```
+
+## Only samples with few reads {.tabset}
+Now I am only keeping the samples with fewer than 2000 reads.
+
+### Import data
+*Convert to relative abundance*</br>
+There are 110 species in the table (209 ASVs)</br>
+Filtering to 0.1% reduces to this to 110, filtering to 0.5% reduces this to 102 and filtering to 1% reduces it to 92 (I've gone with 1% for now)
+```{python, get_data_3, results='hide', fig.keep='all', message=FALSE}
+table_3 = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/exports/feature-table_w_tax.txt', sep='\t', header=0, index_col=0)
+table_3 = table_3.drop(['taxonomy'], axis=1)
+table_3 = table_3.loc[:, table_3.sum(axis=0) < 2000]
+table_3 = table_3.loc[table_3.max(axis=1) > 0, :]
+table_3 = table_3.divide(table_3.sum(axis=0))*100
+
+table_3 = table_3.rename(index=tax_dict_sp)
+table_3 = table_3.groupby(by=table_3.index, axis=0).sum()
+table_3 = table_3.loc[table_3.max(axis=1) > 1, :]
+```
+
+### Heatmap
+```{python, heatmap_dendro_3, results='hide', fig.keep='all', message=FALSE}
+plt.figure(figsize=(10,18))
+dendro = plt.subplot2grid((12,1), (0,0), frameon=False)
+heatmap = plt.subplot2grid((12,1), (1,0), rowspan=11)
+
+plt.sca(dendro)
+Z = hierarchy.linkage(table_3.transpose(), 'average', metric='braycurtis')
+mpl.rcParams['lines.linewidth'] = 2
+hierarchy.set_link_color_palette(['k'])
+dn = hierarchy.dendrogram(Z, above_threshold_color='k', orientation='top')
+
+y_labels, locs, xlocs, labels = list(dendro.get_xticklabels()), list(dendro.get_xticks()), list(dendro.get_yticks()), []
+for y in y_labels:
+  labels.append(y.get_text())
+grouping = list(table_3.columns)
+plot_labels = []
+for a in range(len(labels)):
+  plot_labels.append(grouping[int(labels[a])-1])
+plt.xticks([])
+plt.yticks([])
+new_table_3 = table_3[plot_labels]
+plt.xticks([]), plt.yticks([])
+
+plt.sca(heatmap)
+new_table_3 = new_table_3.divide(new_table_3.max(axis=1), axis=0)
+new_table_3 = new_table_3.iloc[::-1]
+colormap, norm = mpl.cm.get_cmap('hot', 256), mpl.colors.Normalize(vmin=0, vmax=1)
+plt.pcolor(new_table_3, edgecolor='k', cmap=colormap, norm=norm)
+x = [a+0.5 for a in range(len(new_table_3.columns))]
+y = [a+0.5 for a in range(len(new_table_3.index.values))]
+plt.xticks(x, new_table_3.columns, rotation=90, fontsize=8)
+plt.yticks(y, new_table_3.index.values, fontsize=8)
+heatmap.xaxis.tick_top()
+
+plt.tight_layout()
+plt.show()
+```
+
+# Metagenome analysis commands run {.tabset}
+
+## Concatenate lanes
+```{bash, eval=FALSE}
+concat_lanes.pl COVID-TNA_cDNA-MetaG_RunNS56/* -o cat_lanes -p 4
+```
+
+## Kneaddata
+```{bash, eval=FALSE}
+parallel -j 2 --link 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 20 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: cat_lanes/*_R1.fastq.gz ::: cat_lanes/*_R2.fastq.gz
+ 
+kneaddata_read_count_table --input kneaddata_out --output kneaddata_read_counts.txt
+```
+
+## Concatenate reads
+```{bach, eval=FALSE}
+concat_paired_end.pl -p 4 --no_R_match -o cat_reads kneaddata_out/*_paired_*.fastq 
+```
+
+## Kraken2 (RefSeq Complete v93)
+```{bash, eval=FALSE}
+mkdir kraken2_outraw_conf
+mkdir kraken2_kreport_conf
+parallel -j 2 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output kraken2_outraw/{/.}.kraken.txt --report kraken2_kreport/{/.}.kreport --confidence 0.1' ::: cat_reads/*.fastq
+```
+
+## Bracken
+```{bash, eval=FALSE}
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*.kreport
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/O3-pos.kreport
+```
+
+## Kraken2 (Standard 19-9-2020 incl. SARS-COV-2)
+```{bash, eval=FALSE}
+mkdir karken_standard/kraken2_outraw
+mkdir kraken_standard/kraken2_kreport
+parallel -j 1 'kraken2 --use-names --threads 12 --db /home/robyn/tools/kraken_db_Nov20/ --memory-mapping {} --output kraken_standard/kraken2_outraw/{/.}.kraken.txt --report kraken_standard/kraken2_kreport/{/.}.kreport --confidence 0.1' ::: cat_reads/*.fastq
+```
+
+## Bracken
+```{bash, eval=FALSE}
+parallel -j 1 'bracken -d /home/robyn/tools/kraken_db_Nov20/ -i {} -l S -o {.}.bracken -r 150' ::: kraken_standard/kraken2_kreport/*.kreport
+
+#parallel -j 1 'bracken -d /home/robyn/tools/kraken_db_Nov20/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/O3-pos.kreport
+```
+
+# Basic analysis (metagenome RefSeq Complete V93) {.tabset}
+
+## Reads kept after Kneaddata
+
+**Percent:**
+```{python, reads_kept_perc, results='hide', fig.keep='all'}
+reads = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/metagenome/kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
+perc = []
+x = []
+all_samples = ['N1-neg_S41', 'N2-neg_S42', 'N3-neg_S43', 'N4-neg_S44', 'N5-neg_S45','N1-pos_S51', 'N2-pos_S52', 'N3-pos_S53', 'N4-pos_S54', 'N5-pos_S55', 'cDNA-N1-neg_S65', 'cDNA-N2-neg_S66', 'cDNA-N3-neg_S67', 'cDNA-N4-neg_S68', 'cDNA-N5-neg_S69', 'cDNA-N1-pos_S75', 'cDNA-N2-pos_S76', 'cDNA-N3-pos_S77', 'cDNA-N4-pos_S78', 'cDNA-N5-pos_S79', 'O1-neg_S46', 'O2-neg_S47', 'O3-neg_S48', 'O4-neg_S49', 'O5-neg_S50', 'O1-pos_S56', 'O2-pos_S57', 'O3-pos_S58', 'O4-pos_S59', 'O5-pos_S60', 'cDNA-O1-neg_S70', 'cDNA-O2-neg_S71', 'cDNA-O3-neg_S72', 'cDNA-O4-neg_S73', 'cDNA-O5-neg_S74', 'cDNA-O1-pos_S80', 'cDNA-O2-pos_S61', 'cDNA-O3-pos_S62', 'cDNA-O4-pos_S63', 'cDNA-O5-pos_S64']
+for s in range(len(all_samples)):
+  x.append(s)
+  if all_samples[s]+'_R1_kneaddata' in reads.index.values:
+    perc.append((reads.loc[all_samples[s]+'_R1_kneaddata', 'final pair1']/reads.loc[all_samples[s]+'_R1_kneaddata', 'raw pair1'])*100)
+  else:
+    perc.append(0)
+
+plt.figure(figsize=(10,4))
+ax1 = plt.subplot(111)
+for a in range(len(perc)):
+  ax1.bar(x[a], perc[a], width=0.8, color='#8E0145', edgecolor='k')
+
+plt.xticks(x, all_samples, rotation=90, fontsize=8)
+plt.xlim([-0.7, x[-1]+0.5])
+plt.ylim([0, 100])
+plt.ylabel('Reads remaining (%)')
+plt.tight_layout()
+plt.show()
+```
+
+**Number of reads:**
+```{python, reads_kept_num, results='hide', fig.keep='all'}
+reads = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/metagenome/kneaddata_read_counts.txt', header=0, index_col=0, sep='\t')
+perc = []
+x = []
+all_samples = ['N1-neg_S41', 'N2-neg_S42', 'N3-neg_S43', 'N4-neg_S44', 'N5-neg_S45','N1-pos_S51', 'N2-pos_S52', 'N3-pos_S53', 'N4-pos_S54', 'N5-pos_S55', 'cDNA-N1-neg_S65', 'cDNA-N2-neg_S66', 'cDNA-N3-neg_S67', 'cDNA-N4-neg_S68', 'cDNA-N5-neg_S69', 'cDNA-N1-pos_S75', 'cDNA-N2-pos_S76', 'cDNA-N3-pos_S77', 'cDNA-N4-pos_S78', 'cDNA-N5-pos_S79', 'O1-neg_S46', 'O2-neg_S47', 'O3-neg_S48', 'O4-neg_S49', 'O5-neg_S50', 'O1-pos_S56', 'O2-pos_S57', 'O3-pos_S58', 'O4-pos_S59', 'O5-pos_S60', 'cDNA-O1-neg_S70', 'cDNA-O2-neg_S71', 'cDNA-O3-neg_S72', 'cDNA-O4-neg_S73', 'cDNA-O5-neg_S74', 'cDNA-O1-pos_S80', 'cDNA-O2-pos_S61', 'cDNA-O3-pos_S62', 'cDNA-O4-pos_S63', 'cDNA-O5-pos_S64']
+for s in range(len(all_samples)):
+  x.append(s)
+  if all_samples[s]+'_R1_kneaddata' in reads.index.values:
+    perc.append(reads.loc[all_samples[s]+'_R1_kneaddata', 'final pair1'])
+  else:
+    perc.append(0)
+
+plt.figure(figsize=(10,4))
+ax1 = plt.subplot(111)
+for a in range(len(perc)):
+  ax1.bar(x[a], perc[a], width=0.8, color='#8E0145', edgecolor='k')
+
+plt.xticks(x, all_samples, rotation=90, fontsize=8)
+plt.xlim([-0.7, x[-1]+0.5])
+plt.ylabel('Reads remaining')
+plt.semilogy()
+plt.tight_layout()
+plt.show()
+```
+
+## Reads classified
+There is a sample missing from here - O3-pos. I'm in the process of working out why Kraken didn't work for only that sample (it gives this error: ```classify: malformed FASTQ file (exp. '@', saw ""), aborting```). </br>
+I've continued with plotting the rest for now, though. Note that Bracken percentages not adding to 100% is apparently a known issue (I briefly looked into it previously, but previously the percentages weren't so drastically under 100%). I'll look into it some more, though.
+```{python, get_kraken_bracken, results='hide', fig.keep='all'}
+kraken_columns = {0:'Percent fragments clade', 1:'Number fragments clade', 2:'Number fragments taxon', 3:'Level', 4:'NCBI ID', 5:'Taxon name'}
+def get_kraken_bracken(fol):
+    all_domains = {}
+    bracken, kraken, bracken_kreport = [], [], []
+    bracken_pd, kraken_pd = [], []
+    for fi in sorted(os.listdir(fol)):
+        if fi[-7:] == 'bracken':
+            bracken.append(fi)
+        elif fi[-7:] == 'kreport' and 'bracken' not in fi:
+            kraken.append(fi)
+        elif fi[-7:] == 'kreport':
+            bracken_kreport.append(fi)
+    for bk in bracken_kreport:
+        with open(fol+'/'+bk, 'rU') as f:
+            bk = []
+            domains = {}
+            this_domain, domain_name = [], ''
+            for row in csv.reader(f, delimiter='\t'):
+                bk.append(row)
+                row[5] = row[5].lstrip()
+                if row[3] == 'K' or 'D' in row[3]:
+                    if domain_name != '':
+                        domains[domain_name] = this_domain
+                    this_domain, domain_name = [], row[5]
+                else:
+                    if row[3] != 'R' and row[3] != 'U' and 'K' not in row[3]:
+                        this_domain.append(row[5])
+            domains[domain_name] = this_domain
+            for domain in domains:
+                if domain in all_domains:
+                    all_domains[domain] = list(set(all_domains[domain]+domains[domain]))
+                else:
+                    all_domains[domain] = list(set(domains[domain]))
+    for b in bracken:
+        sample = pd.read_csv(fol+'/'+b, sep='\t', header=0, index_col=0)
+        b = b.replace('_kneaddata', '')
+        sample.drop(['taxonomy_id', 'taxonomy_lvl', 'kraken_assigned_reads', 'added_reads', 'fraction_total_reads'], axis=1, inplace=True)
+        sample.rename(columns={'new_est_reads':b[:-8]}, inplace=True)
+        bracken_pd.append(sample)
+    for k in kraken:
+        sample = pd.read_csv(fol+'/'+k, sep='\t', header=None, index_col=3)
+        sample = sample.loc[['U', 'D', 'K'], :]
+        sample = sample.rename(columns=kraken_columns).drop(['Number fragments taxon', 'NCBI ID'], axis=1).rename(columns={'Percent fragments clade':k[:-8]+'_percent', 'Number fragments clade':k[:-8]+'_reads'}).set_index('Taxon name')
+        taxa = list(sample.index.values)
+        taxa_dict = {}
+        for t in taxa:
+            taxa_dict[t] = t.replace(' ', '')
+        sample = sample.rename(index=taxa_dict)
+        kraken_pd.append(sample)
+    bracken = pd.concat(bracken_pd, join='outer')
+    kraken = pd.concat(kraken_pd, join='outer')
+    kraken = kraken.rename(index={'d__Bacteria':'Bacteria', 'd__Archaea':'Archaea'})
+    kraken = kraken.groupby(by=kraken.index, axis=0).sum()
+    bracken = bracken.groupby(by=bracken.index, axis=0).sum().fillna(value=0)
+    kraken_samples = list(kraken.columns)
+    reads, percent, rename = [], [], {}
+    for s in kraken_samples:
+      if 'reads' in s:
+        reads.append(True)
+        percent.append(False)
+      else:
+        reads.append(False)
+        percent.append(True)
+    kraken_reads = kraken.loc[:, reads].rename(columns=rename)
+    kraken_percent = kraken.loc[:, percent].rename(columns=rename)
+    
+    kraken_perc_drop = kraken_percent.drop(['Metazoa', 'Viridiplantae'], axis=0)
+    kraken_reads_drop = kraken_reads.drop(['Metazoa', 'Viridiplantae'], axis=0)
+    for s in list(kraken_perc_drop.columns):
+      kraken_perc_drop.loc['Eukaryota', s] = kraken_perc_drop.loc['Eukaryota', s]-kraken_perc_drop.loc['Fungi', s]
+    for s in list(kraken_reads_drop.columns):
+      kraken_reads_drop.loc['Eukaryota', s] = kraken_reads_drop.loc['Eukaryota', s]-kraken_reads_drop.loc['Fungi', s]
+    kraken_perc_drop.rename(index={'Eukaryota':'Other Eukaryota'}, inplace=True)
+    kraken_reads_drop.rename(index={'Eukaryota':'Other Eukaryota'}, inplace=True)
+    
+    bacteria = all_domains['Bacteria']
+    bacteria_in_table = []
+    for f in bacteria:
+      if f in list(bracken.index.values):
+        bacteria_in_table.append(f)
+    bracken_bacteria = pd.DataFrame(bracken.loc[bacteria_in_table, :])
+    bracken_bacteria_ra = pd.DataFrame(bracken_bacteria.divide(bracken_bacteria.sum(axis=0)).multiply(100))
+    return bracken, kraken, bracken_kreport, kraken_reads_drop, kraken_perc_drop, bracken_bacteria, bracken_bacteria_ra
+
+fol = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/metagenome/kraken2_kreport/'
+bracken, kraken, bracken_kreport, kraken_reads, kraken_percent, bracken_bacteria, bracken_bacteria_ra = get_kraken_bracken(fol)
+```
+
+```{python, reads_classified_perc, results='hide', fig.keep='all'}
+for s in range(len(all_samples)):
+  all_samples[s] = all_samples[s].split('_')[0]
+all_samples = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N1-pos', 'N2-pos', 'N3-pos', 'N4-pos', 'N5-pos', 'cDNA-N1-neg', 'cDNA-N2-neg', 'cDNA-N3-neg', 'cDNA-N4-neg', 'cDNA-N5-neg', 'cDNA-N1-pos', 'cDNA-N2-pos', 'cDNA-N3-pos', 'cDNA-N4-pos', 'cDNA-N5-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O1-pos', 'O2-pos', 'O4-pos', 'O5-pos', 'cDNA-O1-neg', 'cDNA-O2-neg', 'cDNA-O3-neg', 'cDNA-O4-neg', 'cDNA-O5-neg', 'cDNA-O1-pos', 'cDNA-O2-pos', 'cDNA-O3-pos', 'cDNA-O4-pos', 'cDNA-O5-pos']
+all_samp_perc = [all_samples[a]+'_percent' for a in range(len(all_samples))]
+all_samp_reads = [all_samples[a]+'_reads' for a in range(len(all_samples))]
+
+bracken, kraken_reads, kraken_percent = bracken.loc[:, all_samples], kraken_reads.loc[:, all_samp_reads], kraken_percent.loc[:, all_samp_perc]
+
+pltx = {}
+all_x = []
+for s in range(len(all_samples)):
+  pltx[all_samples[s]] = s
+  all_x.append(s)
+
+def plot_domain(kraken_reads, kraken_percent):
+  plotting = ['Archaea', 'Bacteria', 'Fungi', 'Other Eukaryota', 'Viruses', 'unclassified']
+  colors = {'Fungi':'#2C8101', 'Other Eukaryota':'#7DCEA0', 'Bacteria':'#5499C7', 'Archaea':'#EDBB99', 'Viruses':'#F7DC6F', 'unclassified':'#CCD1D1'}
+  plt.figure(figsize=(10,6))
+  ax1 = plt.subplot(211)
+  ax2 = plt.subplot(212)
+  handles = []
+  for s in kraken_reads.columns:
+    sn = s.split('_')[0]
+    c_reads, c_perc = 0, 0
+    for p in plotting:
+      reads, perc = kraken_reads.loc[p, s], kraken_percent.loc[p, sn+'_percent']
+      ax1.bar(pltx[sn], reads, bottom=c_reads, color=colors[p], edgecolor='k', width=0.8)
+      ax2.bar(pltx[sn], perc, bottom=c_perc, color=colors[p], edgecolor='k', width=0.8)
+      c_reads += reads
+      c_perc += perc
+  for p in plotting:
+    handles.append(Patch(facecolor=colors[p], edgecolor='k', label=p))
+  ax1.set_xlim([-0.7, all_x[-1]+0.5]), ax2.set_xlim([-0.7, all_x[-1]+0.5])
+  ax2.set_ylim([0, 100])
+  plt.sca(ax2)
+  plt.xticks(all_x, all_samples, rotation=90, fontsize=8)
+  plt.sca(ax1)
+  plt.semilogy()
+  plt.xticks([])
+  ax1.legend(handles=handles, bbox_to_anchor=(1,1.02), loc='upper left')
+  ax1.set_ylabel('Number of reads')
+  ax2.set_ylabel('Number of reads (%)')
+  return
+
+plot_domain(kraken_reads, kraken_percent)
+plt.tight_layout()
+plt.show()
+```
+
+## Stacked bar {.tabset}
+This is using the output from Bracken to plot at the genus level, either for all domains or for bacteria only. I've summed the abundance of each genera and removed those that are below 0.5% maximum relative abundance (within either all domains or only bacteria)
+
+### All domains
+```{python, stacked_taxa_bracken, results='hide', fig.keep='all'}
+all_bracken = pd.DataFrame(bracken)
+taxa = list(all_bracken.index.values)
+rename_tax = {}
+weird_names = ['alpha', 'beta', 'bacterium', 'blood', 'cyanobacterium', 'endosymbiont', 'filamentous', 'gamma', 'uncultured', 'Candidatus']
+for t in taxa:
+  oldt = str(t)
+  t = t.replace("'", "")
+  t = t.replace("[", "")
+  t = t.replace("]", "")
+  if t.split(' ')[0] in weird_names:
+    newt = t
+  else:
+    newt = t.split(' ')[0]
+  rename_tax[oldt] = newt
+all_bracken.rename(index=rename_tax, inplace=True)
+all_bracken = all_bracken.groupby(by=all_bracken.index, axis=0).sum()
+all_bracken = all_bracken.divide(all_bracken.sum(axis=0))*100
+all_bracken = all_bracken.loc[all_bracken.max(axis=1) > 0.5, :]
+all_bracken = all_bracken.transpose()
+cols  = math.ceil(all_bracken.shape[1]/27)
+nc = 1
+size = 14
+while nc < cols:
+    size += 3
+    nc += 1
+axes = all_bracken.plot.bar(stacked=True, color=get_colors(all_bracken.shape[1]), figsize=(size,7), width=1, edgecolor='k')
+plt.ylim([0, 100]), plt.ylabel('Relative abundance (%)')
+axes.legend(loc='upper left', bbox_to_anchor=(1, 1.02), ncol=cols)
+plt.tight_layout()
+plt.show()
+```
+
+### Bacteria only
+```{python, stacked_bac_bracken, results='hide', fig.keep='all'}
+all_bracken = bracken_bacteria_ra.loc[:, all_samples]
+all_bracken.rename(index=rename_tax, inplace=True)
+all_bracken = all_bracken.groupby(by=all_bracken.index, axis=0).sum()
+all_bracken = all_bracken.loc[all_bracken.max(axis=1) > 0.5, :]
+all_bracken = all_bracken.transpose()
+cols  = math.ceil(all_bracken.shape[1]/27)
+nc = 1
+size = 14
+while nc < cols:
+    size += 3
+    nc += 1
+axes = all_bracken.plot.bar(stacked=True, color=get_colors(all_bracken.shape[1]), figsize=(size,7), width=1, edgecolor='k')
+plt.ylim([0, 100]), plt.ylabel('Relative abundance (%)')
+axes.legend(loc='upper left', bbox_to_anchor=(1, 1.02), ncol=cols)
+plt.tight_layout()
+plt.show()
+```
+
+# Basic analysis (metagenome standard incl. SARS-COV-2) {.tabset}
+
+## Reads kept after Kneaddata
+Not repeated as this is the same as above.
+
+## Reads classified
+There is a sample missing from here - O3-pos. I'm in the process of working out why Kraken didn't work for only that sample (it gives this error: ```classify: malformed FASTQ file (exp. '@', saw ""), aborting```). </br>
+I've continued with plotting the rest for now, though. Note that Bracken percentages not adding to 100% is apparently a known issue (I briefly looked into it previously, but previously the percentages weren't so drastically under 100%). I'll look into it some more, though.
+```{python, get_kraken_bracken_kst, results='hide', fig.keep='all'}
+kraken_columns = {0:'Percent fragments clade', 1:'Number fragments clade', 2:'Number fragments taxon', 3:'Level', 4:'NCBI ID', 5:'Taxon name'}
+def get_kraken_bracken(fol):
+    all_domains = {}
+    bracken, kraken, bracken_kreport = [], [], []
+    bracken_pd, kraken_pd = [], []
+    for fi in sorted(os.listdir(fol)):
+        if fi[-7:] == 'bracken':
+            bracken.append(fi)
+        elif fi[-7:] == 'kreport' and 'bracken' not in fi:
+            kraken.append(fi)
+        elif fi[-7:] == 'kreport':
+            bracken_kreport.append(fi)
+    for bk in bracken_kreport:
+        with open(fol+'/'+bk, 'rU') as f:
+            bk = []
+            domains = {}
+            this_domain, domain_name = [], ''
+            for row in csv.reader(f, delimiter='\t'):
+                bk.append(row)
+                row[5] = row[5].lstrip()
+                if row[3] == 'K' or 'D' in row[3]:
+                    if domain_name != '':
+                        domains[domain_name] = this_domain
+                    this_domain, domain_name = [], row[5]
+                else:
+                    if row[3] != 'R' and row[3] != 'U' and 'K' not in row[3]:
+                        this_domain.append(row[5])
+            domains[domain_name] = this_domain
+            for domain in domains:
+                if domain in all_domains:
+                    all_domains[domain] = list(set(all_domains[domain]+domains[domain]))
+                else:
+                    all_domains[domain] = list(set(domains[domain]))
+    for b in bracken:
+        sample = pd.read_csv(fol+'/'+b, sep='\t', header=0, index_col=0)
+        b = b.replace('_kneaddata', '')
+        sample.drop(['taxonomy_id', 'taxonomy_lvl', 'kraken_assigned_reads', 'added_reads', 'fraction_total_reads'], axis=1, inplace=True)
+        sample.rename(columns={'new_est_reads':b[:-8]}, inplace=True)
+        bracken_pd.append(sample)
+    for k in kraken:
+        sample = pd.read_csv(fol+'/'+k, sep='\t', header=None, index_col=3)
+        sample = sample.loc[['U', 'D', 'K'], :]
+        sample = sample.rename(columns=kraken_columns).drop(['Number fragments taxon', 'NCBI ID'], axis=1).rename(columns={'Percent fragments clade':k[:-8]+'_percent', 'Number fragments clade':k[:-8]+'_reads'}).set_index('Taxon name')
+        taxa = list(sample.index.values)
+        taxa_dict = {}
+        for t in taxa:
+            taxa_dict[t] = t.replace(' ', '')
+        sample = sample.rename(index=taxa_dict)
+        kraken_pd.append(sample)
+    bracken = pd.concat(bracken_pd, join='outer')
+    kraken = pd.concat(kraken_pd, join='outer')
+    kraken = kraken.rename(index={'d__Bacteria':'Bacteria', 'd__Archaea':'Archaea'})
+    kraken = kraken.groupby(by=kraken.index, axis=0).sum()
+    bracken = bracken.groupby(by=bracken.index, axis=0).sum().fillna(value=0)
+    kraken_samples = list(kraken.columns)
+    reads, percent, rename = [], [], {}
+    for s in kraken_samples:
+      if 'reads' in s:
+        reads.append(True)
+        percent.append(False)
+      else:
+        reads.append(False)
+        percent.append(True)
+    kraken_reads = kraken.loc[:, reads].rename(columns=rename)
+    kraken_percent = kraken.loc[:, percent].rename(columns=rename)
+    try:
+      kraken_perc_drop = kraken_percent.drop(['Metazoa', 'Viridiplantae'], axis=0)
+      kraken_reads_drop = kraken_reads.drop(['Metazoa', 'Viridiplantae'], axis=0)
+    except:
+      kraken_perc_drop = kraken_percent.drop(['Metazoa'], axis=0)
+      kraken_reads_drop = kraken_reads.drop(['Metazoa'], axis=0)
+    """
+    for s in list(kraken_perc_drop.columns):
+      kraken_perc_drop.loc['Eukaryota', s] = kraken_perc_drop.loc['Eukaryota', s]-kraken_perc_drop.loc['Fungi', s]
+    for s in list(kraken_reads_drop.columns):
+      kraken_reads_drop.loc['Eukaryota', s] = kraken_reads_drop.loc['Eukaryota', s]-kraken_reads_drop.loc['Fungi', s]
+    """
+    kraken_perc_drop.rename(index={'Eukaryota':'Other Eukaryota'}, inplace=True)
+    kraken_reads_drop.rename(index={'Eukaryota':'Other Eukaryota'}, inplace=True)
+    
+    bacteria = all_domains['Bacteria']
+    bacteria_in_table = []
+    for f in bacteria:
+      if f in list(bracken.index.values):
+        bacteria_in_table.append(f)
+    bracken_bacteria = pd.DataFrame(bracken.loc[bacteria_in_table, :])
+    bracken_bacteria_ra = pd.DataFrame(bracken_bacteria.divide(bracken_bacteria.sum(axis=0)).multiply(100))
+    return bracken, kraken, bracken_kreport, kraken_reads_drop, kraken_perc_drop, bracken_bacteria, bracken_bacteria_ra
+
+fol = '/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/metagenome/kraken_standard/kraken2_kreport/'
+bracken, kraken, bracken_kreport, kraken_reads, kraken_percent, bracken_bacteria, bracken_bacteria_ra = get_kraken_bracken(fol)
+```
+
+```{python, reads_classified_perc_kst, results='hide', fig.keep='all'}
+for s in range(len(all_samples)):
+  all_samples[s] = all_samples[s].split('_')[0]
+all_samples = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N1-pos', 'N2-pos', 'N3-pos', 'N4-pos', 'N5-pos', 'cDNA-N1-neg', 'cDNA-N2-neg', 'cDNA-N3-neg', 'cDNA-N4-neg', 'cDNA-N5-neg', 'cDNA-N1-pos', 'cDNA-N2-pos', 'cDNA-N3-pos', 'cDNA-N4-pos', 'cDNA-N5-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O1-pos', 'O2-pos', 'O4-pos', 'O5-pos', 'cDNA-O1-neg', 'cDNA-O2-neg', 'cDNA-O3-neg', 'cDNA-O4-neg', 'cDNA-O5-neg', 'cDNA-O1-pos', 'cDNA-O2-pos', 'cDNA-O3-pos', 'cDNA-O4-pos', 'cDNA-O5-pos']
+all_samp_perc = [all_samples[a]+'_percent' for a in range(len(all_samples))]
+all_samp_reads = [all_samples[a]+'_reads' for a in range(len(all_samples))]
+
+bracken, kraken_reads, kraken_percent = bracken.loc[:, all_samples], kraken_reads.loc[:, all_samp_reads], kraken_percent.loc[:, all_samp_perc]
+
+pltx = {}
+all_x = []
+for s in range(len(all_samples)):
+  pltx[all_samples[s]] = s
+  all_x.append(s)
+
+def plot_domain(kraken_reads, kraken_percent):
+  plotting = ['Archaea', 'Bacteria', 'Other Eukaryota', 'Viruses', 'unclassified']
+  colors = {'Fungi':'#2C8101', 'Other Eukaryota':'#7DCEA0', 'Bacteria':'#5499C7', 'Archaea':'#EDBB99', 'Viruses':'#F7DC6F', 'unclassified':'#CCD1D1'}
+  plt.figure(figsize=(10,6))
+  ax1 = plt.subplot(211)
+  ax2 = plt.subplot(212)
+  handles = []
+  for s in kraken_reads.columns:
+    sn = s.split('_')[0]
+    c_reads, c_perc = 0, 0
+    for p in plotting:
+      reads, perc = kraken_reads.loc[p, s], kraken_percent.loc[p, sn+'_percent']
+      ax1.bar(pltx[sn], reads, bottom=c_reads, color=colors[p], edgecolor='k', width=0.8)
+      ax2.bar(pltx[sn], perc, bottom=c_perc, color=colors[p], edgecolor='k', width=0.8)
+      c_reads += reads
+      c_perc += perc
+  for p in plotting:
+    handles.append(Patch(facecolor=colors[p], edgecolor='k', label=p))
+  ax1.set_xlim([-0.7, all_x[-1]+0.5]), ax2.set_xlim([-0.7, all_x[-1]+0.5])
+  ax2.set_ylim([0, 100])
+  plt.sca(ax2)
+  plt.xticks(all_x, all_samples, rotation=90, fontsize=8)
+  plt.sca(ax1)
+  plt.semilogy()
+  plt.xticks([])
+  ax1.legend(handles=handles, bbox_to_anchor=(1,1.02), loc='upper left')
+  ax1.set_ylabel('Number of reads')
+  ax2.set_ylabel('Number of reads (%)')
+  return
+
+plot_domain(kraken_reads, kraken_percent)
+plt.tight_layout()
+plt.show()
+```
+
+## Stacked bar {.tabset}
+This is using the output from Bracken to plot at the genus level, either for all domains or for bacteria only. I've summed the abundance of each genera and removed those that are below 0.5% maximum relative abundance (within either all domains or only bacteria)
+
+### All domains
+```{python, stacked_taxa_bracken_kst, results='hide', fig.keep='all'}
+def get_colors(num):
+    colormap_40b, colormap_40c = mpl.cm.get_cmap('tab20b', 256), mpl.cm.get_cmap('tab20c', 256)
+    norm, norm2 = mpl.colors.Normalize(vmin=0, vmax=19), mpl.colors.Normalize(vmin=20, vmax=39)
+    m2, m3 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap_40b), mpl.cm.ScalarMappable(norm=norm2, cmap=colormap_40c)
+    colors_40 = [m2.to_rgba(a) for a in range(20)]+[m3.to_rgba(a) for a in range(20,40)]
+    return colors_40+colors_40+colors_40+colors_40
+
+all_bracken = pd.DataFrame(bracken)
+taxa = list(all_bracken.index.values)
+rename_tax = {}
+weird_names = ['alpha', 'beta', 'bacterium', 'blood', 'cyanobacterium', 'endosymbiont', 'filamentous', 'gamma', 'uncultured', 'Candidatus']
+for t in taxa:
+  oldt = str(t)
+  t = t.replace("'", "")
+  t = t.replace("[", "")
+  t = t.replace("]", "")
+  if t.split(' ')[0] in weird_names:
+    newt = t
+  else:
+    newt = t.split(' ')[0]
+  rename_tax[oldt] = newt
+all_bracken.rename(index=rename_tax, inplace=True)
+all_bracken = all_bracken.groupby(by=all_bracken.index, axis=0).sum()
+all_bracken = all_bracken.divide(all_bracken.sum(axis=0))*100
+all_bracken = all_bracken.loc[all_bracken.max(axis=1) > 0.5, :]
+all_bracken = all_bracken.transpose()
+cols  = math.ceil(all_bracken.shape[1]/27)
+nc = 1
+size = 14
+while nc < cols:
+    size += 3
+    nc += 1
+axes = all_bracken.plot.bar(stacked=True, color=get_colors(all_bracken.shape[1]), figsize=(size,7), width=1, edgecolor='k')
+plt.ylim([0, 100]), plt.ylabel('Relative abundance (%)')
+axes.legend(loc='upper left', bbox_to_anchor=(1, 1.02), ncol=cols)
+plt.tight_layout()
+plt.show()
+```
+
+### Bacteria only
+```{python, stacked_bac_bracken_kst, results='hide', fig.keep='all'}
+all_bracken = bracken_bacteria_ra.loc[:, all_samples]
+all_bracken.rename(index=rename_tax, inplace=True)
+all_bracken = all_bracken.groupby(by=all_bracken.index, axis=0).sum()
+all_bracken = all_bracken.loc[all_bracken.max(axis=1) > 0.5, :]
+all_bracken = all_bracken.transpose()
+cols  = math.ceil(all_bracken.shape[1]/27)
+nc = 1
+size = 14
+while nc < cols:
+    size += 3
+    nc += 1
+axes = all_bracken.plot.bar(stacked=True, color=get_colors(all_bracken.shape[1]), figsize=(size,7), width=1, edgecolor='k')
+plt.ylim([0, 100]), plt.ylabel('Relative abundance (%)')
+axes.legend(loc='upper left', bbox_to_anchor=(1, 1.02), ncol=cols)
+plt.tight_layout()
+plt.show()
+```

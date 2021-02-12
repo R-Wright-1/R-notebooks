@@ -3,6 +3,15 @@
 # OTU table should be a matrix/data.frame with each feature in rows and sample in columns. 
 # Metadata should be a matrix/data.frame containing the sample identifier. 
 
+library(exactRankTests)
+library(nlme)
+library(dplyr)
+library(ggplot2)
+library(compositions)
+library(vegan)
+library(phyloseq)
+library(tidyr)
+
 # Data Pre-Processing
 feature_table_pre_process = function(feature_table, meta_data, sample_var, group_var = NULL, 
                                      out_cut = 0.05, zero_cut = 0.90, lib_cut, neg_lb){
