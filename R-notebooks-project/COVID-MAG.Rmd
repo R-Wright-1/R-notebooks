@@ -55,6 +55,34 @@ plt.tight_layout()
 plt.show()
 ```
 
+Resulting number of reads:
+```{python, results='hide', fig.keep='all'}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+samples = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/kneaddata_read_counts_covid_genome.txt', sep='\t', header=0, index_col=0)
+print(samples)
+nonzero = {'cDNA-N1-pos_S75_R1_kneaddata':306, 'cDNA-N2-pos_S76_R1_kneaddata':366, 'cDNA-N3-pos_S77_R1_kneaddata':3, 'cDNA-N4-pos_S78_R1_kneaddata':19, 'cDNA-N5-pos_S79_R1_kneaddata':579, 'cDNA-O1-pos_S80_R1_kneaddata':4, 'cDNA-O2-pos_S61_R1_kneaddata':336, 'cDNA-O3-pos_S62_R1_kneaddata':64, 'cDNA-O4-pos_S63_R1_kneaddata':10, 'cDNA-O5-pos_S64_R1_kneaddata':40}
+
+plt.figure(figsize=(10,3))
+ax1 = plt.subplot(111)
+
+count = 0
+names, x = [], []
+for sample in samples.index.values:
+  if sample in nonzero:
+    ax1.bar(count, nonzero[sample], color='k')
+  x.append(count)
+  names.append(sample.split('_')[0])
+  count += 1
+
+plt.xticks(x, names, rotation=90)
+plt.xlim([x[0]-0.5, x[-1]+0.5])
+plt.ylabel('Number of reads')
+plt.tight_layout()
+plt.show()
+```
+
 # metaSPADES {.tabset}
 
 ## Test
@@ -134,7 +162,7 @@ parallel -j 1 --link --progress '/home/robyn/anaconda3/bin/spades.py --meta -1 {
 parallel -j 1 --link --progress 'python /home/robyn/tools/quast-5.0.2/metaquast.py {1}/contigs.fasta --references-list reference-list.txt --threads 10 -o quast_results/{1/}' ::: metaSPADES/*
 ```
 
-**Alignment summary:**
+**Alignment summary (including sample with all reads):**
 ```{python, results='hide', fig.keep='all'}
 samples = ['N1', 'N1', 'N2', 'N4', 'N5', 'O2', 'O3', 'O4', 'O5']
 largest_aligned_contig = [2747, 2721, 4016, 0, 4745, 4743, 502, 0, 0]
@@ -161,6 +189,33 @@ plt.tight_layout()
 plt.show()
 ```
 Note that the white N1 bar is for the test above (i.e. the whole sample was assembled and aligned to the COVID genome) while the red N1 bar is for only the reads that bowtie2 aligned to the COVID genome. For reference, the COVID genome is 29,882 bp.
+
+**Alignment summary:**
+```{python, results='hide', fig.keep='all'}
+samples = ['N1', 'N2', 'N3', 'N4', 'N5', 'O1', 'O2', 'O3', 'O4', 'O5']
+largest_aligned_contig = [2721, 4016, 0, 0, 4745, 0, 4743, 502, 0, 0]
+total_aligned = [8536, 17872, 0, 0, 26891, 0, 12041, 502, 0, 0]
+total_perc_aligned = [28.519, 59.8, 0, 0, 89.7, 0, 40.299, 1.68, 0, 0]
+num_contigs = [8, 14, 0, 0, 16, 0, 11, 1, 0, 0]
+colors = ['r', 'r', 'r', 'r', 'r', 'b', 'b', 'b', 'b', 'b']
+label = ['COVID genome coverage (%)', 'Number of contigs']
+
+plt.figure(figsize=(10,4))
+ax1, ax2 = plt.subplot(131), plt.subplot(132)
+ax = [ax1, ax2]
+x = []
+for a in range(len(samples)):
+  ax1.bar(a, total_perc_aligned[a], color=colors[a], width=0.8, edgecolor='k')
+  ax2.bar(a, num_contigs[a], color=colors[a], width=0.8, edgecolor='k')
+  x.append(a)
+for a in range(len(ax)):
+  plt.sca(ax[a])
+  plt.xticks(x, samples)
+  plt.ylabel(label[a])
+  
+plt.tight_layout()
+plt.show()
+```
 
 So the sample with the highest % aligned is N5:
 ![](/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/quast/quast_results/cDNA-N5-pos_S79_R1_kneaddata_SARS-COV-2_bowtie2_paired_contam_1/icarus_viewers/alignment.png)

@@ -1,0 +1,15 @@
+base
+reticulate
+kableExtra
+knitr
+permute
+lattice
+vegan
+Nonpareil
+exactRankTests
+nlme
+dplyr
+ggplot2
+compositions
+phyloseq
+tidyr

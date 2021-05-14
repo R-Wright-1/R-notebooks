@@ -15,13 +15,13 @@ fig_height: 10
 library(reticulate)
 library(kableExtra)
 library(knitr)
-library(exactRankTests)
-library(nlme)
-library(dplyr)
-library(ggplot2)
-library(compositions)
-library(vegan)
-library(phyloseq)
+# library(exactRankTests)
+# library(nlme)
+# library(dplyr)
+# library(ggplot2)
+# library(compositions)
+# library(vegan)
+# library(phyloseq)
 ```
 
 ```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
@@ -35,10 +35,14 @@ import matplotlib as mpl
 from matplotlib_venn import venn2
 import csv
 from matplotlib.patches import Patch
+import pickle
 from scipy.spatial import distance
 from scipy import stats
 from sklearn import manifold
 from sklearn.decomposition import PCA
+from scipy.stats import pearsonr, spearmanr
+
+folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/'
 ```
 
 # Sequence processing {.tabset}
@@ -183,8 +187,6 @@ qiime diversity alpha-rarefaction \
   --p-metrics 'observed_features' \
   --o-visualization rarefaction_curves.qzv
 ```
-This is just a screenshot from the QIIME2 view website:
-![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_V4V5/QIIME2_rarefaction_curves.png)
 
 cDNA V6V8
 ```{bash, eval=FALSE}
@@ -195,8 +197,6 @@ qiime diversity alpha-rarefaction \
   --p-metrics 'observed_features' \
   --o-visualization rarefaction_curves.qzv
 ```
-This is just a screenshot from the QIIME2 view website:
-![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_cDNA_V6V8/QIIME2_rarefaction_curves.png)
 
 TNA V6V8
 ```{bash, eval=FALSE}
@@ -207,10 +207,8 @@ qiime diversity alpha-rarefaction \
   --p-metrics 'observed_features' \
   --o-visualization rarefaction_curves.qzv
 ```
-This is just a screenshot from the QIIME2 view website:
-![](/Users/robynwright/Documents/OneDrive/Langille Lab postdoc/COVID/16S_TNA_V6V8/QIIME2_rarefaction_curves.png)
 
-## Filter
+### Filter
 *Not rarefying or removing samples with low numbers of reads*
 ```{bash, eval=FALSE}
 qiime feature-table filter-seqs \
@@ -219,7 +217,7 @@ qiime feature-table filter-seqs \
   --o-filtered-data  representative_sequences_filtered_contamination.qza
 ```
 
-## Insert sequences into tree
+### Insert sequences into tree
 ```{bash, eval=FALSE}
 qiime fragment-insertion sepp \
   --i-representative-sequences representative_sequences_filtered_contamination.qza \
@@ -229,7 +227,7 @@ qiime fragment-insertion sepp \
   --p-threads 12
 ```
 
-## Export all files
+### Export all files
 ```{bash, eval=FALSE}
 qiime tools export \
   --input-path representative_sequences_filtered_contamination.qza \
@@ -305,9 +303,9 @@ parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompl
 
 ### Kraken2 (Standard 19-9-2020 incl. SARS-COV-2)
 ```{bash, eval=FALSE}
-mkdir karken_standard/kraken2_outraw
+mkdir kraken_standard/kraken2_outraw
 mkdir kraken_standard/kraken2_kreport
-parallel -j 1 'kraken2 --use-names --threads 12 --db /home/robyn/tools/kraken_db_Nov20/ --memory-mapping {} --output kraken_standard/kraken2_outraw/{/.}.kraken.txt --report kraken_standard/kraken2_kreport/{/.}.kreport --confidence 0.1' ::: cat_reads/*.fastq
+parallel -j 1 'kraken2 --use-names --threads 12 --db /home/robyn/tools/kraken_db_Nov20/ --memory-mapping {} --output kraken_standard_Nov20/kraken2_outraw/{/.}.kraken.txt --report kraken_standard_Nov20/kraken2_kreport/{/.}.kreport --confidence 0.1' ::: cat_reads/*.fastq
 ```
 
 ### Bracken
@@ -315,6 +313,36 @@ parallel -j 1 'kraken2 --use-names --threads 12 --db /home/robyn/tools/kraken_db
 parallel -j 1 'bracken -d /home/robyn/tools/kraken_db_Nov20/ -i {} -l S -o {.}.bracken -r 150' ::: kraken_standard/kraken2_kreport/*.kreport
 
 #parallel -j 1 'bracken -d /home/robyn/tools/kraken_db_Nov20/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/O3-pos.kreport
+```
+
+### One more sample
+
+O3-pos didn't run the first time and kraken seemed to have some kind of an issue with the file. I've converted it to fasta so hoping this works.
+
+```{bash, eval=FALSE}
+parallel -j 1 'kraken2 --use-names --threads 12 --db /home/robyn/tools/kraken_db_Nov20/ --memory-mapping {} --output kraken_standard_Nov20/kraken2_outraw/{/.}.kraken.txt --report kraken_standard_Nov20/kraken2_kreport/{/.}.kreport --confidence 0.1' ::: cat_reads/*.fasta
+
+parallel -j 1 'bracken -d /home/robyn/tools/kraken_db_Nov20/ -i {} -l S -o {.}.bracken -r 150' ::: kraken_standard_Nov20/kraken2_kreport/O3-pos.kreport
+
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {} --output kraken_RSCv93/kraken2_outraw/{/.}.kraken.txt --report kraken_RSCv93/kraken2_kreport/{/.}.kreport --confidence 0.1' ::: cat_reads/*.fasta
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken_RSCv93/kraken2_kreport/O3-pos.kreport
+```
+
+### Run with different confidence
+
+Standard:
+```{bash, eval=FALSE}
+parallel -j 1 'kraken2 --use-names --threads 12 --db /home/robyn/tools/kraken_db_Nov20/ --memory-mapping {1} --output kraken_standard_Nov20/kraken2_outraw/{1/.}.kraken.txt --report kraken_standard_Nov20/kraken2_kreport/{1/.}_{2}.kreport --confidence {2}' ::: cat_reads/* ::: 0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1
+
+parallel -j 1 'bracken -d /home/robyn/tools/kraken_db_Nov20/ -i {} -l S -o {.}.bracken -r 150' ::: kraken_standard_Nov20/kraken2_kreport/*
+```
+
+RSC v93:
+```{bash, eval=FALSE}
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {1} --output kraken_RSCv93/kraken2_outraw/{1/.}_{2}.kraken.txt --report kraken_RSCv93/kraken2_kreport/{1/.}_{2}.kreport --confidence {2}' ::: cat_reads/* ::: 0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1
+
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken_RSCv93/kraken2_kreport/*
 ```
 
 ## Reads mapping to SARS-CoV-2 genome {.tabset}
@@ -478,6 +506,103 @@ So the sample with the highest % aligned is N5:
 
 ## Coverage of genomes SPAdes/QUAST {.tabset}
 
+### Get genome IDs of taxonomic matches
+
+Currently we have used Kraken2 with two databases: 
+- RefSeq Complete v93
+- Standard databases from Nov 20 (includes SARS-CoV-2 genome)
+
+Get taxid's for all genomes that we want. At the moment I'm not getting any genomes that are from eukaryotes, but this could obviously be changed, and we're keeping only taxa that are above 0.1% relative abundance in the reads after eukaryotic reads are removed:
+This script takes the [genbank assembly summary](ftp://ftp.ncbi.nlm.nih.gov/genomes/ASSEMBLY_REPORTS/) (assembly_summary_genbank.txt), [merged taxid list](https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/) (taxdmp.zip / taxdmp.tar.gz), the folder containing the bracken .bracken and bracken.kreport files and a folder + name that should be used to save the resulting download paths list.
+```{python, eval=FALSE}
+name = 'kraken_RSCV93'
+folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/'+name+'/kraken2_kreport/'
+save_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/'
+ncbi_assembly_fn = '/Users/robynwright/Downloads/assembly_summary_genbank.txt'
+ncbi_merged_fn = '/Users/robynwright/Downloads/taxdump/merged.dmp'
+
+bracken = os.listdir(folder)
+bracken = [f for f in bracken if '.bracken' in f]
+kreport = os.listdir(folder)
+kreport = [f for f in kreport if 'bracken.kreport' in f]
+
+keeping_taxid = []
+domain = ''
+# taxid_domain_dict = {}
+for krep in kreport:
+  fn = krep
+  krep = pd.read_csv(folder+krep, names=['perc', 'reads', 'reads2', 'level', 'classification'], index_col=4, sep='\t')
+  for row in krep.index.values:
+    if krep.loc[row, 'level'] == 'D':
+      domain = krep.loc[row, 'classification']
+      domain = domain.replace(' ', '')
+    if krep.loc[row, 'level'] == 'S':
+      # taxid_domain_dict[row] = domain
+      if domain != 'Eukaryota':
+        keeping_taxid.append(row)
+keeping_taxid = set(keeping_taxid)
+
+taxid = []
+
+for brack in bracken:
+  fn = brack
+  brack = pd.read_csv(folder+brack, header=0, index_col=1, sep='\t')
+  keeping = []
+  for row in set(brack.index.values):
+    if row in keeping_taxid:
+      keeping.append(row)
+  brack = brack.loc[keeping, :]
+  reads_remain = (sum(brack.loc[:, 'new_est_reads'])/100)*0.1
+  brack = brack[brack['new_est_reads'] > reads_remain]
+  taxid = list(taxid)+list(brack.index.values)
+  taxid = set(taxid)
+
+ncbi_assembly = pd.read_csv(ncbi_assembly_fn, header=1, index_col=6, sep='\t')
+ncbi_assembly = ncbi_assembly.reset_index().drop_duplicates(subset='species_taxid', keep='first').set_index('species_taxid')
+ncbi_assembly2 = pd.read_csv(ncbi_assembly_fn, header=1, index_col=5, sep='\t')
+ncbi_assembly2 = ncbi_assembly2.reset_index().drop_duplicates(subset='taxid', keep='first').set_index('taxid')
+merged = pd.read_csv(ncbi_merged_fn, index_col=0, names=['line1', 'new_taxid', 'line2'], sep='\t')
+
+not_in_assembly = []
+taxid_ftp = {}
+merged_tax = {}
+for tax in taxid:
+  assembly_using = ncbi_assembly
+  if tax not in set(ncbi_assembly.index.values):
+    if tax in set(ncbi_assembly2.index.values):
+      assembly_using = ncbi_assembly2
+    else:
+      if tax in set(merged.index.values):
+        new_tax = merged.loc[tax, 'new_taxid']
+        merged_tax[new_tax] = tax
+        tax = new_tax
+      else:
+        not_in_assembly.append(tax)
+        continue
+  ftp = assembly_using.loc[tax, 'ftp_path']
+  ftp = ftp+'/'+ftp.split('/')[-1]+'_genomic.fna.gz'
+  taxid_ftp[tax] = ftp
+
+with open(save_folder+name+'.dict', 'wb') as f:
+    pickle.dump(taxid_ftp, f)
+```
+
+Now download all of the genomes (they will be named by their taxid):
+```{python, eval=FALSE}
+import os
+import pickle
+
+#folder, file = 'kraken_RSCV93/', 'kraken_RSCV93.dict'
+folder, file = 'kraken_standard_Nov20/', 'kraken_standard_Nov20.dict'
+
+with open(file, 'rb') as f:
+    taxid_ftp = pickle.load(f)
+
+for ftp in taxid_ftp:
+  command = 'wget '+taxid_ftp[ftp]+' -O '+folder+str(ftp)+'.fna.gz'
+  os.system(command)
+```
+
 ### Assemble (SPAdes)
 
 Copied all (kneaddata output) across to Compute Canada server.
@@ -499,7 +624,7 @@ for f in range(len(files)):
 
 for a in range(len(fns)):
   fn = fns[a]
-  if fn != 'cDNA-N1-neg': continue
+  if fn == 'cDNA-N1-neg': continue
   script = '#!/bin/bash\n'
   script += '#SBATCH --job-name='+fn+'_spades.job\n'
   script += '#SBATCH --output=/home/rwright/scratch/out/'+fn+'_spades.out\n'
@@ -512,13 +637,519 @@ for a in range(len(fns)):
   script += 'conda activate spades\n'
   script += 'source activate spades\n'
   script += 'mkdir spades_out/'+fn+'\n'
-  script += '/home/rwright/anaconda3/bin/spades.py --meta -1 /home/rwright/scratch/COVID/kneaddata_out_paired/'+pairs[a][0]+' -2 /home/rwright/scratch/COVID/kneaddata_out_paired/'+pairs[a][1]+'-o spades_out/'+fn+'/ -t 40\n'
+  script += '/home/rwright/anaconda3/bin/spades.py --meta -1 /home/rwright/scratch/COVID/kneaddata_out_paired/'+pairs[a][0]+' -2 /home/rwright/scratch/COVID/kneaddata_out_paired/'+pairs[a][1]+' -o spades_out/'+fn+'/ -t 40\n'
   with open(fn+'.job', 'w') as f:
     f.write(script)
   os.system('sbatch '+fn+'.job')
 ```
 
+Copied all back to Vulcan and get only the contigs files:
+```{python, eval=FALSE}
+import os
+
+samples = os.listdir('spades_out/')
+for sample in samples:
+  command = 'cp spades_out/'+sample+'/contigs.fasta spades_contigs/'+sample+'_contigs.fasta'
+  os.system(command)
+
+```
+
+### MetaQUAST
+
+Do separately for each set of genomes.
+
+```{bash, eval=FALSE}
+python /home/robyn/tools/quast-5.0.2/metaquast.py spades_contigs/* -r whole_genomes_NCBI/kraken_RSCV93/* --threads 12 -o quast_results/COVID_MG_kraken_RSCV93_100
+
+python /home/robyn/tools/quast-5.0.2/metaquast.py spades_contigs/* -r whole_genomes_NCBI/kraken_standard_Nov20/* --threads 12 -o quast_results/COVID_MG_kraken_standard_Nov20_100
+```
+
+With minimum contig size set to 100 bp:
+```{bash, eval=FALSE}
+python /home/robyn/tools/quast-5.0.2/metaquast.py spades_contigs/* -r whole_genomes_NCBI/kraken_RSCV93/* --threads 12 -o quast_results/COVID_MG_kraken_RSCV93_100 --min-contig 100
+
+python /home/robyn/tools/quast-5.0.2/metaquast.py spades_contigs/* -r whole_genomes_NCBI/kraken_standard_Nov20/* --threads 12 -o quast_results/COVID_MG_kraken_standard_Nov20_100 --min-contig 100
+```
+
+Separately for each sample:
+```{bash, eval=FALSE}
+parallel -j 1 --link 'python /home/robyn/tools/quast-5.0.2/metaquast.py {} -r whole_genomes_NCBI/kraken_standard_Nov20/* --threads 12 -o quast_results/separate_kraken/{/.}_COVID_MG_kraken_standard_Nov20_100 --min-contig 100' ::: spades_contigs/*
+ 
+parallel -j 3 --link 'python /home/robyn/tools/quast-5.0.2/metaquast.py {} -r whole_genomes_NCBI/kraken_RSCV93/* --threads 12 -o quast_results/separate_kraken/{/.}_COVID_MG_kraken_RSCV93_100 --min-contig 100' ::: spades_contigs/*
+```
+
+Separately for each sample with reads not contigs</br>
+Single sample test:
+```{bash, eval=FALSE}
+(/usr/bin/time -v python /home/robyn/tools/quast-5.0.2/metaquast.py cat_reads/cDNA-N1-neg.fasta -r whole_genomes_NCBI/kraken_RSCV93/* --threads 12 -o quast_results/reads_cDNA-N1-neg --min-contig 100) 2> cDNA-N1-neg_quast_reads_time.txt
+```
+
+Get only summaries and reports for each sample:
+```{python, eval=FALSE}
+import os
+
+folder = 'separate_kraken_standard/'
+new_fol = 'summaries_separate_kraken/'
+samples = os.listdir(folder)
+
+for sample in samples:
+  #rep = '/report.html'
+  #frac = '/summary/TSV/Genome_fraction.tsv'
+  #la = '/summary/TSV/Largest_alignment.tsv'
+  #lc = '/summary/TSV/Largest_contig.tsv'
+  #nc = '/summary/TSV/num_contigs.tsv'
+  ta = '/summary/TSV/Total_aligned_length.tsv'
+  to_copy = [ta]#rep, frac, la, lc, nc]
+  for copy in to_copy:
+    string = 'cp '+folder+sample+copy+' '+new_fol+sample+'_'+copy.split('/')[-1]
+    os.system(string)
+```
 
 ## Generating MAGs Anv'io {.tabset}
+
+## Nonpareil 3
+
+Install (using Source Code Installation [here](https://nonpareil.readthedocs.io/en/latest/installation.html)):
+```{bash, eval=FALSE}
+git clone git://github.com/lmrodriguezr/nonpareil.git
+cd nonpareil
+make
+make prefix=/home/vinko/tools install
+```
+
+Skipped preprocessing the reads (this would just be converting from fasta to fastq)</br>
+Run single sample:
+```{bash, eval=FALSE}
+nonpareil -s cat_reads/cDNA-N1-neg.fastq -T kmer -f fastq -b output -X 100
+```
+The only thing to be careful of is that -X (number of samples to take) must be at least 100 times less than the number of reads. So in the following script I'm counting the number of reads in a file and dividing that by 100 before starting. If this is bigger than 1000 (the default value to use) then I'm just using 1000 to save on run-time.
+
+Run all samples:
+```{python, eval=FALSE}
+import os
+import math
+
+fp = 'cat_reads/'
+cat_reads = sorted(os.listdir(fp))
+
+for fq in cat_reads:
+  count = len(open(fp+fq).readlines())/4
+  sample = int(math.floor(count/100))
+  if sample > 1000: sample = 1000
+  np = 'nonpareil -s '+fp+fq+' -T kmer -f fastq -b '+'nonpareil/'+fq.split('.')[0]+' -X '+str(sample)
+  os.system(np)
+```
+
+O3-pos:
+```{python, eval=False}
+import os
+import math
+
+fp = 'cat_reads/'
+cat_reads = sorted(os.listdir(fp))
+
+for fq in cat_reads:
+  if fq != 'O3-pos.fastq': continue
+  count = len(open(fp+fq).readlines())/4
+  sample = 1000
+  np = 'nonpareil -s '+fp+fq+' -T kmer -f fastq -b '+'nonpareil/'+fq.split('.')[0]+' -X '+str(sample)
+  os.system(np)
+```
+
+## HUMAnN3
+
+Run on all samples (5/3/21):
+```{bash, eval=FALSE}
+parallel -j 1 'humann --input {} --output humann3_out/ --threads 12 --nucleotide-database /home/shared/HUMANN/chocophlan/ --protein-database /home/shared/HUMANN/uniref/' ::: cat_reads/*
+```
+
+Try again O3-pos (it was the fastq that was a problem and this was run after the fasta file so it overwrote the output):
+```{bash, eval=FALSE}
+parallel -j 1 'humann --input {} --output humann3_out/ --threads 12 --nucleotide-database /home/shared/HUMANN/chocophlan/ --protein-database /home/shared/HUMANN/uniref/' ::: cat_reads/O3-pos.fasta
+```
+
+Move bugs lists and merge (the merge isn't working for some reason, but there are very few classifications anyway so I'm leaving this):
+```{bash, eval=FALSE}
+mkdir humann3_out/bugs_lists/
+for i in humann3_out/* ; do echo $i/*_bugs_list.tsv ; done
+humann3_out/bugs_lists/ ; done
+merge_metaphlan_tables.py humann3_out/bugs_lists/*tsv > humann3_out/metaphlan_merged.tsv
+```
+
+Merge other tables:
+```{bash, eval=False}
+humann_join_tables -s --input humann3_out/ --file_name pathabundance --output humann3_out/humann3_pathabundance.tsv
+humann_join_tables -s --input humann3_out/ --file_name pathcoverage --output humann3_out/humann3_pathcoverage.tsv
+humann_join_tables -s --input humann3_out/ --file_name genefamilies --output humann3_out/humann3_genefamilies.tsv
+```
+
+Renormalise files:
+```{bash, eval=FALSE}
+humann_renorm_table --input humann3_pathabundance.tsv --units relab --output humann3_pathabundance_relab.tsv
+humann_split_stratified_table --input humann3_pathabundance_relab.tsv --output ./
+
+humann_renorm_table --input humann3_genefamilies.tsv --units relab --output humann3_genefamilies_relab.tsv
+humann_split_stratified_table --input humann3_genefamilies_relab.tsv --output ./
+```
+
+Remove other intermediates :
+```{bash, eval=FALSE}
+find . -name \*aligned.sam -type f -delete
+find . -name \*unaligned.fa -type f -delete
+find . -name \*aligned.tsv -type f -delete
+```
+
+Renormalise gene numbers (taking into account gene length):
+```{bash, eval=FALSE}
+humann_renorm_table --input humann3_genefamilies.tsv --output humann3_genefamilies_cpm.tsv --units cpm --update-snames
+```
+
+# Composition
+
+## Standard Kraken database (i.e. including SARS-CoV-2)
+
+Read in kraken:
+```{python, results='hide', fig.keep='all'}
+name = 'kraken_standard_Nov20'
+results_folder = folder+'/metagenome/'+name+'/kraken2_kreport/'
+save_folder = folder+'metagenome/'
+
+with open(save_folder+name+'.dict', 'rb') as f:
+  taxid = pickle.load(f)
+
+bracken = os.listdir(results_folder)
+bracken = [f for f in bracken if '.bracken' in f]
+tax_names = {}
+
+first = True
+
+for sample in bracken:
+  sn = sample
+  # if sample != 'cDNA-N1-neg.bracken': continue
+  sample = pd.read_csv(results_folder+sample, header=0, sep='\t')
+  keeping = []
+  for row in sample.index.values:
+    if sample.loc[row, 'taxonomy_id'] in taxid:
+      keeping.append(True)
+      if sample.loc[row, 'taxonomy_id'] not in tax_names:
+        tax_names[sample.loc[row, 'taxonomy_id']] = sample.loc[row, 'name']
+    else:
+      keeping.append(False)
+  sample = pd.DataFrame(sample.loc[keeping, :].set_index('taxonomy_id').loc[:, 'new_est_reads'])
+  # sample = sample
+  # sample = pd.DataFrame(sample)
+  if first:
+    all_samples = sample.rename(columns={'new_est_reads':sn.split('.')[0]})
+    first = False
+  else:
+    sample = sample.rename(columns={'new_est_reads':sn.split('.')[0]})
+    all_samples = pd.concat([all_samples, sample]).fillna(value=0)
+all_samples_kraken_stan = all_samples.groupby(by=all_samples.index, axis=0).sum()
+```
+
+QUAST results:
+```{python, results='hide', fig.keep='all'}
+quast_folder = folder+'/metagenome/quast/quast_results/summaries_separate_kraken/'
+quast = os.listdir(quast_folder)
+quast = sorted([f for f in quast if name in f])
+file_types = ['Genome_fraction', 'Largest_alignment', 'Largest_contig', 'num_contigs']
+dfs = [[], [], [], []]
+df_added = [True, True, True, True]
+
+for sample in all_samples_kraken_stan.columns:
+  for fn in quast:
+    if sample in fn:
+      ftype = fn.split('.')[0].split('_')
+      ftype = ftype[-2]+'_'+ftype[-1]
+      if ftype == '100_report': continue
+      ind = -1
+      for a in range(len(file_types)):
+        if file_types[a] == ftype: ind = a
+      quast_result = pd.read_csv(quast_folder+fn, index_col=0, header=0, sep='\t').transpose().rename(columns={101564:sample}).rename(columns={'101564':sample})
+      quast_result = quast_result.rename(index={quast_result.index.values[0]:'101564'})
+      quast_result = pd.DataFrame(quast_result.loc[:, sample])
+      if df_added[ind]:
+        new_df = pd.DataFrame(quast_result)
+        df_added[ind] = False
+        dfs[ind] = new_df
+      else:
+        new_df = pd.concat([dfs[ind], quast_result]).fillna(value=0)
+        dfs[ind] = new_df
+
+for d in range(len(dfs)):
+  df = dfs[d].groupby(by=dfs[d].index, axis=0).sum().fillna(value=0)
+  df.index = df.index.map(str)
+  df.columns = df.columns.astype(str)
+  dfs[d] = df
+
+dfs_stan = list(dfs)
+for d in range(len(dfs_stan)):
+  dfs_stan[d] = pd.DataFrame(dfs_stan[d])
+```
+
+Plot correlation:
+```{python, results='hide', fig.keep='all'}
+all_samples_kraken = all_samples_kraken_stan
+all_samples_kraken.index = all_samples_kraken.index.map(str) 
+all_samples_kraken.columns = all_samples_kraken.columns.astype(str) 
+kraken_perc = all_samples_kraken.divide(all_samples_kraken.sum(axis=0), axis=1).multiply(100)
+
+# samples = sorted(kraken_perc.columns)
+samples = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N1-pos', 'N2-pos', 'N3-pos', 'N4-pos', 'N5-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O1-pos', 'O2-pos', 'O3-pos', 'O4-pos', 'O5-pos', 'cDNA-N1-neg', 'cDNA-N2-neg', 'cDNA-N3-neg', 'cDNA-N4-neg', 'cDNA-N5-neg', 'cDNA-N1-pos', 'cDNA-N2-pos', 'cDNA-N3-pos', 'cDNA-N4-pos', 'cDNA-N5-pos', 'cDNA-O1-neg', 'cDNA-O2-neg', 'cDNA-O3-neg', 'cDNA-O4-neg', 'cDNA-O5-neg', 'cDNA-O1-pos', 'cDNA-O2-pos', 'cDNA-O3-pos', 'cDNA-O4-pos', 'cDNA-O5-pos']
+
+dfs = dfs_stan
+df_log = dfs[1]
+df_log[df_log == 0] = 0.01
+df_log = np.log10(df_log)
+mi, ma = min(df_log.min()), max(df_log.max())
+colormap = mpl.cm.get_cmap('plasma', 256)
+norm = mpl.colors.Normalize(vmin=mi, vmax=ma)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+fig = plt.figure(figsize=(20,10))
+subplots = fig.subplots(4, 10)
+a, b = 0, 0
+for sample in samples:
+  ax = plt.sca(subplots[a, b])
+  x, y = [], []
+  la, lc, nc = [], [], []
+  for row in kraken_perc.index.values:
+    reads = kraken_perc.loc[row, sample]
+    gen_frac = dfs[0].loc[row, sample]
+    large_align = df_log.loc[row, sample]
+    large_contig = dfs[2].loc[row, sample]
+    num_contig = dfs[3].loc[row, sample]
+    x.append(reads), y.append(gen_frac)
+    la.append(large_align), lc.append(large_contig), nc.append(num_contig)
+    plt.scatter(np.log10(reads), np.log10(gen_frac), marker='o', s=num_contig*2, color=m.to_rgba(large_align), edgecolor='gray', lw=1)
+    #plt.scatter(reads, gen_frac, marker='o', s=num_contig, color=m.to_rgba(large_align), edgecolor='gray', lw=1)
+  #plt.semilogy(), plt.semilogx()
+  #plt.xlim([pow(10, 0.01), pow(10, max(x))]), plt.ylim([pow(10, 0.01), pow(10, max(y))])
+  plt.yticks(fontsize=8), plt.xticks(fontsize=8)
+  plt.title(sample, fontsize=10)
+  b += 1
+  if b > 9:
+    a += 1
+    b = 0
+fig.text(0, 0.5, 'Log10(Genome fraction (%))', rotation=90, va='center', ha='left')
+fig.text(0.5, 0, 'Log10(Relative abundance (%))', va='bottom', ha='center')
+plt.tight_layout()
+plt.show()
+plt.savefig(save_folder+'Reads vs genome fraction standard.png', dpi=600, bbox_inches='tight')
+```
+
+## Kraken RefSeq Complete
+
+Read in kraken:
+```{python, results='hide', fig.keep='all'}
+name = 'kraken_RSCV93'
+results_folder = folder+'/metagenome/'+name+'/kraken2_kreport/'
+save_folder = folder+'metagenome/'
+
+with open(save_folder+name+'.dict', 'rb') as f:
+  taxid = pickle.load(f)
+
+bracken = os.listdir(results_folder)
+bracken = [f for f in bracken if '.bracken' in f]
+tax_names = {}
+
+first = True
+
+for sample in bracken:
+  sn = sample
+  # if sample != 'cDNA-N1-neg.bracken': continue
+  sample = pd.read_csv(results_folder+sample, header=0, sep='\t')
+  keeping = []
+  for row in sample.index.values:
+    if sample.loc[row, 'taxonomy_id'] in taxid:
+      keeping.append(True)
+      if sample.loc[row, 'taxonomy_id'] not in tax_names:
+        tax_names[sample.loc[row, 'taxonomy_id']] = sample.loc[row, 'name']
+    else:
+      keeping.append(False)
+  sample = pd.DataFrame(sample.loc[keeping, :].set_index('taxonomy_id').loc[:, 'new_est_reads'])
+  # sample = sample
+  # sample = pd.DataFrame(sample)
+  if first:
+    all_samples = sample.rename(columns={'new_est_reads':sn.split('.')[0]})
+    first = False
+  else:
+    sample = sample.rename(columns={'new_est_reads':sn.split('.')[0]})
+    all_samples = pd.concat([all_samples, sample]).fillna(value=0)
+all_samples_kraken_RSC = all_samples.groupby(by=all_samples.index, axis=0).sum()
+```
+
+QUAST results:
+```{python, results='hide', fig.keep='all'}
+quast_folder = folder+'/metagenome/quast/quast_results/summaries_separate_kraken/'
+quast = os.listdir(quast_folder)
+quast = sorted([f for f in quast if name in f])
+file_types = ['Genome_fraction', 'Largest_alignment', 'Largest_contig', 'num_contigs']
+dfs = [[], [], [], []]
+df_added = [True, True, True, True]
+
+for sample in all_samples_kraken_RSC.columns:
+  #if sample != 'N3_neg': continue
+  for fn in quast:
+    if sample in fn:
+      ftype = fn.split('.')[0].split('_')
+      ftype = ftype[-2]+'_'+ftype[-1]
+      if ftype == '100_report': continue
+      ind = -1
+      for a in range(len(file_types)):
+        if file_types[a] == ftype: ind = a
+      quast_result = pd.read_csv(quast_folder+fn, index_col=0, header=0, sep='\t').transpose().rename(columns={1007104:sample}).rename(columns={'1007104':sample})
+      quast_result = quast_result.rename(index={quast_result.index.values[0]:'1007104'})
+      quast_result = pd.DataFrame(quast_result.loc[:, sample])
+      if df_added[ind]:
+        new_df = pd.DataFrame(quast_result)
+        df_added[ind] = False
+        dfs[ind] = new_df
+      else:
+        new_df = pd.concat([dfs[ind], quast_result]).fillna(value=0)
+        dfs[ind] = new_df
+
+for d in range(len(dfs)):
+  df = dfs[d].groupby(by=dfs[d].index, axis=0).sum().fillna(value=0)
+  df.index = df.index.map(str)
+  df.columns = df.columns.astype(str)
+  dfs[d] = df
+
+dfs_RSC = list(dfs)
+for d in range(len(dfs_RSC)):
+  dfs_RSC[d] = pd.DataFrame(dfs_RSC[d])
+```
+
+Plot correlation:
+```{python, results='hide', fig.keep='all'}
+all_samples_kraken = all_samples_kraken_RSC
+all_samples_kraken.index = all_samples_kraken.index.map(str) 
+all_samples_kraken.columns = all_samples_kraken.columns.astype(str) 
+kraken_perc = all_samples_kraken.divide(all_samples_kraken.sum(axis=0), axis=1).multiply(100)
+
+# samples = sorted(kraken_perc.columns)
+samples = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N1-pos', 'N2-pos', 'N3-pos', 'N4-pos', 'N5-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O1-pos', 'O2-pos', 'O3-pos', 'O4-pos', 'O5-pos', 'cDNA-N1-neg', 'cDNA-N2-neg', 'cDNA-N3-neg', 'cDNA-N4-neg', 'cDNA-N5-neg', 'cDNA-N1-pos', 'cDNA-N2-pos', 'cDNA-N3-pos', 'cDNA-N4-pos', 'cDNA-N5-pos', 'cDNA-O1-neg', 'cDNA-O2-neg', 'cDNA-O3-neg', 'cDNA-O4-neg', 'cDNA-O5-neg', 'cDNA-O1-pos', 'cDNA-O2-pos', 'cDNA-O3-pos', 'cDNA-O4-pos', 'cDNA-O5-pos']
+
+dfs = dfs_RSC
+df_log = dfs[1]
+df_log[df_log == 0] = 0.01
+df_log = np.log10(df_log)
+mi, ma = min(df_log.min()), max(df_log.max())
+colormap = mpl.cm.get_cmap('plasma', 256)
+norm = mpl.colors.Normalize(vmin=mi, vmax=ma)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+fig = plt.figure(figsize=(20,10))
+subplots = fig.subplots(4, 10)
+a, b = 0, 0
+for sample in samples:
+  ax = plt.sca(subplots[a, b])
+  x, y = [], []
+  la, lc, nc = [], [], []
+  for row in kraken_perc.index.values:
+    reads = kraken_perc.loc[row, sample]
+    gen_frac = dfs[0].loc[row, sample]
+    large_align = df_log.loc[row, sample]
+    large_contig = dfs[2].loc[row, sample]
+    num_contig = dfs[3].loc[row, sample]
+    x.append(reads), y.append(gen_frac)
+    la.append(large_align), lc.append(large_contig), nc.append(num_contig)
+    plt.scatter(np.log10(reads), np.log10(gen_frac), marker='o', s=num_contig*2, color=m.to_rgba(large_align), edgecolor='gray', lw=1)
+    #plt.scatter(reads, gen_frac, marker='o', s=num_contig, color=m.to_rgba(large_align), edgecolor='gray', lw=1)
+  #plt.semilogy(), plt.semilogx()
+  #plt.xlim([pow(10, 0.01), pow(10, max(x))]), plt.ylim([pow(10, 0.01), pow(10, max(y))])
+  plt.yticks(fontsize=8), plt.xticks(fontsize=8)
+  plt.title(sample, fontsize=10)
+  b += 1
+  if b > 9:
+    a += 1
+    b = 0
+fig.text(0, 0.5, 'Log10(Genome fraction (%))', rotation=90, va='center', ha='left')
+fig.text(0.5, 0, 'Log10(Relative abundance (%))', va='bottom', ha='center')
+plt.tight_layout()
+plt.show()
+plt.savefig(save_folder+'Reads vs genome fraction RSCV93.png', dpi=600, bbox_inches='tight')
+```
+
+## Correlations
+
+```{python, results='hide', fig.keep='all'}
+# samples.reverse()
+# dfs_RSC, all_samples_kraken_RSC
+# dfs_stan, all_samples_kraken_stan
+all_samples_kraken_RSC_perc = all_samples_kraken_RSC.divide(all_samples_kraken_RSC.sum(axis=0), axis=1).multiply(100)
+all_samples_kraken_stan_perc = all_samples_kraken_stan.divide(all_samples_kraken_stan.sum(axis=0), axis=1).multiply(100)
+
+plt.figure(figsize=(10,20))
+ax1 = plt.subplot2grid((1,20), (0,0), frameon=False, colspan=18)
+ax_cbar = plt.subplot2grid((5,20), (0,19))
+
+colormap = mpl.cm.get_cmap('plasma', 256)
+norm = mpl.colors.Normalize(vmin=-0.3, vmax=0.3)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+count = 0
+y = []
+all_corr = []
+
+for sample in samples:
+  reads_RSC, reads_stan, perc_RSC, perc_stan, gf_RSC, gf_stan, la_RSC, la_stan, lc_RSC, lc_stan, nc_RSC, nc_stan = [], [], [], [], [], [], [], [], [], [], [], []
+  this_corr = []
+  for row in all_samples_kraken_RSC.index.values:
+    reads_RSC.append(all_samples_kraken_RSC.loc[row, sample])
+    perc_RSC.append(all_samples_kraken_RSC_perc.loc[row, sample])
+    gf_RSC.append(dfs_RSC[0].loc[row, sample])
+    la_RSC.append(dfs_RSC[1].loc[row, sample])
+    lc_RSC.append(dfs_RSC[2].loc[row, sample])
+    nc_RSC.append(dfs_RSC[3].loc[row, sample])
+  for row in all_samples_kraken_stan.index.values:
+    reads_stan.append(all_samples_kraken_stan.loc[row, sample])
+    perc_stan.append(all_samples_kraken_stan_perc.loc[row, sample])
+    gf_stan.append(dfs_stan[0].loc[row, sample])
+    la_stan.append(dfs_stan[1].loc[row, sample])
+    lc_stan.append(dfs_stan[2].loc[row, sample])
+    nc_stan.append(dfs_stan[3].loc[row, sample])
+  x = [[0, 1, 2, 3], [5, 6, 7, 8], [10, 11, 12, 13], [15, 16, 17, 18]]
+  comps = [[gf_RSC, la_RSC, lc_RSC, nc_RSC], [gf_RSC, la_RSC, lc_RSC, nc_RSC], [gf_stan, la_stan, lc_stan, nc_stan], [gf_stan, la_stan, lc_stan, nc_stan]]
+  comp_to = [reads_RSC, perc_RSC, reads_stan, perc_stan]
+  for a in range(len(comps)):
+    for b in range(len(comps[a])):
+      # corr, p = pearsonr(comps[a][b], comp_to[a])
+      this_comp, this_comp_to = comps[a][b], comp_to[a]
+      this_comp = [c+1 for c in this_comp]
+      this_comp_to = [c+1 for c in this_comp_to]
+      corr, p = pearsonr(np.log10(this_comp), np.log10(this_comp_to))
+      # corr, p = spearmanr(np.log10(comps[a][b]), np.log10(comp_to[a]))
+      # corr, p = spearmanr(comps[a][b], comp_to[a])
+      this_corr.append(corr)
+      col = m.to_rgba(corr)
+      ax1.bar(x[a][b], 1, bottom=count, width=1, color=col, edgecolor='k', )
+      if p < 0.05:
+        ax1.text(x[a][b], count+0.5, '*', ha='center', va='center')
+
+  y.append(count+0.5)
+  count += 1
+  all_corr.append(corr)
+
+cb1 = mpl.colorbar.ColorbarBase(ax_cbar, cmap=colormap, norm=norm, orientation='vertical')
+plt.sca(ax1)
+ax1.set_ylim([0, 40]), ax1.set_xlim([-0.5, 18.6])
+plt.yticks(y, samples)
+x = x[0]+x[1]+x[2]+x[3]
+plt.xticks(x, ['Genome fraction', 'Largest alignment', 'Largest contig', 'Number of contigs', 'Genome fraction', 'Largest alignment', 'Largest contig', 'Number of contigs', 'Genome fraction', 'Largest alignment', 'Largest contig', 'Number of contigs', 'Genome fraction', 'Largest alignment', 'Largest contig', 'Number of contigs', ], rotation=90)
+ax1.xaxis.tick_top()
+x = [1.5, 6.5, 11.5, 16.5]
+name = ['RefSeq Complete\nReads $vs$', 'RefSeq Complete\nRelative abundance $vs$', 'Standard\nReads $vs$', 'Standard\nRelative abundance $vs$']
+for a in range(len(x)):
+  ax1.text(x[a], 44, name[a], ha='center', va='bottom', fontweight='bold')
+plt.show()   
+plt.savefig(save_folder+'Correlation pearsons log.png', dpi=600, bbox_inches='tight')
+print(all_corr)
+```
+
+
+
+```{python}
+#print(reads_RSC, perc_RSC)
+```
 
 

@@ -21,15 +21,19 @@ library(dplyr)
 library(exactRankTests)
 library(ggplot2)
 library(ggnewscale)
-library(knitr)
 library(metacoder)
-library(microbiome)
 library(nlme)
-library(philr)
-library(phyloseq)
-library(reticulate)
 library(vegan)
 library(compositions)
+library("data.table")
+library(tidyr)
+library("plyr")
+library(randomcoloR)
+library(DESeq2)
+library(stringr)
+library(metagMisc)
+
+folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/AtPATH_IBD/'
 ```
 
 ```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
@@ -447,11 +451,155 @@ qiime tools export \
   --output-path exports
 ```
 
-# Basic summary {.tabset}
+
+# R
+
+I'll focus on CLR-transformation and removing samples with below 2500 reads here.
+
+Import data:
+```{R}
+# metadata_fn = paste(py$save_path, 'metadata_reduced_ft.csv', sep='')
+# ft_fn = paste(py$save_path, 'ft_2_reduced_metadata.csv', sep='')
+
+asv_table <- read.csv(paste(py$save_path, 'ft_2_reduced_metadata.csv', sep='')) #read in table from file
+sampledata <- read.csv(paste(py$save_path, 'metadata_reduced_ft_ccsplit.csv', sep='')) #read in the metadata table
+phy_tree <- read_tree(paste(folder, "exports/tree.nwk", sep='')) #read in the phylogenetic tree
+
+taxonomy <- asv_table[, c(1, 971)]
+taxonomy <- separate(data = taxonomy, col = taxonomy, into = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"), sep = "\\;") #separate the taxonomy table so each phylogenetic level is its own column
+taxmat <- taxonomy[,-1] #remove the OTU ID column from the taxonomy table
+rownames(taxmat) <- taxonomy[,1] #and now give the taxonomy table the OTU IDs as row names
+
+asv_table = asv_table[, 1:970]
+samples = colnames(asv_table)[2:970]
+for (s in 1:length(samples)) {
+  samples[s] = substring(samples[s], 2)
+  samples[s] = gsub("\\.", "-", samples[s])
+}
+
+asv_table_num = data.matrix(asv_table) #convert the ASV table to a numeric matric
+rownames(asv_table_num) = asv_table[,1] #give the matrix row names
+asv_table = as.matrix(asv_table_num) #convert it to a matrix
+colnames(asv_table)[2:970] = samples
+
+samples <- sampledata[, 2:719] #get the metadata columns
+rownames(samples) = sampledata[,1] #and add the sample names as row names
+samples = data.frame(samples, stringsAsFactors = FALSE) #convert this to a data frame
+
+#convert these to phyloseq objects
+ASV = otu_table(asv_table, taxa_are_rows = TRUE)
+TAX = tax_table(taxmat)
+SAMPLE = sample_data(samples)
+taxa_names(TAX) <- taxonomy[,1]
+physeq = phyloseq(ASV,phy_tree,TAX,SAMPLE)
+```
+
+Remove samples with below 2500 reads, removing features that are only present as singletons, have fewer than 10 reads in total or are present in fewer than 5% of samples and CLR-normalise:
+```{R}
+physeq_red = prune_samples(sample_sums(physeq)>=2500, physeq)
+physeq_red = phyloseq::filter_taxa(physeq_red, function(x) max(x) > 1, TRUE)
+physeq_red = phyloseq::filter_taxa(physeq_red, function(x) sum(x) > 10, TRUE)
+physeq_red = phyloseq_filter_prevalence(physeq_red, prev.trh = 0.05)
+
+physeq_clr <- microbiome::transform(physeq_red, "clr") #convert to CLR
+```
+
+## Ordination {.tabset}
+
+### Aitchison distance ASV (Euclidean on CLR)
+
+```{R, fig.keep='all', message=FALSE}
+options(warn = -1) 
+ps.ord.ait <- ordinate(physeq_clr, "PCoA", "euclidean")
+plot_ordination(physeq_clr, ps.ord.ait, type="samples", color="CASE_CONTROL", shape="GROUP") 
+```
+
+Adonis tests:
+```{R}
+distance <- phyloseq::distance(physeq_clr, method="euclidean", weighted=F)
+print(adonis(distance ~ sample_data(physeq_clr)$CASE_CONTROL))
+print(adonis(distance ~ sample_data(physeq_clr)$GROUP))
+print(adonis(distance ~ sample_data(physeq_clr)$EXTRACTION_NUMBER))
+```
+
+### PHILR ASV
+
+```{R, fig.keep='all', message=FALSE}
+physeq_philr = physeq_red
+physeq_philr <- transform_sample_counts(physeq_philr, function(x) x+1)
+phy_tree(physeq_philr) <- makeNodeLabel(phy_tree(physeq_philr), method="number", prefix='n')
+otu.table <- t(otu_table(physeq_philr))
+tree <- phy_tree(physeq_philr)
+metadata <- sample_data(physeq_philr)
+tax <- tax_table(physeq_philr)
+
+physeq.philr <- philr(otu.table, tree, part.weights='enorm.x.gm.counts', ilr.weights='blw.sqrt')
+philr.dist <- dist(physeq.philr, method="euclidean")
+ps.ord.philr <- ordinate(physeq_philr, 'PCoA', distance=philr.dist)
+plot_ordination(physeq_philr, ps.ord.philr, type="samples", color="CASE_CONTROL", shape="GROUP") 
+```
+
+Adonis tests:
+```{R}
+print(adonis(philr.dist ~ sample_data(physeq_philr)$CASE_CONTROL))
+print(adonis(philr.dist ~ sample_data(physeq_philr)$GROUP))
+print(adonis(philr.dist ~ sample_data(physeq_philr)$EXTRACTION_NUMBER))
+```
+
+### Aitchison distance genus (Euclidean on CLR)
+
+```{R, fig.keep='all', message=FALSE}
+ps.rank = tax_glom(physeq_clr, taxrank="ta6", NArm=FALSE)
+ps.ord.ait.gen <- ordinate(ps.rank, "PCoA", "euclidean")
+plot_ordination(ps.rank, ps.ord.ait.gen, type="samples", color="CASE_CONTROL", shape="GROUP") 
+```
+
+Adonis tests:
+```{R}
+distance <- phyloseq::distance(ps.rank, method="euclidean", weighted=F)
+print(adonis(distance ~ sample_data(ps.rank)$CASE_CONTROL))
+print(adonis(distance ~ sample_data(ps.rank)$GROUP))
+print(adonis(distance ~ sample_data(ps.rank)$EXTRACTION_NUMBER))
+```
+
+### PHILR genus
+
+```{R, fig.keep='all', message=FALSE}
+physeq_philr_rank = physeq_red
+physeq_philr_rank <- transform_sample_counts(physeq_philr_rank, function(x) x+1)
+physeq_philr_rank <- tax_glom(physeq_philr_rank, taxrank="ta6", NArm=FALSE)
+phy_tree(physeq_philr_rank) <- makeNodeLabel(phy_tree(physeq_philr_rank), method="number", prefix='n')
+otu.table <- t(otu_table(physeq_philr_rank))
+tree <- phy_tree(physeq_philr_rank)
+metadata <- sample_data(physeq_philr_rank)
+tax <- tax_table(physeq_philr_rank)
+
+physeq.philr.rank <- philr(otu.table, tree, part.weights='enorm.x.gm.counts', ilr.weights='blw.sqrt')
+philr.dist.rank <- dist(physeq.philr.rank, method="euclidean")
+ps.ord.philr.rank <- ordinate(physeq_philr_rank, 'PCoA', distance=philr.dist)
+plot_ordination(physeq_philr_rank, ps.ord.philr.rank, type="samples", color="CASE_CONTROL", shape="GROUP") 
+```
+
+Adonis tests:
+```{R}
+print(adonis(philr.dist.rank ~ sample_data(physeq_philr_rank)$CASE_CONTROL))
+print(adonis(philr.dist.rank ~ sample_data(physeq_philr_rank)$GROUP))
+print(adonis(philr.dist.rank ~ sample_data(physeq_philr_rank)$EXTRACTION_NUMBER))
+```
+
+### RDA
+
+```{R}
+md_test <- c("SDC_AGE_CALC", "PM_STANDING_HEIGHT_AVG", "PM_WAIST_AVG", "PM_BIOIMPED_WEIGHT", "PM_WAIST_HIP_RATIO", "PM_BIOIMPED_FFM", "SALT_SEASONING", "NUTS_SEEDS_SERVINGS_PER_DAY", "NUT_VEG_DAY_QTY", "REFINED_GRAIN_SERVINGS_DAY_QTY", "SLE_LIGHT_EXP", "SDC_GENDER", "PM_BIOIMPED_BMI", "NUT_JUICE_DAY_QTY", "HS_DENTAL_VISIT_LAST", "CASE_CONTROL", "GROUP")
+```
+
+# Python
+
+## Basic summary Python {.tabset}
 
 No filtering low depth samples or removal of ASVs (aside from what was very low abundance in QIIME2).
 
-## Sort metadata
+### Sort metadata
 
 Metadata is currently in three different tables: original, baseline and followup. Some of the variable names are the same between these, some are not. I've identified which match between them in the variable labels file, and have added a column with a new name for each. Now to add all of the metadata to a single file and check, adding only the data for samples that we actually have.
 ```{python, results='hide', fig.keep='all', eval=FALSE}
@@ -541,7 +689,7 @@ with open('all_file_names.list', 'wb') as f:
     pickle.dump(all_fastq, f)
 ```
 
-## Import data
+### Import data
 
 Sort data (matching sample names between the feature table and reducing the metadata table to only include samples that are in the feature table):
 ```{python, results='hide', fig.keep='all', eval=FALSE}
@@ -687,7 +835,7 @@ metadata.to_csv(save_path+'metadata_reduced_ft.csv')
 ft.to_csv(save_path+'ft_2_reduced_metadata.csv')
 ```
 
-## Summarise by metadata variables {.tabset}
+### Summarise by metadata variables {.tabset}
 Show all samples, samples grouped by healthy/IBD/future IBD</br>
 Groups: </br>
 - IBD</br>
@@ -705,7 +853,7 @@ ft = pd.read_csv(ft_fn, index_col=0, header=0).drop('taxonomy', axis=1)
 metadata_group = metadata.set_index('GROUP')
 ```
 
-### Gender
+#### Gender
 
 ```{python, results='hide', fig.keep='all'}
 def plot_two_category_discrete(category_dict, category, md, percent=False):
@@ -758,7 +906,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-### Age
+#### Age
 
 ```{python, results='hide', fig.keep='all'}
 def adjacent_values(vals, q1, q3):
@@ -838,7 +986,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-### Rarefaction curves
+#### Rarefaction curves
 
 Using the curves calculated by QIIME2 & saved to csv
 ```{python, results='hide', fig.keep='all'}
@@ -872,7 +1020,7 @@ plt.ylabel('Observed features')
 plt.show()
 ```
 
-### Number of reads
+#### Number of reads
 
 Note that at this point no samples have been removed and the only ASVs that were removed were the ones that were present at less than 5 total reads.
 ```{python, results='hide', fig.keep='all'}
@@ -914,7 +1062,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-### Number of ASVs
+#### Number of ASVs
 ```{python, results='hide', fig.keep='all'}
 plt.figure(figsize=(10,10))
 axis = [plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)]
@@ -946,7 +1094,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-### Shannon
+#### Shannon
 ```{python, results='hide', fig.keep='all'}
 plt.figure(figsize=(10,10))
 axis = [plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)]
@@ -980,7 +1128,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-### Simpsons
+#### Simpsons
 ```{python, results='hide', fig.keep='all'}
 plt.figure(figsize=(10,10))
 axis = [plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)]
@@ -1014,9 +1162,9 @@ plt.tight_layout()
 plt.show()
 ```
 
-# Ordination plots
+## Ordination plots
 
-## Without filtering {.tabset}
+### Without filtering {.tabset}
 
 Not normalised at all or had any low depth samples removed.</br>
 Reduce the number of features in the feature table (so we don't run out of memory calculating PHILR distances) - and use this for all plots so they're all based on the same number of features:
@@ -1033,7 +1181,7 @@ print('Reduced features=', ft_red.shape[0])
 We have a median of 27457 reads per sample, so we'll divide this by 1000, giving a limit of 27.457 reads. This takes us from 27,674 features to 6,667.</br>
 </br>
 
-### Bray-Curtis absolute
+#### Bray-Curtis absolute
 
 ```{python, results='hide', fig.keep='all', cache=TRUE}
 metadata = pd.read_csv(metadata_fn, index_col=0, header=0)
@@ -1060,7 +1208,7 @@ handles = [Patch(facecolor=colors[color], edgecolor='k', label='') for color in 
 plt.legend(handles=handles, labels=labels, loc='upper left')
 ```
 
-### Bray-Curtis relative abundance
+#### Bray-Curtis relative abundance
 
 Converted from read counts to relative abundance
 
@@ -1089,7 +1237,7 @@ handles = [Patch(facecolor=colors[color], edgecolor='k', label='') for color in 
 plt.legend(handles=handles, labels=labels, loc='upper left')
 ```
 
-### Aitchison distance (Euclidean on CLR)
+#### Aitchison distance (Euclidean on CLR)
 
 Convert to CLR:
 ```{R, results='hide', fig.keep='all', eval=FALSE}
@@ -1133,7 +1281,7 @@ handles = [Patch(facecolor=colors[color], edgecolor='k', label='') for color in 
 plt.legend(handles=handles, labels=labels, loc='upper left')
 ```
 
-### PHILR distance
+#### PHILR distance
 
 Make taxonomy matrix:
 ```{python, results='hide', fig.keep='all'}
@@ -1220,26 +1368,26 @@ handles = [Patch(facecolor=colors[color], edgecolor='k', label='') for color in 
 plt.legend(handles=handles, labels=labels, loc='upper left')
 ```
 
-## Taxa bar plots
+### Taxa bar plots
 Just regular bar plots at different levels
 
-## Heat maps
+### Heat maps
 Showing samples ordered by some distance metric and abundance of taxa (genus level?) within the samples
 
-# Differential abundance
+## Differential abundance
 ANCOM
 
-# Random Forests {.tabset}
+## Random Forests {.tabset}
 Run for lots of different categories and at different levels
 
-## Healthy/Future IBD/IBD
+### Healthy/Future IBD/IBD
 
-## Age
+### Age
 
-## Sex
+### Sex
 
-## Diet
+### Diet
 
-## etc
+### etc
 
-# Combine differential abundance and random forest
+## Combine differential abundance and random forest

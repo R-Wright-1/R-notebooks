@@ -1,0 +1,471 @@
+---
+title: "COVID wastewater"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+---
+
+```{R, results='hide', fig.keep='all', message=FALSE, include=FALSE, eval=FALSE}
+library(reticulate)
+#library(kableExtra)
+library(knitr)
+library(phyloseq)
+```
+
+```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+import numpy as np
+import os
+import pandas as pd
+import math
+import matplotlib.pyplot as plt
+from scipy.cluster import hierarchy
+import matplotlib as mpl
+from matplotlib_venn import venn2
+import csv
+from matplotlib.patches import Patch
+import pickle
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+```
+
+Kneaddata with COVID genome:
+```{bash, eval=FALSE}
+conda activate kneaddata
+parallel -j 1 --link --progress 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/robyn/COVID/metagenome_COVID-TNA_cDNA-MetaG_RunNS56/covid_ref_genome/ --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 12 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: ParraCOVID-WGS/*_R1_001.fastq.gz ::: ParraCOVID-WGS/*_R2_001.fastq.gz
+```
+
+Move the COVID reads:
+```{bash, eval=FALSE}
+for i in kneaddata_out/*contam* ; do cp $i kneaddata_contam/ ; done
+for i in kneaddata_contam/*unmatched* ; do rm $i ; done
+
+for i in kneaddata_contam/*_1.fastq ; do mv $i kneaddata_contam/read1/ ; done
+for i in kneaddata_contam/*_2.fastq ; do mv $i kneaddata_contam/read2/ ; done
+
+kneaddata_read_count_table --input kneaddata_out --output kneaddata_read_counts.txt
+```
+
+Join lanes:
+```{bash, eval=FALSE}
+concat_lanes.pl kneaddata_contam/read1/* -o cat_lanes -p 4
+concat_lanes.pl kneaddata_contam/read2/* -o cat_lanes_2 -p 4
+```
+
+Assemble contigs (metaSPADES):
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress '/home/robyn/anaconda3/bin/spades.py --meta -1 {1} -2 {2} -t 12 -o metaSPADES/{1/.}' ::: cat_lanes/*_R1.fastq ::: cat_lanes/*_R2.fastq
+```
+
+Count number of reads in files:
+```{bash, eval=FALSE}
+for i in cat_lanes/* ; do echo $(cat $i|wc -l)/4|bc ; done
+```
+
+File 1: 0 (S1-SWBD)
+File 2: 20,268 (S2-WWMC)
+File 3: 0 (S3-WWH)
+File 4: 0 (S4-WWMG)
+File 5: 0 (S5-WWMA)
+File 6: 21,380 (S6-WWW)
+File 7: 0 (S7-WWMA)
+File 8: 0 (S8-WWNW)
+File 9: 0 (S9-WWW)
+File 10: 161,327 (S10-WWMB)
+
+Run QUAST (note: doesn't work in kneaddata environment):
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'python /home/robyn/tools/quast-5.0.2/metaquast.py {1}/contigs.fasta --references-list reference-list.txt --threads 10 -o quast_results/{1/} --min-contig 100' ::: metaSPADES/*
+```
+
+Genome fraction:
+S2-WWMC: 11.017%
+S6-WWW: 3.768%
+S10-WWMB: 17.077%
+
+# Map reads
+Join reads:
+```{bash, eval=FALSE}
+concat_paired_end.pl -p 4 -o cat_reads cat_lanes/*.fastq 
+```
+
+Convert fastq to fasta:
+```{bash, eval=FALSE}
+for i in cat_reads/* ; do sed -n '1~4s/^@/>/p;2~4p' $i > $i.fasta ; done
+```
+
+Run QUAST:
+```{bash, eval=FALSE}
+parallel -j 1 --link --progress 'python /home/robyn/tools/quast-5.0.2/metaquast.py {1} --references-list reference-list.txt --threads 10 -o quast_results/{1/.}_fasta --min-contig 100' ::: cat_reads/*.fasta
+```
+
+Genome fraction:
+S2-WWMC: 
+S6-WWW: 
+S10-WWMB: 
+
+# Kraken
+
+Join lanes and reads:
+```{bash, eval=FALSE}
+concat_lanes.pl read1/* -o cat_lanes_paired -p 4
+concat_lanes.pl read2/* -o cat_lanes_paired_2 -p 4
+concat_paired_end.pl -p 4 -o cat_reads_paired cat_lanes_paired/*.fastq 
+```
+
+Run kraken:
+```{bash, eval=FALSE}
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93 --memory-mapping {1} --output kraken2_outraw/{1/.}_refseq_{2}.kraken.txt --report kraken2_kreport/{1/.}_refseq_{2}.kreport --confidence {2}' ::: cat_reads/*.fastq ::: 0.10
+```
+
+Run Bracken:
+```{bash, eval=FALSE}
+parallel -j 12 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93 -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*.kreport
+```
+
+Comparison:
+```{python}
+reads_start = [3601563, 1918395, 2298603, 3675726, 3782209, 2557938, 1852943, 3744219, 4697198, 4881325]
+reads_bowtie_covid = [0, 40536, 0, 0, 0, 42760, 0, 0, 0, 322654]
+reads_bowtie_not_covid = [3145449, 1663310, 1997319, 3281719, 3275096, 2179442, 1522403, 2685337, 4107986, 3895391]
+reads_covid_unclassified = [0, 31810, 0, 0, 0, 23605, 0, 0, 0, 314834]
+reads_covid_classified = [0, 8726, 0, 0, 0, 19155, 0, 0, 0, 7820]
+reads_not_covid_unclassified = [2118501, 1134027, 1732302, 2472213, 3145172, 1773441, 1797223, 2662021, 4179122, 3953402]
+reads_not_covid_classified = [4172010, 2192276, 2261599, 4089676, 3404183, 2585419, 1247473, 2708453, 4022907, 3837214]
+
+reads_start = [a*2 for a in reads_start]
+reads_bowtie_covid = [a*2 for a in reads_bowtie_covid]
+reads_bowtie_not_covid = [a*2 for a in reads_bowtie_not_covid]
+
+ax1, ax2 = plt.subplot(421), plt.subplot(422)
+ax3, ax4 = plt.subplot(423), plt.subplot(424)
+ax5, ax6 = plt.subplot(425), plt.subplot(426)
+ax7, ax8 = plt.subplot(427), plt.subplot(428)
+axes = [[ax1, ax2], [ax3, ax4], [ax5, ax6], [ax7, ax8]]
+fs = 10
+ax1.set_title('Reads in raw files', fontsize=fs) #reads_start
+ax3.set_title('Reads after kneaddata', fontsize=fs) #reads_bowtie_covid, reads_bowtie_not_covid
+ax5.set_title('COVID reads classified by Kraken2', fontsize=fs) #reads_covid_classified, reads_covid_unclassified
+ax7.set_title('Not COVID reads classified by Kraken2', fontsize=fs) #reads_not_covid_classified, reads_not_covid_unclassified
+ax2.set_title('Reads in raw files (% total)', fontsize=fs) #reads_start
+ax4.set_title('Reads after kneaddata (% total)', fontsize=fs) #reads_bowtie_covid, reads_bowtie_not_covid
+ax6.set_title('COVID reads classified \nby Kraken2 (% total)', fontsize=fs) #reads_covid_classified, reads_covid_unclassified
+ax8.set_title('Not COVID reads classified \nby Kraken2 (% total)', fontsize=fs) #reads_not_covid_classified, reads_not_covid_unclassified
+
+data = [reads_start, [reads_bowtie_not_covid, reads_bowtie_covid], [reads_covid_unclassified, reads_covid_classified], [reads_not_covid_unclassified, reads_not_covid_classified]]
+colors = ['', ['b', 'r'], ['k', 'orange'], ['k', 'orange']]
+for a in range(len(axes)):
+  if a == 0:
+    for b in range(len(data[a])):
+      axes[a][0].bar(b, data[a][b], color='k', width=0.8)
+      axes[a][1].bar(b, 100, color='k', width=0.8)
+  else:
+    bottom1 = [0]*10
+    bottom2 = [0]*10
+    for c in range(len(data[a][0])):
+      axes[a][0].bar(c, data[a][0][c], bottom=bottom1[c], color=colors[a][0])
+      bottom1[c] += data[a][0][c]
+      axes[a][0].bar(c, data[a][1][c], bottom=bottom1[c], color=colors[a][1])
+      
+      perc = (data[a][0][c]/data[0][c])*100
+      axes[a][1].bar(c, perc, bottom=bottom2[c], color=colors[a][0])
+      bottom2[c] += perc
+      perc = (data[a][1][c]/data[0][c])*100
+      axes[a][1].bar(c, perc, bottom=bottom2[c], color=colors[a][1])
+  for b in range(len(axes[a])):
+    plt.sca(axes[a][b])
+    plt.xticks([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10'], fontsize=fs-2), plt.yticks(fontsize=fs-2)
+    plt.xlim([-0.5, 9.5])
+
+legend1 = [Patch(facecolor=colors[1][1], label='SARS-CoV-2'), Patch(facecolor=colors[1][0], label='Other')]
+legend2 = [Patch(facecolor=colors[2][1], label='Classified'), Patch(facecolor=colors[2][0], label='Unclassified')]
+ax4.legend(handles=legend1, loc='upper left', bbox_to_anchor=(1.05, 1.1), fontsize=fs-2)
+ax6.legend(handles=legend2, loc='upper left', bbox_to_anchor=(1.05, 1.1), fontsize=fs-2)
+
+ax4.set_ylim([0, 100]), ax8.set_ylim([0, 100])
+plt.tight_layout()
+plt.show()
+```
+
+
+Realised that somehow the forward and reverse reads are not joining. Going to look into this now:
+```{python}
+from Bio import SeqIO
+file = 'cat_reads/S10-WWMB.fastq'
+
+records = SeqIO.parse(file, "fastq")
+headers = []
+for record in records:
+  headers.append(record.id)
+
+unique = set([])
+r1, r2 = 0, 0
+for header in headers:
+  if header[:-1] not in unique: unique.add(header[:-1])
+  if header[-1] == '1': r1 += 1
+  elif header[-1] == '2': r2 += 1
+
+print(len(unique))
+print(r1, r2)
+```
+
+Pear:
+```{bash, eval=FALSE}
+run_pear.pl -p 4 -o stitched_reads cat_lanes/*
+```
+
+ea-utils:
+```{bash, eval=FALSE}
+/home/robyn/tools/ExpressionAnalysis-ea-utils-bd148d4/clipper/fastq-join cat_lanes/S2-WWMC_S6_R1.fastq.gz cat_lanes/S2-WWMC_S6_R2.fastq.gz -o ea_assembled/S2-WWMC_S6.fastq
+
+/home/robyn/tools/ExpressionAnalysis-ea-utils-bd148d4/clipper/fastq-join cat_lanes/S6-WWW_S26_R1.fastq.gz cat_lanes/S6-WWW_S26_R2.fastq.gz -o ea_assembled/S6-WWW_S26.fastq
+
+/home/robyn/tools/ExpressionAnalysis-ea-utils-bd148d4/clipper/fastq-join cat_lanes/S10-WWMB_S32_R1.fastq.gz cat_lanes/S10-WWMB_S32_R2.fastq.gz -o ea_assembled/S10-WWMB_S32.fastq
+```
+
+# ARTIC protocol
+
+Adapted from [here](https://github.com/CDCgov/SARS-CoV-2_Sequencing/tree/master/protocols/BFX-UT_ARTIC_Illumina)
+
+Join lanes:
+```{bash, eval=FALSE}
+concat_lanes.pl ParraCOVID-WGS/* -o cat_lanes_raw -p 4
+```
+
+## STEP 1
+
+Make index file with COV reference genome:
+```{bash, eval=FALSE}
+bwa index ARTIC_protocol/SARS-CoV-2_MN908947.3.fasta
+```
+
+Map:
+```{bash, eval=FALSE}
+bwa mem -t 12 ARTIC_protocol/SARS-CoV-2_MN908947.3.fasta  cat_lanes_raw/S10-WWMB_S32_R1.fastq.gz cat_lanes_raw/S10-WWMB_S32_R2.fastq.gz | samtools sort | samtools view -F 4 -o ARTIC_protocol/bwa/S10-WWMB.sorted.bam
+```
+
+Map all samples:
+```{bash, eval=FALSE}
+parallel -j 1 --link 'bwa mem -t 12 ARTIC_protocol/SARS-CoV-2_MN908947.3.fasta \
+{1} {2} | samtools sort | samtools view -F 4 -o ARTIC_protocol/bwa/{1/.}.sorted.bam' \
+ ::: cat_lanes_raw/*_R1.fastq.gz ::: cat_lanes_raw/*_R2.fastq.gz
+```
+
+```{bash, eval=FALSE}
+python
+import os
+files = os.listdir('bwa/')
+for f in files:
+  rn = f.split('_')[0]+'.sorted.bam'
+  os.system('mv bwa/'+f+' bwa/'+rn)
+```
+
+Step 2 is legacy
+
+## STEP 3
+
+Install iVar:
+```{bash, eval=FALSE}
+conda install ivar
+```
+
+Get primer scheme [here](https://github.com/artic-network/artic-ncov2019/tree/master/primer_schemes/nCoV-2019/V3)
+```{bash, eval=FALSE}
+https://raw.githubusercontent.com/artic-network/artic-ncov2019/master/primer_schemes/nCoV-2019/V3/nCoV-2019.primer.bed
+```
+
+Run iVar to remove primers:
+```{bash, eval=FALSE}
+ivar trim -e -i ARTIC_protocol/bwa/S10-WWMB.sorted.bam -b ARTIC_protocol/nCoV-2019_V3.primer.bed  -p ARTIC_protocol/bwa/S10-WWMB.primertrim
+
+OUT:
+Trimmed primers from 80.99% (1093873) of reads.
+74.03% (999880) of reads were quality trimmed below the minimum length of 30 bp and were not writen to file.
+17.8% (240415) of reads started outside of primer regions. Since the -e flag was given, these reads were written to file.
+```
+
+Run iVar to remove primers all samples:
+```{bash, eval=FALSE}
+parallel -j 1 'ivar trim -e -i {1} -b ARTIC_protocol/nCoV-2019_V3.primer.bed  -p {1.}.primertrim' ::: ARTIC_protocol/bwa/*.sorted.bam
+```
+
+```{bash, eval=FALSE}
+python
+import os
+files = os.listdir('bwa/')
+for f in files:
+  if 'primertrim' in f:
+    rn = f.replace('sorted.', '')
+    os.system('mv bwa/'+f+' bwa/'+rn)
+```
+
+## STEP 4
+
+Re-sort bams:
+```{bash, eval=FALSE}
+samtools sort ARTIC_protocol/bwa/S10-WWMB.primertrim.bam -o ARTIC_protocol/bwa/S10-WWMB.primertrim.sorted.bam
+```
+
+Re-sort bams all samples:
+```{bash, eval=FALSE}
+parallel -j 1 'samtools sort {1} -o {1.}.sorted.bam' ::: ARTIC_protocol/bwa/*.primertrim.bam
+```
+
+## STEP 5
+
+Get the consensus fasta that includes all the variants found, without replacing missing sequence with reference (missing sequence simply becomes "N")
+
+```{bash, eval=FALSE}
+samtools mpileup -A -d 1000 -B -Q 0 --reference ARTIC_protocol/SARS-CoV-2_MN908947.3.fasta ARTIC_protocol/bwa/S10-WWMB.primertrim.sorted.bam | ivar consensus -p ARTIC_protocol/bwa/S10-WWMB.consensus -n N
+```
+
+On all samples:
+```{bash, eval=FALSE}
+parallel -j 1 'samtools mpileup -A -d 1000 -B -Q 0 --reference ARTIC_protocol/SARS-CoV-2_MN908947.3.fasta {1} | ivar consensus -p {1.}.consensus -n N' ::: ARTIC_protocol/bwa/*.primertrim.sorted.bam
+```
+
+## STEP 6
+
+### QC samtools 
+
+Installed samtools from source, but need to specify the version in /usr/local/bin to use coverage:
+```{bash, eval=FALSE}
+/usr/local/bin/samtools coverage ARTIC_protocol/bwa/S10-WWMB.sorted.bam -o ARTIC_protocol/bwa/S10-WWMB.samcov.txt
+```
+
+All samples:
+```{bash, eval=FALSE}
+parallel -j 1 '/usr/local/bin/samtools coverage {1} -o ARTIC_protocol/QC/{1/.}.samcov.txt' ::: ARTIC_protocol/bwa/*.sorted.bam
+```
+
+### QC count number of unambiguous bases
+
+```{bash, eval=FALSE}
+grep -v ">" ARTIC_protocol/bwa/S10-WWMB.consensus.fa | grep -o -E "C|A|T|G" | wc -l
+
+Output: 4823
+```
+
+All samples:
+```{bash, eval=FALSE}
+parallel -j 1 'grep -v ">" {1} | grep -o -E "C|A|T|G" | wc -l' ::: ARTIC_protocol/bwa/*.consensus.fa
+
+Output: 4823 (S10)
+65 (S1)
+3326 (S2)
+64 (S3)
+97 (S4)
+64 (S5)
+1177 (S6)
+65 (S7)
+96 (S8)
+95 (S9)
+```
+
+### QC QUAST
+
+```{bash, eval=FALSE}
+python /home/robyn/tools/quast-5.0.2/quast.py ARTIC_protocol/bwa/S10-WWMB.consensus.fa -r ARTIC_protocol/SARS-CoV-2_MN908947.3.fasta --features ARTIC_protocol/SARS-CoV-2_MN908947.3.gff --ref-bam ARTIC_protocol/bwa/S10-WWMB.sorted.bam --output-dir quast_results/S10-WWMB
+
+Output: 
+Genome fraction 15.911
+Total aligned length 4758
+```
+
+Read file distribution:
+```{bash, eval=FALSE}
+awk 'NR%4 == 2 {lengths[length($0)]++} END {for (l in lengths) {print l, lengths[l]}}' S10-WWMB_S32_R2.fastq
+```
+
+ALl samples:
+```{bash, eval=FALSE}
+parallel -j 1 --link 'python /home/robyn/tools/quast-5.0.2/quast.py {2} -r ARTIC_protocol/SARS-CoV-2_MN908947.3.fasta --features ARTIC_protocol/SARS-CoV-2_MN908947.3.gff --ref-bam {1} --output-dir quast_results/{1/.}' ::: ARTIC_protocol/bwa/*.sorted.bam ::: ARTIC_protocol/bwa/*.consensus.fa
+```
+
+ALl samples bam only:
+```{bash, eval=FALSE}
+parallel -j 1 --link 'python /home/robyn/tools/quast-5.0.2/quast.py {1} -r ARTIC_protocol/SARS-CoV-2_MN908947.3.fasta --features ARTIC_protocol/SARS-CoV-2_MN908947.3.gff --output-dir quast_results_bam/{1/.}' ::: ARTIC_protocol/bwa/*.sorted.bam
+```
+
+# Comparison
+
+## kneaddata + bowtie2 + spades + QUAST
+
+### Reads kneaddata 
+
+File 1: 0 (S1-SWBD)
+File 2: 20,268 (S2-WWMC)
+File 3: 0 (S3-WWH)
+File 4: 0 (S4-WWMG)
+File 5: 0 (S5-WWMA)
+File 6: 21,380 (S6-WWW)
+File 7: 0 (S7-WWMA)
+File 8: 0 (S8-WWNW)
+File 9: 0 (S9-WWW)
+File 10: 161,327 (S10-WWMB)
+
+### QUAST
+          First protocol                                            ARTIC protocol                
+Sample    Total aligned     Genome fraction               Sample    Total aligned   Genome fraction
+S1        0                 0                             S1        0                 0
+S2        3292              11.017                        S2        3294              11.016
+S3        0                 0                             S3        0                 0
+S4        0                 0                             S4        0                 0
+S5        0                 0                             S5        0                 0
+S6        1126              3.768                         S6        1119              3.742
+S7        0                 0                             S7        0                 0
+S8        0                 0                             S8        0                 0
+S9        0                 0                             S9        0                 0
+S10       5103              17.077                        S10       4758              15.911
+
+## ARTIC protocol
+
+### Samtools
+
+Sample    Num reads   Covered bases   Coverage
+S1        55388       5169            17.2859
+S2        98714       7660            25.6162
+S3        34796       4864            16.2659
+S4        82421       5299            17.7206
+S5        208184      5206            17.4096
+S6        309939      6102            20.406
+S7        337443      4810            16.0853
+S8        1963503     4643            15.5269
+S9        286956      5384            18.0049
+S10       1350636     9172            30.6725
+
+### Count unambiguous bases
+
+S1: 65
+S2: 3326
+S3: 64
+S4: 97
+S5: 64
+S6: 1177
+S7: 65
+S8: 96
+S9: 95
+S10: 4823
+
+### QUAST
+
+Sample    Total aligned     Genome fraction
+S1        0                 0
+S2        3294              11.016
+S3        0                 0
+S4        0                 0
+S5        0                 0
+S6        1119              3.742
+S7        0                 0
+S8        0                 0
+S9        0                 0
+S10       4758              15.911

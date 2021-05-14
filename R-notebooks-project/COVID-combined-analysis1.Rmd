@@ -1,0 +1,3032 @@
+---
+title: COVID sample analysis
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+fig_width: 10
+fig_height: 10
+---
+
+# Sample summary
+
+**COVID samples:**</br>
+- 40 participants:</br>
+  - 20 COVID +ve</br>
+  - 20 COVID -ve</br>
+- Naso- and oro-pharyngeal samples from each participant</br>
+</br>
+**COVID samples sequenced using:**</br>
+- TNA 16S rRNA gene V4-V5 (all participants)</br>
+- TNA 16S rRNA gene V6-V8 (all participants)</br>
+- cDNA 16S rRNA gene V6-V8 (all participants)</br>
+- TNA shotgun metagenome (reduced number of 5 +ve and 5 -ve participants)</br>
+- cDNA shotgun metagenome (reduced number of 5 +ve and 5 -ve participants)</br>
+
+# Read in data {.tabset}
+
+##  
+
+## Read files
+
+```{R, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+library(reticulate)
+# library(kableExtra)
+library(knitr)
+library(vegan)
+library(SRAdb)
+```
+
+```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+import numpy as np
+import os
+import pandas as pd
+from lifelines.utils import concordance_index
+import math
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+from scipy.cluster import hierarchy
+from scipy.spatial import distance
+import matplotlib as mpl
+from matplotlib.lines import Line2D
+import csv
+from matplotlib.patches import Patch
+import matplotlib.transforms as transforms
+import pickle
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+from scipy.stats import pearsonr, spearmanr
+import xml.etree.ElementTree as et
+
+folder_tna_v4v5 = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/16S_V4V5/'
+folder_tna_v6v8 = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/16S_TNA_V6V8/'
+folder_cdna_v6v8 = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/16S_cDNA_V6V8/'
+folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/'
+folder_rsc = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/kraken_RSCV93/'
+folder_krakstan = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/kraken_standard_Nov20/'
+folder_quast = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/quast/quast_results/summaries_separate_kraken/'
+```
+
+Amplicon:
+```{python, results='hide', fig.keep='all'}
+tna_v4v5 = pd.read_csv(folder_tna_v4v5+'/exports/feature-table_w_tax.txt', header=0, index_col=0, sep='\t')
+tna_v6v8 = pd.read_csv(folder_tna_v6v8+'/exports/feature-table_w_tax.txt', header=0, index_col=0, sep='\t')
+cdna_v6v8 = pd.read_csv(folder_cdna_v6v8+'/exports/feature-table_w_tax.txt', header=0, index_col=0, sep='\t')
+amplicon = [tna_v4v5, tna_v6v8, cdna_v6v8]
+samples = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N6-neg', 'N7-neg', 'N8-neg', 'N9-neg', 'N10-neg', 'N11-neg', 'N12-neg', 'N13-neg', 'N14-neg', 'N15-neg', 'N16-neg', 'N17-neg', 'N18-neg', 'N19-neg', 'N20-neg', 'N1-pos', 'N2-pos', 'N3-pos', 'N4-pos', 'N5-pos', 'N6-pos', 'N7-pos', 'N8-pos', 'N9-pos', 'N10-pos', 'N11-pos', 'N12-pos', 'N13-pos', 'N14-pos', 'N15-pos', 'N16-pos', 'N17-pos', 'N18-pos', 'N19-pos', 'N20-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O6-neg', 'O7-neg', 'O8-neg', 'O9-neg', 'O10-neg', 'O11-neg', 'O12-neg', 'O13-neg', 'O14-neg', 'O15-neg', 'O16-neg', 'O17-neg', 'O18-neg', 'O19-neg', 'O20-neg', 'O1-pos', 'O2-pos', 'O3-pos', 'O4-pos', 'O5-pos', 'O6-pos', 'O7-pos', 'O8-pos', 'O9-pos', 'O10-pos', 'O11-pos', 'O12-pos', 'O13-pos', 'O14-pos', 'O15-pos', 'O16-pos', 'O17-pos', 'O18-pos', 'O19-pos', 'O20-pos']
+
+amp_tax = [{}, {}, {}]
+for a in range(len(amplicon)):
+  for row in amplicon[a].index.values:
+    amp_tax[a][row] = amplicon[a].loc[row, 'taxonomy']
+  amplicon[a].drop('taxonomy', axis=1, inplace=True)
+```
+
+Metagenome Kraken:
+```{python, results='hide', fig.keep='all'}
+samples_tna = ['N1-neg', 'N2-neg', 'N3-neg', 'N4-neg', 'N5-neg', 'N1-pos', 'N2-pos', 'N3-pos', 'N4-pos', 'N5-pos', 'O1-neg', 'O2-neg', 'O3-neg', 'O4-neg', 'O5-neg', 'O1-pos', 'O2-pos', 'O3-pos', 'O4-pos', 'O5-pos']
+samples_cdna = ['cDNA-'+sample for sample in samples_tna]
+samples_shotgun = [samples_tna, samples_cdna]
+save_folder = folder+'metagenome/'
+confidence = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+
+def get_kraken(name_db, results_folder_db):
+  with open(save_folder+name_db+'.dict', 'rb') as f:
+    taxid = pickle.load(f)
+  tax_names = {}
+  na_samples, na_samples_red = [], []
+  for a in range(len(samples_shotgun)):
+    first = True
+    for sample in samples_shotgun[a]:
+      for conf in confidence:
+        sn = sample+'_'+str(conf)+'.bracken'
+        this_sample = pd.read_csv(results_folder_db+sn, header=0, sep='\t')
+        keeping = []
+        for row in this_sample.index.values:
+          if this_sample.loc[row, 'taxonomy_id'] in taxid:
+            keeping.append(True)
+          else:
+            keeping.append(False)
+          tax_names[this_sample.loc[row, 'taxonomy_id']] = this_sample.loc[row, 'name']
+        this_sample = pd.DataFrame(this_sample.set_index('taxonomy_id').loc[:, 'new_est_reads'])
+        this_sample = this_sample.rename(columns={'new_est_reads':sn[:-8]})
+        this_sample_red = pd.DataFrame(this_sample.loc[keeping, :])
+        if first:
+          all_samples = pd.DataFrame(this_sample)
+          all_samples_red = pd.DataFrame(this_sample_red)
+          first = False
+        else:
+          all_samples = pd.concat([all_samples, this_sample]).fillna(value=0)
+          all_samples = all_samples.groupby(by=all_samples.index, axis=0).sum()
+          all_samples_red = pd.concat([all_samples_red, this_sample_red]).fillna(value=0)
+          all_samples_red = all_samples_red.groupby(by=all_samples_red.index, axis=0).sum()
+    na_samples.append(all_samples)
+    na_samples_red.append(all_samples_red)
+  return na_samples, na_samples_red, tax_names
+    
+na_samples_rsc, na_samples_red_rsc, tax_names_rsc = get_kraken('kraken_RSCV93', folder_rsc+'/kraken2_kreport/')
+na_samples_krakstan, na_samples_red_krakstan, tax_names_krakstan = get_kraken('kraken_standard_Nov20', folder_krakstan+'/kraken2_kreport/')
+```
+
+Metagenome QUAST:
+```{python, results='hide', fig.keep='all'}
+file_types = ['Genome_fraction', 'Largest_alignment', 'Largest_contig', 'num_contigs', 'Total_aligned_length']
+
+def get_quast(name_db, samples):
+  quast_folder = folder+'/metagenome/quast/quast_results/summaries_separate_kraken/'
+  quast = os.listdir(quast_folder)
+  quast_using = sorted([f for f in quast if name_db in f])
+  dfs = [[], [], [], [], []]
+  df_added = [True, True, True, True, True]
+  for sample in samples:
+    for fn in quast:
+      if sample in fn:
+        ftype = fn.split('.')[0].split('_')
+        ftype = ftype[-2]+'_'+ftype[-1]
+        if ftype == '100_report': continue
+        ind = -1
+        for a in range(len(file_types)):
+          if file_types[a] == ftype: ind = a
+        quast_result = pd.read_csv(quast_folder+fn, index_col=0, header=0, sep='\t').transpose()
+        col1 = quast_result.columns[0]
+        quast_result = quast_result.rename(columns={col1:sample})
+        quast_result = quast_result.rename(index={quast_result.index.values[0]:str(col1)})
+        quast_result = pd.DataFrame(quast_result.loc[:, sample])
+        if df_added[ind]:
+          new_df = pd.DataFrame(quast_result)
+          df_added[ind] = False
+          dfs[ind] = new_df
+        else:
+          new_df = pd.concat([dfs[ind], quast_result]).fillna(value=0)
+          dfs[ind] = new_df
+
+  for d in range(len(dfs)):
+    df = dfs[d].groupby(by=dfs[d].index, axis=0).sum().fillna(value=0)
+    df.index = df.index.map(str)
+    df.columns = df.columns.astype(str)
+    dfs[d] = df
+  return dfs
+
+dfs_tna_krakstan = get_quast('kraken_standard_Nov20', samples_tna)
+dfs_cdna_krakstan = get_quast('kraken_standard_Nov20', samples_cdna)
+dfs_tna_rsc = get_quast('RSCV93', samples_tna)
+dfs_cdna_rsc = get_quast('RSCV93', samples_cdna)
+```
+
+# Number of reads {.tabset}
+
+## Amplicon per sample
+
+We can see here that generally each sample shows a similar pattern in the number of reads it has in comparison to other samples across the different regions/nucleic acid types sequenced, with positive samples having fewer reads than negative and nasal positive samples having particularly low numbers of reads. 
+
+```{python, results='hide', fig.keep='all'}
+fig = plt.figure(figsize=(9,9))
+ax1 = plt.subplot(311)
+ax2 = plt.subplot(312)
+ax3 = plt.subplot(313)
+axes, labels = [ax1, ax2, ax3], ['TNA 16S rRNA gene V4-V5', 'TNA 16S rRNA gene V6-V8', 'cDNA 16S rRNA gene V6-V8']
+
+count, x = 0, []
+for sample in samples:
+  for a in range(len(amplicon)):
+    if sample not in amplicon[a].columns: continue
+    s = amplicon[a].loc[:, sample].sum()
+    col = '#0154B2'
+    if 'pos' in sample: col = '#B20154'
+    fill = 'w'
+    if 'N' in sample: fill = col
+    axes[a].bar(count, s, color=fill, edgecolor=col, width=0.6)
+  x.append(count)
+  count += 1
+
+for a in range(len(axes)):
+  plt.sca(axes[a])
+  if a < 2: plt.xticks([])
+  else: plt.xticks(x, samples, rotation=90, fontsize=6)
+  plt.ylabel('Number of reads'), plt.title(labels[a]), plt.xlim([-0.5, count-0.5])
+  plt.semilogy()
+
+plt.tight_layout()
+plt.show()
+```
+
+## Amplicon grouped
+
+This doesn't include samples with below 2000 reads. Note that T-tests are shown for the number of reads below with some other alpha diversity metrics.
+
+```{python, results='hide', fig.keep='all'}
+fig = plt.figure(figsize=(12,4))
+ax1 = plt.subplot(131)
+ax2 = plt.subplot(132)
+ax3 = plt.subplot(133)
+axes, labels = [ax1, ax2, ax3], ['TNA 16S rRNA gene V4-V5', 'TNA 16S rRNA gene V6-V8', 'cDNA 16S rRNA gene V6-V8']
+
+count, x = 0, []
+groups, xlabs = [['N', 'neg'], ['N', 'pos'], ['O', 'neg'], ['O', 'pos']], ['Nasal\nnegative', 'Nasal\npositive', 'Oral\nnegative', 'Oral\npositive']
+for a in range(len(amplicon)):
+  for b in range(len(groups)):
+    grouping = []
+    for sample in samples:
+      if sample[0] == groups[b][0] and groups[b][1] in sample:
+        if sample not in amplicon[a].columns: continue
+        s = amplicon[a].loc[:, sample].sum()
+        if s >= 2000: grouping.append(s)
+    col, fill, med = '#0154B2', 'w', 'k'
+    if 'pos' in groups[b][1]: col = '#B20154'
+    if groups[b][0] == 'N': fill, med = col, 'w'
+    box = axes[a].boxplot(grouping, positions=[b], patch_artist=True)
+    
+    for element in ['boxes', 'whiskers', 'fliers', 'means', 'medians', 'caps']:
+      plt.setp(box[element], color=col)
+    plt.setp(box['boxes'], facecolor=fill), plt.setp(box['medians'], color=med)
+  plt.sca(axes[a])
+  #axes[a].set_ylim([10, 50000])
+  if a == 0: plt.ylabel('Number of reads')
+  plt.semilogy()
+  plt.title(labels[a])
+  plt.xticks([0, 1, 2, 3], xlabs)
+
+plt.tight_layout()
+plt.show()
+```
+
+## Metagenome per sample {.tabset}
+
+### Reads in files before and after kneaddata
+
+```{python, results='hide', fig.keep='all'}
+samples_reads = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/kneaddata_read_counts_covid_genome.txt', sep='\t', header=0, index_col=0)
+snames = list(samples_reads.index.values)
+pltx, pltlab = [], []
+plt.figure(figsize=(12,6))
+ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+
+in_name = [['N', 'neg'], ['N', 'pos'], ['O', 'neg'], ['O', 'pos']]
+c1, c2 = 0, 0
+for a in range(len(in_name)):
+  col, fill, med = '#0154B2', 'w', 'k'
+  if 'pos' in in_name[a]: col = '#B20154'
+  if in_name[a][0] == 'N': fill, med = col, 'w'
+  for b in range(len(snames)):
+    if snames[b][0] == in_name[a][0] and in_name[a][1] in snames[b]:
+      initial = samples_reads.loc[snames[b], 'raw pair1']
+      final = samples_reads.loc[snames[b], 'final pair1']
+      ax1.bar(c1, initial, width=0.8, color=fill, edgecolor=col)
+      ax2.bar(c1, final, width=0.8, color=fill, edgecolor=col)
+      pltx.append(c1), pltlab.append(snames[b].split('_')[0])
+      c1 += 1
+    elif snames[b][5] == in_name[a][0] and in_name[a][1] in snames[b]:
+      initial = samples_reads.loc[snames[b], 'raw pair1']
+      final = samples_reads.loc[snames[b], 'final pair1']
+      ax3.bar(c2, initial, width=0.8, color=fill, edgecolor=col)
+      ax4.bar(c2, final, width=0.8, color=fill, edgecolor=col)
+      c2 += 1
+
+axes = [ax1, ax2, ax3, ax4]
+for ax in axes:
+  plt.sca(ax)
+  ax.set_xlim([pltx[0]-0.5, pltx[-1]+0.5])
+  if ax in [ax1, ax3]:
+    if ax == ax1: ax.set_ylabel('TNA\nNumber of reads')
+    else: ax.set_ylabel('cDNA\nNumber of reads')
+    ax.set_title('Before kneaddata')
+  else:
+    ax.set_title('After kneaddata')
+  if ax in [ax3, ax4]: plt.xticks(pltx, pltlab, rotation=90)
+  else: plt.xticks(pltx, ['' for a in pltx])
+  plt.ylim([0, 8000000])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Nonpareil 3 output {.tabset}
+
+#### Curves
+
+Nonpareil curves TNA:
+```{R}
+library(Nonpareil)
+np_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/nonpareil_npo/'
+samples_tna <- read.table(paste(np_folder, 'nonpareil_samples_tna.csv', sep=''), sep=',', header=TRUE, as.is=TRUE)
+attach(samples_tna)
+nps_tna <- Nonpareil.set(paste(np_folder, File, sep=''), col=Col, labels=Name, plot.opts=list(plot.observed=FALSE))
+detach(samples_tna)
+summary(nps_tna)
+cov_tna = summary(nps_tna)[,"C"]*100
+div_tna = summary(nps_tna)[,"diversity"]
+lrs_tna = summary(nps_tna)[,"LRstar"]/1e9
+```
+
+Nonpareil curves cDNA:
+```{R}
+library(Nonpareil)
+np_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/nonpareil_npo/'
+samples_cdna <- read.table(paste(np_folder, 'nonpareil_samples_cdna.csv', sep=''), sep=',', header=TRUE, as.is=TRUE)
+attach(samples_cdna)
+nps_cdna <- Nonpareil.set(paste(np_folder, File, sep=''), col=Col, labels=Name, plot.opts=list(plot.observed=FALSE))
+detach(samples_cdna)
+summary(nps_cdna)
+cov_cdna = summary(nps_cdna)[,"C"]*100
+div_cdna = summary(nps_cdna)[,"diversity"]
+lrs_cdna = summary(nps_cdna)[,"LRstar"]/1e9
+```
+
+#### Coverage, diversity & estimated sequencing effort for complete coverage
+
+TNA:
+```{python, results='hide', fig.keep='all'}
+cov_tna = r.cov_tna
+div_tna = r.div_tna
+lrs_tna = r.lrs_tna
+snames = r.samples_tna
+snames = snames.loc[:, 'File'].values
+snames = [a.split('.')[0] for a in snames]
+in_name = [['N', 'neg'], ['N', 'pos'], ['O', 'neg'], ['O', 'pos']]
+pltx, pltlab = [], []
+print(snames)
+
+fig = plt.figure(figsize=(6,6))
+ax1, ax2, ax3 = plt.subplot(311), plt.subplot(312), plt.subplot(313)
+count = 0
+for a in range(len(in_name)):
+  col, fill, med = '#0154B2', 'w', 'k'
+  if 'pos' in in_name[a]: col = '#B20154'
+  if in_name[a][0] == 'N': fill, med = col, 'w'
+  for b in range(len(snames)):
+    if snames[b][0] == in_name[a][0] and in_name[a][1] in snames[b]:
+      ax1.bar(count, cov_tna[b], color=fill, edgecolor=col, width=0.8), ax2.bar(count, div_tna[b], color=fill, edgecolor=col, width=0.8), ax3.bar(count, lrs_tna[b], color=fill, edgecolor=col, width=0.8)
+      pltx.append(count), pltlab.append(snames[b])
+      count += 1
+
+ax1.set_ylabel('Coverage (%)'), ax2.set_ylabel('Diversity'), ax3.set_ylabel('Sequencing effort for\ncomplete coverage (GBp)')
+for ax in [ax1, ax2, ax3]:
+  plt.sca(ax)
+  if ax != ax3: plt.xticks(pltx, ['' for a in pltx])
+  else: plt.xticks(pltx, pltlab, rotation=90)
+  plt.xlim([pltx[0]-0.5, pltx[-1]+0.5])
+plt.tight_layout()
+plt.show()
+```
+
+cDNA:
+```{python, results='hide', fig.keep='all'}
+cov_cdna = r.cov_cdna
+div_cdna = r.div_cdna
+lrs_cdna = r.lrs_cdna
+snames = r.samples_cdna
+snames = snames.loc[:, 'File'].values
+snames = [a.split('.')[0] for a in snames]
+in_name = [['N', 'neg'], ['N', 'pos'], ['O', 'neg'], ['O', 'pos']]
+pltx, pltlab = [], []
+print(snames)
+
+fig = plt.figure(figsize=(6,6))
+ax1, ax2, ax3 = plt.subplot(311), plt.subplot(312), plt.subplot(313)
+count = 0
+for a in range(len(in_name)):
+  col, fill, med = '#0154B2', 'w', 'k'
+  if 'pos' in in_name[a]: col = '#B20154'
+  if in_name[a][0] == 'N': fill, med = col, 'w'
+  for b in range(len(snames)):
+    if snames[b][5] == in_name[a][0] and in_name[a][1] in snames[b]:
+      ax1.bar(count, cov_cdna[b], color=fill, edgecolor=col, width=0.8), ax2.bar(count, div_cdna[b], color=fill, edgecolor=col, width=0.8), ax3.bar(count, lrs_cdna[b], color=fill, edgecolor=col, width=0.8)
+      pltx.append(count), pltlab.append(snames[b])
+      count += 1
+
+ax1.set_ylabel('Coverage (%)'), ax2.set_ylabel('Diversity'), ax3.set_ylabel('Sequencing effort for\ncomplete coverage (GBp)')
+for ax in [ax1, ax2, ax3]:
+  plt.sca(ax)
+  if ax != ax3: plt.xticks(pltx, ['' for a in pltx])
+  else: plt.xticks(pltx, pltlab, rotation=90)
+  plt.xlim([pltx[0]-0.5, pltx[-1]+0.5])
+plt.tight_layout()
+plt.show()
+```
+
+### Number of reads Bowtie maps to SARS-CoV-2 genome
+
+```{python, results='hide', fig.keep='all'}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+nonzero = {'cDNA-N1-pos_S75_R1_kneaddata':306, 'cDNA-N2-pos_S76_R1_kneaddata':366, 'cDNA-N3-pos_S77_R1_kneaddata':3, 'cDNA-N4-pos_S78_R1_kneaddata':19, 'cDNA-N5-pos_S79_R1_kneaddata':579, 'cDNA-O1-pos_S80_R1_kneaddata':4, 'cDNA-O2-pos_S61_R1_kneaddata':336, 'cDNA-O3-pos_S62_R1_kneaddata':64, 'cDNA-O4-pos_S63_R1_kneaddata':10, 'cDNA-O5-pos_S64_R1_kneaddata':40}
+
+plt.figure(figsize=(6,3))
+ax1 = plt.subplot(111)
+count = 0
+names, x = [], []
+
+for sample in nonzero:
+  col, fill = '#B20154', 'w'
+  if sample[5] == 'N': fill = col
+  ax1.bar(count, nonzero[sample], color=fill, edgecolor=col)
+  x.append(count)
+  names.append(sample.split('_')[0])
+  count += 1
+
+plt.xticks(x, names, rotation=90)
+plt.xlim([x[0]-0.5, x[-1]+0.5])
+plt.ylabel('Number of reads')
+plt.tight_layout()
+plt.show()
+```
+
+### Summary COVID
+
+```{python, results='hide', fig.keep='all'}
+ax1, ax2, ax3, ax4 = plt.subplot(411), plt.subplot(412), plt.subplot(413), plt.subplot(414)
+titles = ['Sequencing depth', 'Estimated sampling coverage', 'Reads mapping to SARS-CoV-2', 'SARS-CoV-2 genome fraction']
+ylabels = ['Number of reads', 'Coverage (%)', 'Number of reads', 'Fraction (%)']
+
+nonzero = {'cDNA-N1-pos':306, 'cDNA-N2-pos':366, 'cDNA-N3-pos':3, 'cDNA-N4-pos':19, 'cDNA-N5-pos':579, 'cDNA-O1-pos':4, 'cDNA-O2-pos':336, 'cDNA-O3-pos':64, 'cDNA-O4-pos':10, 'cDNA-O5-pos':40}
+aligned = {'cDNA-N1-pos':28.519, 'cDNA-N2-pos':59.8, 'cDNA-N3-pos':0, 'cDNA-N4-pos':0, 'cDNA-N5-pos':89.7, 'cDNA-O1-pos':0, 'cDNA-O2-pos':40.299, 'cDNA-O3-pos':1.68, 'cDNA-O4-pos':0, 'cDNA-O5-pos':0}
+
+cov_cdna = r.cov_cdna
+snames = r.samples_cdna
+snames = snames.loc[:, 'File'].values
+snames = [a.split('.')[0] for a in snames]
+in_name = [['N', 'neg'], ['N', 'pos'], ['O', 'neg'], ['O', 'pos']]
+pltx, pltlab = [], []
+
+sam_rename = {}
+for sam in samples_reads.index.values:
+  sam_rename[sam] = sam.split('_')[0]
+samples_reads = samples_reads.rename(index=sam_rename)
+
+count = 0
+for a in range(len(in_name)):
+  col, fill, med = '#0154B2', 'w', 'k'
+  if 'pos' in in_name[a]: col = '#B20154'
+  if in_name[a][0] == 'N': fill, med = col, 'w'
+  for b in range(len(snames)):
+    if snames[b][5] == in_name[a][0] and in_name[a][1] in snames[b]:
+      ax2.bar(count, cov_cdna[b], color=fill, edgecolor=col, width=0.8)
+      if snames[b] in nonzero:
+        ax3.bar(count, nonzero[snames[b]], color=fill, edgecolor=col, width=0.8)
+      if snames[b] in aligned:
+        ax4.bar(count, aligned[snames[b]], color=fill, edgecolor=col, width=0.8)
+      ax1.bar(count, samples_reads.loc[snames[b], 'raw pair1'], color=fill, edgecolor=col, width=0.8)
+      pltx.append(count), pltlab.append(snames[b])
+      count += 1
+
+axes = [ax1, ax2, ax3, ax4]
+for a in range(len(axes)):
+  plt.sca(axes[a])
+  plt.title(titles[a])
+  if a < 3: plt.xticks(pltx, ['' for a in pltx])
+  else: plt.xticks(pltx, pltlab, rotation=90)
+  plt.xlim([pltx[0]-0.5, pltx[-1]+0.5])
+  plt.ylabel(ylabels[a])
+
+plt.tight_layout()
+plt.show()
+plt.savefig(folder+'SARS-CoV-2 alignment summary.png', dpi=600, bbox_inches='tight')
+```
+
+### Reads per sample kraken
+
+Here the left column is all reads while the right is only the ones that I used as QUAST input (so taxa >0.1% abundance after eukaryotic reads are removed). 
+
+```{python, results='hide', fig.keep='all'}
+fig = plt.figure(figsize=(15,12))
+ax1, ax2, ax3, ax4 = plt.subplot(421), plt.subplot(423), plt.subplot(425), plt.subplot(427)
+axes = [ax1, ax2, ax3, ax4]
+labels = ['TNA shotgun RefSeq Complete V93', 'TNA shotgun Kraken Standard Nov20', 'cDNA shotgun RefSeq Complete V93', 'cDNA shotgun Kraken Standard Nov20']
+sample_names = [samples_tna, samples_tna, samples_cdna, samples_cdna]
+dfs_using = [na_samples_rsc[0], na_samples_krakstan[0], na_samples_rsc[1], na_samples_krakstan[1]]
+
+ax1_r, ax2_r, ax3_r, ax4_r = plt.subplot(422, sharey=ax1), plt.subplot(424, sharey=ax2), plt.subplot(426, sharey=ax3), plt.subplot(428, sharey=ax4)
+axes_r = [ax1_r, ax2_r, ax3_r, ax4_r]
+dfs_using_r = [na_samples_red_rsc[0], na_samples_red_krakstan[0], na_samples_red_rsc[1], na_samples_red_krakstan[1]]
+
+for a in range(len(axes)):
+  x, y, edgecol, fillcol = [], [], [], []
+  for b in range(len(sample_names[a])):
+    all_conf = [sn for sn in dfs_using[a].columns if sample_names[a][b] in sn]
+    s = list(dfs_using[a].loc[:, all_conf].sum(axis=0))
+    
+    all_conf_r = [sn for sn in dfs_using_r[a].columns if sample_names[a][b] in sn]
+    s_r = list(dfs_using_r[a].loc[:, all_conf_r].sum(axis=0))
+    
+    col, fill, med = '#0154B2', 'w', 'k'
+    if 'pos' in sample_names[a][b]: col = '#B20154'
+    if sample_names[a][b][0] == 'N' or sample_names[a][b][5] == 'N': fill, med = col, 'w'
+    
+    box = axes[a].boxplot([s], positions=[b], patch_artist=True)
+    box_r = axes_r[a].boxplot([s_r], positions=[b], patch_artist=True)
+    
+    for element in ['boxes', 'whiskers', 'fliers', 'means', 'medians', 'caps']:
+      plt.setp(box[element], color=col)
+      plt.setp(box_r[element], color=col)
+    plt.setp(box['boxes'], facecolor=fill), plt.setp(box['medians'], color=med)
+    plt.setp(box_r['boxes'], facecolor=fill), plt.setp(box_r['medians'], color=med)
+    x.append(b)
+  
+  for ax in [axes[a], axes_r[a]]:
+    plt.sca(ax)
+    if a < 3: plt.xticks([])
+    else: plt.xticks(x, samples_tna, rotation=90)
+    plt.ylim([10, 30000000])
+    plt.ylabel('Number of reads'), plt.title(labels[a]), plt.xlim([-0.5, x[-1]+0.5])
+    plt.semilogy()
+    
+plt.show()
+```
+
+### Reads per confidence value kraken
+
+Again, the left column is all reads while the right is only the ones that I used as QUAST input (so taxa >0.1% abundance after eukaryotic reads are removed). It looks like the confidence values have more impact on the number of reads that are in our QUAST input (which is obviously very similar to just the number of reads that are not classified as human) than on the number of reads overall, although there is a decrease in the number of reads as the confidence value is inrceased. 
+
+```{python, results='hide', fig.keep='all'}
+fig = plt.figure(figsize=(15,12))
+ax1, ax2, ax3, ax4 = plt.subplot(421), plt.subplot(423), plt.subplot(425), plt.subplot(427)
+axes = [ax1, ax2, ax3, ax4]
+labels = ['TNA shotgun RefSeq Complete V93', 'TNA shotgun Kraken Standard Nov20', 'cDNA shotgun RefSeq Complete V93', 'cDNA shotgun Kraken Standard Nov20']
+sample_names = [samples_tna, samples_tna, samples_cdna, samples_cdna]
+dfs_using = [na_samples_rsc[0], na_samples_krakstan[0], na_samples_rsc[1], na_samples_krakstan[1]]
+
+ax1_r, ax2_r, ax3_r, ax4_r = plt.subplot(422, sharey=ax1), plt.subplot(424, sharey=ax2), plt.subplot(426, sharey=ax3), plt.subplot(428, sharey=ax4)
+axes_r = [ax1_r, ax2_r, ax3_r, ax4_r]
+dfs_using_r = [na_samples_red_rsc[0], na_samples_red_krakstan[0], na_samples_red_rsc[1], na_samples_red_krakstan[1]]
+
+for a in range(len(axes)):
+  x, y, edgecol, fillcol = [], [], [], []
+  for b in range(len(confidence)):
+    all_conf = [sn+'_'+str(confidence[b]) for sn in sample_names[a]]
+    s = list(dfs_using[a].loc[:, all_conf].sum(axis=0))
+    s_r = list(dfs_using_r[a].loc[:, all_conf].sum(axis=0))
+
+    box = axes[a].boxplot([s], positions=[b], patch_artist=True)
+    box_r = axes_r[a].boxplot([s_r], positions=[b], patch_artist=True)
+
+    x.append(b)
+
+  for ax in [axes[a], axes_r[a]]:
+    plt.sca(ax)
+    if a < 3: plt.xticks([])
+    else: 
+      plt.xticks(x, confidence), plt.xlabel('Kraken confidence value')
+    plt.ylim([10, 30000000])
+    plt.ylabel('Number of reads'), plt.title(labels[a]), plt.xlim([-0.5, x[-1]+0.5])
+    plt.semilogy()
+
+plt.show()
+```
+
+## Metagenome grouped kraken
+
+Now the top row is all reads while the bottom is only the ones that I used as QUAST input. This currently includes the results from all confidence values, but once we've hopefully decided on which to use in the next step we can redo this with whichever confidence value is appropriate.
+
+```{python, results='hide', fig.keep='all'}
+fig = plt.figure(figsize=(15,12))
+ax1, ax2, ax3, ax4 = plt.subplot(241), plt.subplot(242), plt.subplot(243), plt.subplot(244)
+axes = [ax1, ax2, ax3, ax4]
+labels = ['TNA shotgun\nRefSeq Complete V93', 'TNA shotgun\nKraken Standard Nov20', 'cDNA shotgun\nRefSeq Complete V93', 'cDNA shotgun\nKraken Standard Nov20']
+sample_names = [samples_tna, samples_tna, samples_cdna, samples_cdna]
+dfs_using = [na_samples_rsc[0], na_samples_krakstan[0], na_samples_rsc[1], na_samples_krakstan[1]]
+
+ax1_r, ax2_r, ax3_r, ax4_r = plt.subplot(245), plt.subplot(246), plt.subplot(247), plt.subplot(248)
+axes_r = [ax1_r, ax2_r, ax3_r, ax4_r]
+dfs_using_r = [na_samples_red_rsc[0], na_samples_red_krakstan[0], na_samples_red_rsc[1], na_samples_red_krakstan[1]]
+
+groups, xlabs = [['N', 'neg'], ['N', 'pos'], ['O', 'neg'], ['O', 'pos']], ['Nasal\nnegative', 'Nasal\npositive', 'Oral\nnegative', 'Oral\npositive']
+
+for a in range(len(axes)):
+  x, y, edgecol, fillcol = [], [], [], []
+  for b in range(len(groups)):
+    this_group = []
+    sns = dfs_using[a].columns
+    for c in range(len(sns)):
+      ind = 0
+      if a > 1: ind = 5
+      if sns[c][ind] == groups[b][0] and groups[b][1] in sns[c]:
+        this_group.append(sns[c])
+    s = list(dfs_using[a].loc[:, this_group].sum(axis=0))
+    s_r = list(dfs_using_r[a].loc[:, this_group].sum(axis=0))
+    col, fill, med = '#0154B2', 'w', 'k'
+    if 'pos' == groups[b][1]: col = '#B20154'
+    if 'N' == groups[b][0]: fill, med = col, 'w'
+    box = axes[a].boxplot([s], positions=[b], patch_artist=True)
+    box_r = axes_r[a].boxplot([s_r], positions=[b], patch_artist=True)
+    
+    for element in ['boxes', 'whiskers', 'fliers', 'means', 'medians', 'caps']:
+      plt.setp(box[element], color=col)
+      plt.setp(box_r[element], color=col)
+    plt.setp(box['boxes'], facecolor=fill), plt.setp(box['medians'], color=med)
+    plt.setp(box_r['boxes'], facecolor=fill), plt.setp(box_r['medians'], color=med)
+    x.append(b)
+
+  for ax in [axes[a], axes_r[a]]:
+    plt.sca(ax)
+    if a == 0: plt.ylabel('Number of reads')
+    plt.ylim([10, 30000000])
+    plt.title(labels[a]), plt.xlim([-0.5, x[-1]+0.5])
+    plt.semilogy()
+  
+  plt.sca(axes_r[a])
+  plt.xticks(x, xlabs)
+  plt.sca(axes[a])
+  plt.xticks([])
+  
+plt.show()
+```
+
+# Confidence parameters {.tabset}
+
+## Spearmans correlation {.tabset}
+
+These are each looking at the correlation between the number of reads and one of the QUAST output parameters. Both sets of values (i.e. the number of reads and the QUAST parameter for each taxon ID) are log10 normalised prior to calculating the spearmans correlations. The 'T' column is the correlation for all confidence parameters within that sample, while the 'Overall' rows show all samples for each confidence value. Note that the 'nan's here come from there being no species left in the kraken2 output for that confidence parameter (all of them did have human reads still, but no non-eukaryotic reads). </br>
+</br>
+Plot function:
+```{python, results='hide', fig.keep='all'}
+def plot_correlation_heatmap(kraken_df_using, quast_df, ax, perc=False, norm_row=False):
+  kraken_df = [pd.DataFrame(kraken_df_using[0]), pd.DataFrame(kraken_df_using[1])]
+  sns = [samples_tna, samples_cdna]
+  kraken_df[0].index = kraken_df[0].index.map(str)
+  kraken_df[1].index = kraken_df[1].index.map(str)
+  if perc:
+    kraken_df[0] = kraken_df[0].divide(kraken_df[0].sum(axis=0), axis=1).multiply(100)
+    kraken_df[1] = kraken_df[1].divide(kraken_df[1].sum(axis=0), axis=1).multiply(100)
+  yvals = []
+  if norm_row:
+    colormap = mpl.cm.get_cmap('plasma', 256)
+    norm = mpl.colors.Normalize(vmin=-1, vmax=1)
+    m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+  else:
+    colormap = mpl.cm.get_cmap('plasma', 256)
+    norm = mpl.colors.Normalize(vmin=-0.5, vmax=0.5)
+    m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+  count = 40
+  combined_corr_x, combined_corr_y = [[], [], [], [], [], [], [], [], [], [], [], []], [[], [], [], [], [], [], [], [], [], [], [], []]
+  for a in range(len(kraken_df)):
+    for sn in sns[a]:
+      corr, pvals = [], []
+      combined_sample_x, combined_sample_y = [], []
+      c2 = 0
+      for conf in confidence:
+        snc = sn+'_'+str(conf)
+        x, y = [], []
+        for row in kraken_df[a].index.values:
+          x.append(quast_df[a].loc[row, sn]+1), y.append(kraken_df[a].loc[row, snc]+1)
+        c, p = spearmanr(np.log10(x), np.log10(y))
+        corr.append(c), pvals.append(p)
+        combined_sample_x += x
+        combined_sample_y += y
+        combined_corr_x[c2] += x
+        combined_corr_y[c2] += y
+        c2 += 1
+      combined_corr_x[-1] += combined_sample_x
+      combined_corr_y[-1] += combined_sample_y
+      c, p = spearmanr(np.log10(combined_sample_x), np.log10(combined_sample_y))
+      corr.append(c), pvals.append(p)
+      pltx, plty, bot = [a for a in range(12)], [1 for a in range(12)], [count for a in range(12)]
+      pltx[-1] += 0.1
+      abs_corr = list(corr)
+      if norm_row:
+        corr = [c/max(corr) for c in corr]
+      for e in range(len(corr)):
+        fc = 'k'
+        if corr[e] < 0: fc = 'w'
+        elif math.isnan(corr[e]): fc = 'w'
+        ax.text(pltx[e], bot[e]+0.5, round(abs_corr[e],3), color=fc, ha='center', va='center', fontsize=6)
+      corr = [m.to_rgba(c) for c in corr]
+      ax.bar(pltx, plty, color=corr, bottom=bot, edgecolor='k', width=1)
+      yvals.append(count+0.5)
+      count -= 1
+    count -= 0.2
+  plt_corr = []
+  for d in range(len(combined_corr_x)):
+    c, p = spearmanr(np.log10(combined_corr_x[d]), np.log10(combined_corr_y[d]))
+    plt_corr.append(c)
+  abs_corr = list(plt_corr)
+  if norm_row: plt_corr = [c/max(plt_corr) for c in plt_corr]
+  for e in range(len(plt_corr)):
+    fc = 'k'
+    if plt_corr[e] < 0: fc = 'w'
+    ax.text(pltx[e], bot[e]-0.7, round(abs_corr[e], 3), ha='center', va='center', fontsize=6)
+  plt_corr = [m.to_rgba(c) for c in plt_corr]
+  bot = [b-1.2 for b in bot]
+  ax.bar(pltx, plty, color=plt_corr, bottom=bot, edgecolor='k', width=1)
+  plt.sca(ax)
+  plt.xticks([a for a in range(12)], confidence+['T'])
+  plt.xlabel('Kraken confidence value')
+  return yvals, norm, colormap
+```
+
+### Total aligned length
+
+Correlation:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=4
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+Correlation normalised within rows:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=4
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1, norm_row=True)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2, norm_row=True)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Genome fraction
+
+Correlation:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=0
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+Correlation normalised within rows:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=0
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1, norm_row=True)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2, norm_row=True)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest alignment
+
+Correlation:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=1
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+Correlation normalised within rows:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=1
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1, norm_row=True)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2, norm_row=True)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest contig
+
+Correlation:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=2
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+Correlation normalised within rows:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=2
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1, norm_row=True)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2, norm_row=True)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Number of contigs
+
+Correlation:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=3
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+Correlation normalised within rows:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=3
+fig = plt.figure(figsize=(10,15))
+ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+yvals, norm, colormap = plot_correlation_heatmap(na_samples_red_rsc, [dfs_tna_rsc[ind], dfs_cdna_rsc[ind]], ax1, norm_row=True)
+plt.sca(ax1)
+plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Overall']), plt.title('RefSeq Complete V93')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+ax_col = plt.subplot2grid((5,22), (0,21))
+cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+
+plot_correlation_heatmap(na_samples_red_krakstan, [dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], ax2, norm_row=True)
+plt.sca(ax2)
+plt.yticks([]), plt.title('Kraken Standard Nov20')
+plt.xlim([-0.5, 11.6]), plt.ylim([-0.4, 41])
+
+plt.tight_layout()
+plt.show()
+```
+
+## Bray-Curtis distance {.tabset}
+
+I'm converting each of the abundance and QUAST metrics to relative abundance and then calculating the Bray-Curtis distance between these. The ‘T’ column is the mean distance for all confidence parameters within that sample, while the ‘Mean’ and 'Median' rows are for all samples for each confidence value.</br>
+For each of these metrics, the smallest distance between the QUAST metric and the Kraken2 output is with confidence = 0, and although the magnitude of difference in distances changes, the patterns within samples look very similar (qualitatively) overall. The mean and the median aren't the same, but they do show similar patterns.
+
+```{python, results='hide', fig.keep='all'}
+def plot_distance_heatmap(kraken_df_using, quast_df, dist_met='braycurtis', remove_0 = False):
+  kraken_df = [pd.DataFrame(kraken_df_using[0]), pd.DataFrame(kraken_df_using[1])]
+  sns = [samples_tna, samples_cdna]
+  kraken_df[0].index = kraken_df[0].index.map(str)
+  kraken_df[1].index = kraken_df[1].index.map(str)
+  rows_kraken_0, rows_kraken_1 = sorted(kraken_df[0].index.values), sorted(kraken_df[1].index.values)
+  quast_df[0] = quast_df[0].loc[rows_kraken_0, :]
+  quast_df[1] = quast_df[1].loc[rows_kraken_1, :]
+  all_dist, dmin, dmax = [], 1, 0
+  for a in range(len(kraken_df)):
+    combined_x, combined_y = [], []
+    kraken_df[a].to_csv(folder+'kraken_'+str(a)+'.csv')
+    for sn in sns[a]:
+      this_dist = []
+      for conf in confidence:
+        snc = sn+'_'+str(conf)
+        krak, quast = list(kraken_df[a].loc[:, snc]), list(quast_df[a].loc[:, sn])
+        if not sum(krak) == 0:
+          krak = [k/sum(krak) for k in krak]
+        quast = [q/sum(quast) for q in quast]
+        if remove_0 == True:
+          new_krak, new_quast = [], []
+          for k in range(len(krak)):
+            if krak[k] > 0 and quast[k] > 0:
+              new_krak.append(krak[k])
+              new_quast.append(quast[k])
+          krak, quast = new_krak, new_quast
+        if dist_met == 'braycurtis':
+          dist = distance.braycurtis(krak, quast)
+        elif dist_met == 'euclidean':
+          dist = distance.euclidean(krak, quast)
+        elif dist_met == 'jaccard':
+          dist = distance.jaccard(krak, quast)
+        this_dist.append(dist)
+      mean_dist = np.mean(this_dist)
+      this_dist.append(mean_dist)
+      all_dist.append(this_dist)
+      if max(this_dist) > dmax: dmax = max(this_dist)
+      if min(this_dist) < dmin: dmin = min(this_dist)
+  conf_mean_dist, conf_median_dist = [], []
+  for c in range(len(all_dist[0])):
+    this_conf = []
+    for d in range(len(all_dist)):
+      if not math.isnan(all_dist[d][c]):
+        this_conf.append(all_dist[d][c])
+    conf_mean_dist.append(np.mean(this_conf))
+    conf_median_dist.append(np.median(this_conf))
+  all_dist.append(conf_mean_dist)
+  all_dist.append(conf_median_dist)
+  return all_dist, dmin, dmax
+  
+def distance_heatmap(kraken_df_using, quast_df, norm_row=False, dist_met='braycurtis', remove_0=False):
+  fig = plt.figure(figsize=(10,15))
+  ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+  ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+  all_dist_0, dmin_0, dmax_0 = plot_distance_heatmap(kraken_df_using[0], [quast_df[0], quast_df[1]], dist_met=dist_met, remove_0=remove_0)
+  all_dist_1, dmin_1, dmax_1 = plot_distance_heatmap(kraken_df_using[1], [quast_df[2], quast_df[3]], dist_met=dist_met, remove_0=remove_0)
+  if norm_row:
+    dmin, dmax = 0, 1
+  else:
+    dmin, dmax = min(dmin_0, dmin_1), max(dmax_0, dmax_1)
+  mid = ((dmax-dmin)/2)+dmin
+  colormap = mpl.cm.get_cmap('plasma', 256)
+  norm = mpl.colors.Normalize(vmin=dmin, vmax=dmax)
+  m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+  
+  x, y, bot = [a for a in range(12)], [1 for a in range(12)], [40 for a in range(12)]
+  x[-1] += 0.1
+  yvals = []
+  for a in range(len(all_dist_0)):
+    if a == len(all_dist_0)-2: 
+      bot = [b-0.2 for b in bot]
+    for b in range(len(all_dist_0[a])):
+      fc1, fc2 = 'k', 'k'
+      if all_dist_0[a][b] < mid: fc1 = 'w'
+      if all_dist_1[a][b] < mid: fc2 = 'w'
+      ax1.text(x[b], bot[b]+0.5, str(round(all_dist_0[a][b],3)), color=fc1, ha='center', va='center', fontsize=6)
+      ax2.text(x[b], bot[b]+0.5, str(round(all_dist_1[a][b],3)), color=fc2, ha='center', va='center', fontsize=6)
+    all_dist_0[a] = [m.to_rgba(d) for d in all_dist_0[a]]
+    all_dist_1[a] = [m.to_rgba(d) for d in all_dist_1[a]]
+    ax1.bar(x, y, bottom=bot, color=all_dist_0[a], edgecolor='k', width=1)
+    ax2.bar(x, y, bottom=bot, color=all_dist_1[a], edgecolor='k', width=1)
+    yvals.append(bot[0]+0.5)
+    bot = [b-1 for b in bot]
+  
+  for ax in [ax1, ax2]:
+    plt.sca(ax)
+    if ax == ax1: plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Mean', 'Median']), plt.title('RefSeq Complete V93')
+    else: plt.yticks([]), plt.title('Kraken Standard Nov20')
+    plt.xlim([-0.5, 11.6]), plt.ylim([-1.2, 41]), plt.xticks([a for a in range(12)], confidence+['T']), plt.xlabel('Kraken confidence value')
+  
+  ax_col = plt.subplot2grid((5,22), (0,21))
+  cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+  return
+```
+
+### Total aligned length
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=4
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Genome fraction
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=0
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest alignment
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=1
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest contig
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=2
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Number of contigs
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=3
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+## Bray-Curtis distance (no zeroes) {.tabset}
+
+This is exactly the same as the previous Bray-Curtis distance, but here I've only kept taxa that are above 0 in both the kraken and quast outputs.
+
+### Total aligned length
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=4
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], remove_0=True)
+
+plt.tight_layout()
+plt.show()
+```
+
+### Genome fraction
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=0
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest alignment
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=1
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], remove_0=True)
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest contig
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=2
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], remove_0=True)
+
+plt.tight_layout()
+plt.show()
+```
+
+### Number of contigs
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=3
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], remove_0=True)
+
+plt.tight_layout()
+plt.show()
+```
+
+## Euclidean distance {.tabset}
+
+I'm converting each of the abundance and QUAST metrics to relative abundance and then calculating the Euclidean distance between these. The ‘T’ column is the mean distance for all confidence parameters within that sample, while the ‘Mean’ and 'Median' rows are for all samples for each confidence value.</br>
+Looking at the mean, for the RefSeq Complete Kraken output, the smallest distance is again always with confidence = 0, although with the median confidence = 1 is sometimes the smallest distance. With the standard Kraken2 database from November 2020, the smallest distance is with confidence = 1. From the means, I'd suggest that the classifications obviously aren't so good with the smaller database, and without adjusting the confidence we are therefore more likely to get mis-classifications at lower confidence values, but this isn't a problem with the more comprehensive database. But with the medians for the RefSeq Complete often being lowest at confidence = 1 also, I'm not sure what I think.
+
+### Total aligned length
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=4
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], dist_met='euclidean')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Genome fraction
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=0
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], dist_met='euclidean')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest alignment
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=1
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], dist_met='euclidean')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest contig
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=2
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], dist_met='euclidean')
+
+plt.tight_layout()
+plt.show()
+```
+
+### Number of contigs
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=3
+distance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]], dist_met='euclidean')
+
+plt.tight_layout()
+plt.show()
+```
+
+## Concordance {.tabset}
+
+```{python, results='hide', fig.keep='all'}
+def plot_concordance_heatmap(kraken_df_using, quast_df, remove_0 = False):
+  kraken_df = [pd.DataFrame(kraken_df_using[0]), pd.DataFrame(kraken_df_using[1])]
+  sns = [samples_tna, samples_cdna]
+  kraken_df[0].index = kraken_df[0].index.map(str)
+  kraken_df[1].index = kraken_df[1].index.map(str)
+  rows_kraken_0, rows_kraken_1 = sorted(kraken_df[0].index.values), sorted(kraken_df[1].index.values)
+  quast_df[0] = quast_df[0].loc[rows_kraken_0, :]
+  quast_df[1] = quast_df[1].loc[rows_kraken_1, :]
+  all_dist, dmin, dmax = [], 1, 0
+  for a in range(len(kraken_df)):
+    combined_x, combined_y = [], []
+    kraken_df[a].to_csv(folder+'kraken_'+str(a)+'.csv')
+    for sn in sns[a]:
+      this_dist = []
+      for conf in confidence:
+        snc = sn+'_'+str(conf)
+        krak, quast = list(kraken_df[a].loc[:, snc]), list(quast_df[a].loc[:, sn])
+        if not sum(krak) == 0:
+          krak = [k/sum(krak) for k in krak]
+        quast = [q/sum(quast) for q in quast]
+        if remove_0 == True:
+          new_krak, new_quast = [], []
+          for k in range(len(krak)):
+            if krak[k] > 0 and quast[k] > 0:
+              new_krak.append(krak[k])
+              new_quast.append(quast[k])
+          krak, quast = new_krak, new_quast
+        try:
+          dist = concordance_index(krak, quast)
+        except:
+          dist = 0
+        this_dist.append(dist)
+      mean_dist = np.mean(this_dist)
+      this_dist.append(mean_dist)
+      all_dist.append(this_dist)
+      if max(this_dist) > dmax: dmax = max(this_dist)
+      if min(this_dist) < dmin: dmin = min(this_dist)
+  conf_mean_dist, conf_median_dist = [], []
+  for c in range(len(all_dist[0])):
+    this_conf = []
+    for d in range(len(all_dist)):
+      if not math.isnan(all_dist[d][c]):
+        this_conf.append(all_dist[d][c])
+    conf_mean_dist.append(np.mean(this_conf))
+    conf_median_dist.append(np.median(this_conf))
+  all_dist.append(conf_mean_dist)
+  all_dist.append(conf_median_dist)
+  return all_dist, dmin, dmax
+  
+def concordance_heatmap(kraken_df_using, quast_df, norm_row=False, remove_0=False):
+  fig = plt.figure(figsize=(10,15))
+  ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+  ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+  all_dist_0, dmin_0, dmax_0 = plot_concordance_heatmap(kraken_df_using[0], [quast_df[0], quast_df[1]], remove_0=remove_0)
+  all_dist_1, dmin_1, dmax_1 = plot_concordance_heatmap(kraken_df_using[1], [quast_df[2], quast_df[3]], remove_0=remove_0)
+  if norm_row:
+    dmin, dmax = 0, 1
+  else:
+    dmin, dmax = min(dmin_0, dmin_1), max(dmax_0, dmax_1)
+  mid = ((dmax-dmin)/2)+dmin
+  colormap = mpl.cm.get_cmap('plasma', 256)
+  norm = mpl.colors.Normalize(vmin=dmin, vmax=dmax)
+  m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+  
+  x, y, bot = [a for a in range(12)], [1 for a in range(12)], [40 for a in range(12)]
+  x[-1] += 0.1
+  yvals = []
+  for a in range(len(all_dist_0)):
+    if a == len(all_dist_0)-2: 
+      bot = [b-0.2 for b in bot]
+    for b in range(len(all_dist_0[a])):
+      fc1, fc2 = 'k', 'k'
+      if all_dist_0[a][b] < mid: fc1 = 'w'
+      if all_dist_1[a][b] < mid: fc2 = 'w'
+      ax1.text(x[b], bot[b]+0.5, str(round(all_dist_0[a][b],3)), color=fc1, ha='center', va='center', fontsize=6)
+      ax2.text(x[b], bot[b]+0.5, str(round(all_dist_1[a][b],3)), color=fc2, ha='center', va='center', fontsize=6)
+    all_dist_0[a] = [m.to_rgba(d) for d in all_dist_0[a]]
+    all_dist_1[a] = [m.to_rgba(d) for d in all_dist_1[a]]
+    ax1.bar(x, y, bottom=bot, color=all_dist_0[a], edgecolor='k', width=1)
+    ax2.bar(x, y, bottom=bot, color=all_dist_1[a], edgecolor='k', width=1)
+    yvals.append(bot[0]+0.5)
+    bot = [b-1 for b in bot]
+  
+  for ax in [ax1, ax2]:
+    plt.sca(ax)
+    if ax == ax1: plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Mean', 'Median']), plt.title('RefSeq Complete V93')
+    else: plt.yticks([]), plt.title('Kraken Standard Nov20')
+    plt.xlim([-0.5, 11.6]), plt.ylim([-1.2, 41]), plt.xticks([a for a in range(12)], confidence+['T']), plt.xlabel('Kraken confidence value')
+  
+  ax_col = plt.subplot2grid((5,22), (0,21))
+  cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+  return
+```
+
+### Total aligned length
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=4
+concordance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Genome fraction
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=0
+concordance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest alignment
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=1
+concordance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Largest contig
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=2
+concordance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+### Number of contigs
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=3
+concordance_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+## Fraction of overlapping taxa {.tabset}
+
+### Kraken/QUAST
+
+Of the taxa found in the quast output for each sample, what proportion are also found in the kraken output for each sample?
+
+```{python, results='hide', fig.keep='all'}
+def plot_fraction_heatmap(kraken_df_using, quast_df, remove_0 = False):
+  kraken_df = [pd.DataFrame(kraken_df_using[0]), pd.DataFrame(kraken_df_using[1])]
+  sns = [samples_tna, samples_cdna]
+  kraken_df[0].index = kraken_df[0].index.map(str)
+  kraken_df[1].index = kraken_df[1].index.map(str)
+  rows_kraken_0, rows_kraken_1 = sorted(kraken_df[0].index.values), sorted(kraken_df[1].index.values)
+  quast_df[0] = quast_df[0].loc[rows_kraken_0, :]
+  quast_df[1] = quast_df[1].loc[rows_kraken_1, :]
+  all_dist, dmin, dmax = [], 1, 0
+  for a in range(len(kraken_df)):
+    combined_x, combined_y = [], []
+    kraken_df[a].to_csv(folder+'kraken_'+str(a)+'.csv')
+    for sn in sns[a]:
+      this_dist = []
+      for conf in confidence:
+        snc = sn+'_'+str(conf)
+        krak, quast = list(kraken_df[a].loc[:, snc]), list(quast_df[a].loc[:, sn])
+        if not sum(krak) == 0:
+          krak = [k/sum(krak) for k in krak]
+        quast = [q/sum(quast) for q in quast]
+        if remove_0 == True:
+          new_krak, new_quast = [], []
+          for k in range(len(krak)):
+            if krak[k] > 0 and quast[k] > 0:
+              new_krak.append(krak[k])
+              new_quast.append(quast[k])
+          krak, quast = new_krak, new_quast
+        present, total = 0, 0
+        for q in range(len(quast)):
+          if quast[q] > 0:
+            total += 1
+            if krak[q] > 0:
+              present += 1
+        dist = present/total
+        this_dist.append(dist)
+      mean_dist = np.mean(this_dist)
+      this_dist.append(mean_dist)
+      all_dist.append(this_dist)
+      if max(this_dist) > dmax: dmax = max(this_dist)
+      if min(this_dist) < dmin: dmin = min(this_dist)
+  conf_mean_dist, conf_median_dist = [], []
+  for c in range(len(all_dist[0])):
+    this_conf = []
+    for d in range(len(all_dist)):
+      if not math.isnan(all_dist[d][c]):
+        this_conf.append(all_dist[d][c])
+    conf_mean_dist.append(np.mean(this_conf))
+    conf_median_dist.append(np.median(this_conf))
+  all_dist.append(conf_mean_dist)
+  all_dist.append(conf_median_dist)
+  return all_dist, dmin, dmax
+  
+def fraction_heatmap(kraken_df_using, quast_df, norm_row=False, remove_0=False):
+  fig = plt.figure(figsize=(10,15))
+  ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+  ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+  all_dist_0, dmin_0, dmax_0 = plot_fraction_heatmap(kraken_df_using[0], [quast_df[0], quast_df[1]], remove_0=remove_0)
+  all_dist_1, dmin_1, dmax_1 = plot_fraction_heatmap(kraken_df_using[1], [quast_df[2], quast_df[3]], remove_0=remove_0)
+  if norm_row:
+    dmin, dmax = 0, 1
+  else:
+    dmin, dmax = min(dmin_0, dmin_1), max(dmax_0, dmax_1)
+  mid = ((dmax-dmin)/2)+dmin
+  colormap = mpl.cm.get_cmap('plasma', 256)
+  norm = mpl.colors.Normalize(vmin=dmin, vmax=dmax)
+  m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+  
+  x, y, bot = [a for a in range(12)], [1 for a in range(12)], [40 for a in range(12)]
+  x[-1] += 0.1
+  yvals = []
+  for a in range(len(all_dist_0)):
+    if a == len(all_dist_0)-2: 
+      bot = [b-0.2 for b in bot]
+    for b in range(len(all_dist_0[a])):
+      fc1, fc2 = 'k', 'k'
+      if all_dist_0[a][b] < mid: fc1 = 'w'
+      if all_dist_1[a][b] < mid: fc2 = 'w'
+      ax1.text(x[b], bot[b]+0.5, str(round(all_dist_0[a][b],3)), color=fc1, ha='center', va='center', fontsize=6)
+      ax2.text(x[b], bot[b]+0.5, str(round(all_dist_1[a][b],3)), color=fc2, ha='center', va='center', fontsize=6)
+    all_dist_0[a] = [m.to_rgba(d) for d in all_dist_0[a]]
+    all_dist_1[a] = [m.to_rgba(d) for d in all_dist_1[a]]
+    ax1.bar(x, y, bottom=bot, color=all_dist_0[a], edgecolor='k', width=1)
+    ax2.bar(x, y, bottom=bot, color=all_dist_1[a], edgecolor='k', width=1)
+    yvals.append(bot[0]+0.5)
+    bot = [b-1 for b in bot]
+  
+  for ax in [ax1, ax2]:
+    plt.sca(ax)
+    if ax == ax1: plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Mean', 'Median']), plt.title('RefSeq Complete V93')
+    else: plt.yticks([]), plt.title('Kraken Standard Nov20')
+    plt.xlim([-0.5, 11.6]), plt.ylim([-1.2, 41]), plt.xticks([a for a in range(12)], confidence+['T']), plt.xlabel('Kraken confidence value')
+  
+  ax_col = plt.subplot2grid((5,22), (0,21))
+  cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+  return
+```
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=4
+fraction_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+
+### QUAST/Kraken
+
+Of the taxa found in the kraken data for each sample, what proportion are also found in the quast output for each sample?
+
+```{python, results='hide', fig.keep='all'}
+def plot_fraction_heatmap(kraken_df_using, quast_df, remove_0 = False):
+  kraken_df = [pd.DataFrame(kraken_df_using[0]), pd.DataFrame(kraken_df_using[1])]
+  sns = [samples_tna, samples_cdna]
+  kraken_df[0].index = kraken_df[0].index.map(str)
+  kraken_df[1].index = kraken_df[1].index.map(str)
+  rows_kraken_0, rows_kraken_1 = sorted(kraken_df[0].index.values), sorted(kraken_df[1].index.values)
+  quast_df[0] = quast_df[0].loc[rows_kraken_0, :]
+  quast_df[1] = quast_df[1].loc[rows_kraken_1, :]
+  all_dist, dmin, dmax = [], 1, 0
+  for a in range(len(kraken_df)):
+    combined_x, combined_y = [], []
+    kraken_df[a].to_csv(folder+'kraken_'+str(a)+'.csv')
+    for sn in sns[a]:
+      this_dist = []
+      for conf in confidence:
+        snc = sn+'_'+str(conf)
+        krak, quast = list(kraken_df[a].loc[:, snc]), list(quast_df[a].loc[:, sn])
+        if not sum(krak) == 0:
+          krak = [k/sum(krak) for k in krak]
+        quast = [q/sum(quast) for q in quast]
+        if remove_0 == True:
+          new_krak, new_quast = [], []
+          for k in range(len(krak)):
+            if krak[k] > 0 and quast[k] > 0:
+              new_krak.append(krak[k])
+              new_quast.append(quast[k])
+          krak, quast = new_krak, new_quast
+        present, total = 0, 0
+        for q in range(len(krak)):
+          if krak[q] > 0:
+            total += 1
+            if quast[q] > 0:
+              present += 1
+        if total == 0: dist = 0
+        else: dist = present/total
+        this_dist.append(dist)
+      mean_dist = np.mean(this_dist)
+      this_dist.append(mean_dist)
+      all_dist.append(this_dist)
+      if max(this_dist) > dmax: dmax = max(this_dist)
+      if min(this_dist) < dmin: dmin = min(this_dist)
+  conf_mean_dist, conf_median_dist = [], []
+  for c in range(len(all_dist[0])):
+    this_conf = []
+    for d in range(len(all_dist)):
+      if not math.isnan(all_dist[d][c]):
+        this_conf.append(all_dist[d][c])
+    conf_mean_dist.append(np.mean(this_conf))
+    conf_median_dist.append(np.median(this_conf))
+  all_dist.append(conf_mean_dist)
+  all_dist.append(conf_median_dist)
+  return all_dist, dmin, dmax
+  
+def fraction_heatmap(kraken_df_using, quast_df, norm_row=False, remove_0=False):
+  fig = plt.figure(figsize=(10,15))
+  ax1 = plt.subplot2grid((1,21), (0,0), colspan=10)
+  ax2 = plt.subplot2grid((1,21), (0,10), colspan=10)
+
+  all_dist_0, dmin_0, dmax_0 = plot_fraction_heatmap(kraken_df_using[0], [quast_df[0], quast_df[1]], remove_0=remove_0)
+  all_dist_1, dmin_1, dmax_1 = plot_fraction_heatmap(kraken_df_using[1], [quast_df[2], quast_df[3]], remove_0=remove_0)
+  if norm_row:
+    dmin, dmax = 0, 1
+  else:
+    dmin, dmax = min(dmin_0, dmin_1), max(dmax_0, dmax_1)
+  mid = ((dmax-dmin)/2)+dmin
+  colormap = mpl.cm.get_cmap('plasma', 256)
+  norm = mpl.colors.Normalize(vmin=dmin, vmax=dmax)
+  m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+  
+  x, y, bot = [a for a in range(12)], [1 for a in range(12)], [40 for a in range(12)]
+  x[-1] += 0.1
+  yvals = []
+  for a in range(len(all_dist_0)):
+    if a == len(all_dist_0)-2: 
+      bot = [b-0.2 for b in bot]
+    for b in range(len(all_dist_0[a])):
+      fc1, fc2 = 'k', 'k'
+      if all_dist_0[a][b] < mid: fc1 = 'w'
+      if all_dist_1[a][b] < mid: fc2 = 'w'
+      ax1.text(x[b], bot[b]+0.5, str(round(all_dist_0[a][b],3)), color=fc1, ha='center', va='center', fontsize=6)
+      ax2.text(x[b], bot[b]+0.5, str(round(all_dist_1[a][b],3)), color=fc2, ha='center', va='center', fontsize=6)
+    all_dist_0[a] = [m.to_rgba(d) for d in all_dist_0[a]]
+    all_dist_1[a] = [m.to_rgba(d) for d in all_dist_1[a]]
+    ax1.bar(x, y, bottom=bot, color=all_dist_0[a], edgecolor='k', width=1)
+    ax2.bar(x, y, bottom=bot, color=all_dist_1[a], edgecolor='k', width=1)
+    yvals.append(bot[0]+0.5)
+    bot = [b-1 for b in bot]
+  
+  for ax in [ax1, ax2]:
+    plt.sca(ax)
+    if ax == ax1: plt.yticks(yvals+[0.1], samples_tna+samples_cdna+['Mean', 'Median']), plt.title('RefSeq Complete V93')
+    else: plt.yticks([]), plt.title('Kraken Standard Nov20')
+    plt.xlim([-0.5, 11.6]), plt.ylim([-1.2, 41]), plt.xticks([a for a in range(12)], confidence+['T']), plt.xlabel('Kraken confidence value')
+  
+  ax_col = plt.subplot2grid((5,22), (0,21))
+  cb1 = mpl.colorbar.ColorbarBase(ax_col, cmap=colormap, norm=norm, orientation='vertical')
+  return
+```
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+ind=4
+fraction_heatmap([na_samples_red_rsc, na_samples_red_krakstan], [dfs_tna_rsc[ind], dfs_cdna_rsc[ind], dfs_tna_krakstan[ind], dfs_cdna_krakstan[ind]])
+
+plt.tight_layout()
+plt.show()
+```
+
+# Alpha diversity (all samples) {.tabset}
+
+Here I'm not filtering based on sample number at all, but I am only keeping the samples where confidence = 0 for RefSeq Complete and confidence = 1 for the Nov20 standard kraken database:
+```{python, results='hide', fig.keep='all'}
+refseq_conf = [pd.DataFrame(a) for a in na_samples_red_rsc]
+rename = {}
+for a in range(len(refseq_conf)):
+  cols = refseq_conf[a].columns
+  keeping = [cn for cn in cols if cn.split('_')[1] == '0']
+  refseq_conf[a] = refseq_conf[a].loc[:, keeping]
+refseq_conf = pd.concat(refseq_conf)
+for col in refseq_conf.columns: rename[col] = col.split('_')[0]
+refseq_conf = refseq_conf.groupby(by=refseq_conf.index, axis=0).sum().fillna(value=0).rename(columns=rename)
+refseq_conf = refseq_conf.loc[:, refseq_conf.sum(axis=0) > 0]
+
+krakstan_conf = [pd.DataFrame(a) for a in na_samples_red_krakstan]
+rename = {}
+for a in range(len(krakstan_conf)):
+  cols = krakstan_conf[a].columns
+  keeping = [cn for cn in cols if cn.split('_')[1] == '1']
+  krakstan_conf[a] = krakstan_conf[a].loc[:, keeping]
+krakstan_conf = pd.concat(krakstan_conf)
+for col in krakstan_conf.columns: rename[col] = col.split('_')[0]
+krakstan_conf = krakstan_conf.groupby(by=krakstan_conf.index, axis=0).sum().fillna(value=0).rename(columns=rename)
+krakstan_conf = krakstan_conf.loc[:, krakstan_conf.sum(axis=0) > 0]
+```
+
+So we have:</br>
+- 66, 80 and 80 samples for each of the amplicon TNA V4V5, TNA V6V8 and cDNA V6V8, respectively</br>
+- 20 and 20 samples for the TNA and cDNA RefSeq samples (confidence = 0)</br>
+- 13 and 11 samples for the TNA and cDNA Nov20 standard samples (confidence = 1; some samples had 0 reads)</br>
+Results of T-tests between groups are shown where appropriate.
+
+```{python, results='hide', fig.keep='all'}
+def get_diversity(diversity, sample):
+    '''
+    function to calculate a range of different diversity metrics
+    It takes as input:
+        - diversity (the name of the diversity metric we want, can be 'Simpsons', 'Shannon', 'Richness', 'Evenness', 'Maximum' (Maximum is not a diversity metric, the function will just return the maximum abundance value given in sample)
+        - sample (a list of abundance values that should correspond to one sample)
+    Returns:
+        - The diversity index for the individual sample
+    '''
+    for a in range(len(sample)):
+        sample[a] = float(sample[a])
+    total = sum(sample)
+    if diversity == 'Simpsons':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)**2
+        simpsons = 1-(sum(sample))
+        return simpsons
+    elif diversity == 'Shannon':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)
+            if sample[b] != 0:
+                sample[b] = -(sample[b] * (np.log(sample[b])))
+        shannon = sum(sample)
+        return shannon
+    elif diversity == 'Richness':
+        rich = 0
+        for b in range(len(sample)):
+            if sample[b] != 0:
+                rich += 1
+        return rich
+    elif diversity == 'Evenness':
+        for b in range(len(sample)):
+            sample[b] = (sample[b]/total)
+            if sample[b] != 0:
+                sample[b] = -(sample[b] * (np.log(sample[b])))
+        shannon = sum(sample)
+        rich = 0
+        for b in range(len(sample)):
+            if sample[b] != 0:
+                rich += 1
+        even = shannon/(np.log(rich))
+        return even
+    elif diversity == 'Maximum':
+        ma = (max(sample)/total)*100
+        return ma
+    return
+    
+def make_boxplot(ax, data):
+  groups, xlabs = [['N', 'neg'], ['N', 'pos'], ['O', 'neg'], ['O', 'pos']], ['Nasal\nnegative', 'Nasal\npositive', 'Oral\nnegative', 'Oral\npositive']
+  x = [1, 2, 3, 4]
+  for a in range(len(data)):
+    xlabs[a] += '\n$n$='+str(len(data[a]))
+    col, fill, med = '#0154B2', 'w', 'k'
+    if groups[a][1] == 'pos': col = '#B20154'
+    if groups[a][0] == 'N': fill, med = col, 'w'
+    if len(data[a]) == 1:
+      ax.scatter([x[a]], data[a], color=fill, edgecolor=col)
+    else:
+      box = ax.boxplot(data[a], positions=[x[a]], patch_artist=True)
+      for element in ['boxes', 'whiskers', 'fliers', 'means', 'medians', 'caps']:
+        plt.setp(box[element], color=col)
+      plt.setp(box['boxes'], facecolor=fill), plt.setp(box['medians'], color=med)
+  plt.sca(ax)
+  plt.xticks(x, xlabs)
+  d_test = [data[0], data[1]], [data[2], data[3]]
+  x = [[1,2], [3,4]]
+  for d in range(len(d_test)):
+    if len(d_test[d][0]) == 0: continue
+    if len(d_test[d][1]) == 0: continue
+    t, p = stats.ttest_ind(d_test[d][0], d_test[d][1])
+    mx = max(max(d_test[d][0]), max(d_test[d][1]))
+    mx = mx+0.1*mx
+    ax.plot(x[d], [mx, mx], 'k-')
+    txt = 'T='+str(round(t, 3))+', $p$='+str(round(p, 3))
+    ax.text(x[d][0]+0.5, mx+(mx*0.01), txt, ha='center', va='bottom')
+    ax.scatter(x[d][0], mx+mx*0.05, color='w')
+  return
+
+def get_alpha(df, rname='Reads'):
+  plt.figure(figsize=(15,5))
+  ax1, ax2, ax3 = plt.subplot(131), plt.subplot(132), plt.subplot(133)
+  axes = [ax1, ax2, ax3]
+  groups, xlabs = [['N', 'neg'], ['N', 'pos'], ['O', 'neg'], ['O', 'pos']], ['Nasal\nnegative', 'Nasal\npositive', 'Oral\nnegative', 'Oral\npositive']
+  div = [rname, 'Shannon', 'Simpsons']
+  
+  for d in range(3):
+    to_plot = []
+    for a in range(len(groups)):
+      keeping = []
+      for col in df.columns:
+        if col[0] == groups[a][0] or col[5] == groups[a][0]:
+          if groups[a][1] in col:
+            keeping.append(col)
+      if len(keeping) == 0: 
+        to_plot.append([])
+        continue
+      this_group = pd.DataFrame(df.loc[:, keeping])
+      if div[d] == rname:
+        if rname == 'Reads':
+          reads = list(this_group.sum(axis=0).values)
+        else:
+          new_group = pd.DataFrame(this_group)
+          new_group[new_group > 0] = 1
+          reads = list(new_group.sum(axis=0).values)
+        to_plot.append(reads)
+      else:
+        this_div = []
+        for col in this_group.columns:
+          this_sample = list(this_group.loc[:, col].values)
+          if sum(this_sample) == 0: 
+            div_ind = 0
+          else:
+            div_ind = get_diversity(div[d], this_sample)
+          this_div.append(div_ind)
+        to_plot.append(this_div)
+    make_boxplot(axes[d], to_plot)
+    axes[d].set_title(div[d])
+  return
+```
+
+## TNA V4V5
+
+```{python, results='hide', fig.keep='all'}
+ind = 0
+this_df = amplicon[ind]
+get_alpha(this_df)
+plt.show()
+```
+
+## TNA V6V8
+
+```{python, results='hide', fig.keep='all'}
+ind = 1
+this_df = amplicon[ind]
+get_alpha(this_df)
+plt.show()
+```
+
+## cDNA V6V8
+
+```{python, results='hide', fig.keep='all'}
+ind = 2
+this_df = amplicon[ind]
+get_alpha(this_df)
+plt.show()
+```
+
+## RefSeq TNA
+
+```{python, results='hide', fig.keep='all'}
+keeping = [cn for cn in refseq_conf.columns if 'cDNA' not in cn]
+this_df = pd.DataFrame(refseq_conf.loc[:, keeping])
+get_alpha(this_df)
+plt.show()
+```
+
+## RefSeq cDNA
+
+```{python, results='hide', fig.keep='all'}
+keeping = [cn for cn in refseq_conf.columns if 'cDNA' in cn]
+this_df = pd.DataFrame(refseq_conf.loc[:, keeping])
+get_alpha(this_df)
+plt.show()
+```
+
+## Nov20 standard TNA
+
+```{python, results='hide', fig.keep='all'}
+keeping = [cn for cn in krakstan_conf.columns if 'cDNA' not in cn]
+this_df = pd.DataFrame(krakstan_conf.loc[:, keeping])
+get_alpha(this_df)
+plt.show()
+```
+
+## Nov20 standard cDNA
+
+```{python, results='hide', fig.keep='all'}
+keeping = [cn for cn in krakstan_conf.columns if 'cDNA' in cn]
+this_df = pd.DataFrame(krakstan_conf.loc[:, keeping])
+get_alpha(this_df)
+plt.show()
+```
+
+
+# Alpha diversity {.tabset}
+
+Now removing samples with below 2000 reads, and I'll keep the confidence = 0 for RefSeq Complete and confidence = 1 for the Nov20 standard kraken database:
+```{python, results='hide', fig.keep='all'}
+amplicon_red = [pd.DataFrame(a) for a in amplicon]
+for a in range(len(amplicon_red)):
+  amplicon_red[a] = amplicon_red[a].loc[:, amplicon_red[a].sum(axis=0) > 2000]
+
+refseq_red = [pd.DataFrame(a) for a in na_samples_red_rsc]
+rename = {}
+for a in range(len(refseq_red)):
+  cols = refseq_red[a].columns
+  keeping = [cn for cn in cols if cn.split('_')[1] == '0']
+  refseq_red[a] = refseq_red[a].loc[:, keeping]
+refseq_red = pd.concat(refseq_red)
+for col in refseq_red.columns: rename[col] = col.split('_')[0]
+refseq_red = refseq_red.groupby(by=refseq_red.index, axis=0).sum().fillna(value=0).rename(columns=rename)
+refseq_red = refseq_red.loc[:, refseq_red.sum(axis=0) > 2000]
+
+krakstan_red = [pd.DataFrame(a) for a in na_samples_red_krakstan]
+rename = {}
+for a in range(len(krakstan_red)):
+  cols = krakstan_red[a].columns
+  keeping = [cn for cn in cols if cn.split('_')[1] == '1']
+  krakstan_red[a] = krakstan_red[a].loc[:, keeping]
+krakstan_red = pd.concat(krakstan_red)
+for col in krakstan_red.columns: rename[col] = col.split('_')[0]
+krakstan_red = krakstan_red.groupby(by=krakstan_red.index, axis=0).sum().fillna(value=0).rename(columns=rename)
+krakstan_red = krakstan_red.loc[:, krakstan_red.sum(axis=0) > 2000]
+```
+
+This leaves us with:</br>
+- 33, 47 and 53 samples for each of the amplicon TNA V4V5, TNA V6V8 and cDNA V6V8, respectively</br>
+- 19 and 16 samples for the TNA and cDNA RefSeq samples (confidence = 0)</br>
+- 9 and 6 samples for the TNA and cDNA Nov20 standard samples (confidence = 1)</br>
+Results of T-tests between groups are shown where appropriate.
+
+## TNA V4V5
+
+```{python, results='hide', fig.keep='all'}
+ind = 0
+this_df = amplicon_red[ind]
+get_alpha(this_df)
+plt.show()
+```
+
+## TNA V6V8
+
+```{python, results='hide', fig.keep='all'}
+ind = 1
+this_df = amplicon_red[ind]
+get_alpha(this_df)
+plt.show()
+```
+
+## cDNA V6V8
+
+```{python, results='hide', fig.keep='all'}
+ind = 2
+this_df = amplicon_red[ind]
+get_alpha(this_df)
+plt.show()
+```
+
+## RefSeq TNA
+
+```{python, results='hide', fig.keep='all'}
+keeping = [cn for cn in refseq_red.columns if 'cDNA' not in cn]
+this_df = pd.DataFrame(refseq_red.loc[:, keeping])
+get_alpha(this_df)
+plt.show()
+```
+
+## RefSeq cDNA
+
+```{python, results='hide', fig.keep='all'}
+keeping = [cn for cn in refseq_red.columns if 'cDNA' in cn]
+this_df = pd.DataFrame(refseq_red.loc[:, keeping])
+get_alpha(this_df)
+plt.show()
+```
+
+## Nov20 standard TNA
+
+```{python, results='hide', fig.keep='all'}
+keeping = [cn for cn in krakstan_red.columns if 'cDNA' not in cn]
+this_df = pd.DataFrame(krakstan_red.loc[:, keeping])
+get_alpha(this_df)
+plt.show()
+```
+
+## Nov20 standard cDNA
+
+```{python, results='hide', fig.keep='all'}
+keeping = [cn for cn in krakstan_red.columns if 'cDNA' in cn]
+this_df = pd.DataFrame(krakstan_red.loc[:, keeping])
+get_alpha(this_df)
+plt.show()
+```
+
+# Beta diversity {.tabset}
+
+To make these all more comparable (hopefully), I'm grouping all of the taxa to the genus level and converting them to relative abundance:
+```{python, results='hide', fig.keep='all'}
+amp_gen, names = [], ['TNA-V4V5', 'TNA-V6V8', 'cDNA-V6V8']
+for a in range(len(amplicon_red)):
+  tax_rename = {}
+  asvs = set(amplicon_red[a].index.values)
+  for asv in asvs:
+    tax = amp_tax[a][asv]
+    if 'g__' in tax:
+      tax = tax.split('g__')[1].split(';')[0]
+    else:
+      tax = tax.split('__')[-1]
+    tax_rename[asv] = tax
+  new_amp = amplicon_red[a].rename(index=tax_rename)
+  new_amp = new_amp.groupby(by=new_amp.index, axis=0).sum()
+  cols = new_amp.columns
+  col_rename = {}
+  for col in cols:
+    name = names[a]+'-'+col[0]+'-'+col.split('-')[1]
+    col_rename[col] = name
+  new_amp = new_amp.rename(columns=col_rename)
+  amp_gen.append(new_amp)
+amp_gen = pd.concat(amp_gen, axis=1).fillna(value=0)
+amp_gen = amp_gen.groupby(by=amp_gen.index, axis=0).sum()
+
+names = ['RSC-', 'KS-']
+shotgun = [pd.DataFrame(refseq_red), pd.DataFrame(krakstan_red)]
+tax_dict = {**tax_names_rsc, **tax_names_krakstan}
+new_tax_dict = {}
+for tax in tax_dict:
+  new_tax_dict[str(tax)] = tax_dict[tax]
+for a in range(len(shotgun)):
+  cols = shotgun[a].columns
+  col_rename = {}
+  for col in cols:
+    if 'cDNA' in col: name = 'cDNA-'+names[a]+col[5]+'-'+col.split('-')[-1]
+    else: name = 'TNA-'+names[a]+col[0]+'-'+col.split('-')[-1]
+    col_rename[col] = name
+  shotgun[a] = shotgun[a].rename(columns=col_rename)
+  asvs = set(shotgun[a].index.values)
+  tax_rename = {}
+  for asv in asvs:
+    tax = new_tax_dict[str(asv)].split(' ')[0]
+    tax_rename[asv] = tax
+  shotgun[a] = shotgun[a].rename(index=tax_rename)
+  shotgun[a] = shotgun[a].groupby(by=shotgun[a].index, axis=0).sum()
+shotgun = pd.concat(shotgun, axis=1).fillna(value=0)
+shotgun = shotgun.groupby(by=shotgun.index, axis=0).sum()
+
+all_combined = pd.concat([amp_gen, shotgun], axis=1).fillna(value=0)
+all_combined = all_combined.groupby(by=all_combined.index, axis=0).sum()
+all_combined_perc = all_combined.divide(all_combined.sum(axis=0), axis=1).multiply(100)
+all_combined_perc_red = all_combined_perc[all_combined_perc.max(axis=1) > 0.1]
+```
+
+Function:
+```{python, results='hide', fig.keep='all'}
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+
+def confidence_ellipse(x, y, ax, n_std=3.0, facecolor='none', edgecolor='none', **kwargs):
+    """
+    Taken from matplotlib docs: https://matplotlib.org/devdocs/gallery/statistics/confidence_ellipse.html
+    """
+    if x.size != y.size:
+        raise ValueError("x and y must be the same size")
+
+    cov = np.cov(x, y)
+    pearson = cov[0, 1]/np.sqrt(cov[0, 0] * cov[1, 1])
+    # Using a special case to obtain the eigenvalues of this
+    # two-dimensionl dataset.
+    ell_radius_x = np.sqrt(1 + pearson)
+    ell_radius_y = np.sqrt(1 - pearson)
+    ellipse = Ellipse((0, 0), width=ell_radius_x * 2, height=ell_radius_y * 2,
+                      facecolor=facecolor, edgecolor=edgecolor, **kwargs)
+
+    # Calculating the stdandard deviation of x from
+    # the squareroot of the variance and multiplying
+    # with the given number of standard deviations.
+    scale_x = np.sqrt(cov[0, 0]) * n_std
+    mean_x = np.mean(x)
+
+    # calculating the stdandard deviation of y ...
+    scale_y = np.sqrt(cov[1, 1]) * n_std
+    mean_y = np.mean(y)
+
+    transf = transforms.Affine2D() \
+        .rotate_deg(45) \
+        .scale(scale_x, scale_y) \
+        .translate(mean_x, mean_y)
+
+    ellipse.set_transform(transf + ax.transData)
+    return ax.add_patch(ellipse)
+
+def get_fig(data, metric='braycurtis'):
+  fig = plt.figure(figsize=(10,15))
+  titles = ['Combined', 'V4V5', 'V6V8', 'Shotgun RefSeq Complete', 'Shotgun Nov20 Standard']
+  ax1 = plt.subplot(211)
+  ax2, ax3, ax4, ax5 = plt.subplot(4,2,5), plt.subplot(4,2,6), plt.subplot(4,2,7), plt.subplot(4,2,8)
+  filter_on = ['', 'V4V5', 'V6V8', 'RSC', 'KS']
+  axes = [ax1, ax2, ax3, ax4, ax5]
+  shapes = {'TNA-V4V5':'v', 'TNA-V6V8':'^', 'TNA-RSC':'<', 'TNA-KS':'>', 'cDNA-V6V8':'o', 'cDNA-RSC':'s', 'cDNA-KS':'p'}
+  rename = {'TNA-V4V5':'TNA-V4V5', 'TNA-V6V8':'TNA-V6V8', 'TNA-RSC':'TNA-Shotgun RSC', 'TNA-KS':'TNA-Shotgun Nov20 Standard', 'cDNA-V6V8':'cDNA-V6V8', 'cDNA-RSC':'cDNA-Shotgun RSC', 'cDNA-KS':'cDNA-Shotgun Nov20 Standard'}
+  colors_np = {'N-neg':'#0154B2', 'N-pos':'#B20154', 'O-neg':'#B1ECFD', 'O-pos':'#FCCAFE'}
+  for_adonis_df, for_adonis_md = [], []
+  for a in range(len(axes)):
+    if a > 0:
+      keeping = []
+      for col in data.columns:
+        if filter_on[a] in col: keeping.append(True)
+        else: keeping.append(False)
+      data_kept = pd.DataFrame(data.loc[:, keeping])
+      data_kept = data_kept[data_kept.max(axis=1) > 1]
+    else:
+      data_kept = pd.DataFrame(data)
+    if data_kept.shape[0] == 0: continue
+    groups = set(data_kept.columns)
+    groups = [g.split('-')[2]+'-'+g.split('-')[3] for g in groups]
+    groups = list(set(groups))
+    group_colors = [colors_np[g] for g in groups]
+    group_pos = [[[], []] for g in groups]
+    pos, npos, stress = transform_for_NMDS(data_kept.transpose(), dist_met=metric)
+    for b in range(len(data_kept.columns)):
+      cn = data_kept.columns[b].split('-')
+      grp = cn[2]+'-'+cn[3]
+      col, fill = '#0154B2', 'w'
+      if cn[3] == 'pos': col = '#B20154'
+      if cn[2] == 'N': fill = col
+      shape = shapes[cn[0]+'-'+cn[1]]
+      axes[a].scatter(npos[b,0], npos[b,1], marker=shape, color=fill, edgecolor=col)
+      for g in range(len(groups)):
+        if groups[g] == grp: group_pos[g][0].append(npos[b,0]), group_pos[g][1].append(npos[b,1])
+    for e in range(len(group_pos)):
+      ell = group_pos[e]
+      confidence_ellipse(np.asarray(ell[0]), np.asarray(ell[1]), axes[a], n_std=2, edgecolor=group_colors[e])
+    
+    mdat = []
+    data_kept_t = data_kept.transpose().reset_index()
+    rn = {}
+    for row in data_kept_t.index:
+      meta = data_kept_t.loc[row, 'index']
+      mdat.append(['s'+str(row)]+meta.split('-'))
+      rn[row] = 's'+str(row)
+    mdat = pd.DataFrame(mdat, columns=['index', 'NucAc', 'Region', 'Site', 'COVID'])
+    mdat = mdat.set_index('index')
+    data_kept_t = data_kept_t.drop(['index'], axis=1).rename(index=rn)
+    for col in ['NucAc', 'Region', 'Site', 'COVID']:
+      if len(set(mdat.loc[:, col].values)) == 1:
+        mdat = mdat.drop(col, axis=1)
+    for_adonis_df.append(data_kept_t), for_adonis_md.append(mdat)
+    axes[a].set_xlabel('nMDS1'), axes[a].set_ylabel('nMDS2'), axes[a].set_title(titles[a])
+    handles = [Patch(facecolor='w', edgecolor='#0154B2', label='Negative oropharyngeal'), Patch(facecolor='#0154B2', edgecolor='#0154B2', label='Negative nasopharyngeal'), Patch(facecolor='w', edgecolor='#B20154', label='Positive oropharyngeal'), Patch(facecolor='#B20154', edgecolor='#B20154', label='Positive nasopharyngeal')]
+    handles2 = [Line2D([0], [0], marker=shapes[shape], color='w', label=rename[shape], markerfacecolor='k', markersize=10) for shape in shapes]
+    if a == 0:
+      axes[a].legend(handles=handles+handles2, loc='upper right')
+  return for_adonis_df, for_adonis_md
+```
+
+## Bray-Curtis
+
+So here we are starting to see some patterns - almost all of the negative nasopharyngeal samples group together, and it looks like most of the positive nasopharyngeal samples might do too, if only there were more of them, while all of the oropharyngeal samples group together regardless of COVID test result. Interesting that it doesn't seem like there are large differences between the TNA and cDNA, though. The ellipses for each group are the mean + 2 standard deviations for each group (with the lighter colours being oral and the darker being nasal).
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+for_adonis_df, for_adonis_md = get_fig(all_combined_perc)
+plt.tight_layout()
+plt.show()
+```
+
+Adonis tests:</br>
+Note that for these (and all others), site refers to oral/nasal, COVID refers to positive/negative, NucAc refers to TNA/cDNA and region refers to V4V5/V6V8/shotgun RefSeq complete/shotgun kraken standard.
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ Site*COVID*NucAc*Region, data = md[[1]]))
+
+cat('\n\nV4V5\n\n')
+print(adonis2(df[[2]] ~ Site, data = md[[2]]))
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[3]] ~ Site*COVID*NucAc, data = md[[3]]))
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[4]] ~ Site*COVID*NucAc, data = md[[4]]))
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[5]] ~ Site*COVID*NucAc, data = md[[5]]))
+```
+
+## Bray-Curtis >0.1%
+
+This is the same as the previous, but here I've only kept genera that are above 0.1% relative abundance in at least one sample, so this looks pretty similar to the previous.
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+for_adonis_df, for_adonis_md = get_fig(all_combined_perc_red)
+plt.tight_layout()
+plt.show()
+```
+
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ Site*COVID*NucAc*Region, data = md[[1]]))
+
+cat('\n\nV4V5\n\n')
+print(adonis2(df[[2]] ~ Site, data = md[[2]]))
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[3]] ~ Site*COVID*NucAc, data = md[[3]]))
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[4]] ~ Site*COVID*NucAc, data = md[[4]]))
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[5]] ~ Site*COVID*NucAc, data = md[[5]]))
+```
+
+## Bray-Curtis rarefied
+
+So it doesn't really look like rarefying the data changes how the samples group together/apart.
+
+```{python}
+all_combined_t = all_combined.transpose()
+```
+
+```{R}
+df = py$all_combined_t
+rare = rrarefy(df, 2000)
+rare = data.frame(rare)
+```
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+rarefied = r.rare.transpose()
+rarefied.columns = all_combined.columns
+for_adonis_df, for_adonis_md = get_fig(rarefied)
+plt.tight_layout()
+plt.show()
+```
+
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ Site*COVID*NucAc*Region, data = md[[1]]))
+
+cat('\n\nV4V5\n\n')
+print(adonis2(df[[2]] ~ Site, data = md[[2]]))
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[3]] ~ Site*COVID*NucAc, data = md[[3]]))
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[4]] ~ Site*COVID*NucAc, data = md[[4]]))
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[5]] ~ Site*COVID*NucAc, data = md[[5]]))
+```
+
+## Bray-Curtis positive only
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+keeping = []
+for col in all_combined_perc.columns:
+  if 'pos' in col: keeping.append(True)
+  else: keeping.append(False)
+
+all_combined_perc_pos = pd.DataFrame(all_combined_perc.loc[:, keeping])
+
+for_adonis_df, for_adonis_md = get_fig(all_combined_perc_pos)
+plt.tight_layout()
+plt.show()
+```
+
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ Site*NucAc*Region, data = md[[1]]))
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[2]] ~ Site*NucAc, data = md[[2]]))
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[3]] ~ Site*NucAc, data = md[[3]]))
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[4]] ~ NucAc, data = md[[4]]))
+```
+
+## Bray-Curtis oral only
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+keeping = []
+for col in all_combined_perc.columns:
+  if col.split('-')[2] == 'O': keeping.append(True)
+  else: keeping.append(False)
+
+all_combined_perc_oral = pd.DataFrame(all_combined_perc.loc[:, keeping])
+
+for_adonis_df, for_adonis_md = get_fig(all_combined_perc_oral)
+plt.tight_layout()
+plt.show()
+```
+
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ COVID*NucAc*Region, data = md[[1]]))
+
+cat('\n\nV4V5\n\n')
+cat('Only one group')
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[3]] ~ COVID*NucAc, data = md[[3]]))
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[4]] ~ COVID*NucAc, data = md[[4]]))
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[5]] ~ COVID*NucAc, data = md[[5]]))
+```
+
+## Euclidean
+
+Again, it looks like there is no grouping of the oropharyngeal samples, but the nasopharyngeal samples look like they are grouping by COVID result.
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+for_adonis_df, for_adonis_md = get_fig(all_combined_perc, metric='euclidean')
+plt.tight_layout()
+plt.show()
+```
+
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ Site*COVID*NucAc*Region, data = md[[1]]), method='euclidean')
+
+cat('\n\nV4V5\n\n')
+print(adonis2(df[[2]] ~ Site, data = md[[2]]), method='euclidean')
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[3]] ~ Site*COVID*NucAc, data = md[[3]]), method='euclidean')
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[4]] ~ Site*COVID*NucAc, data = md[[4]]), method='euclidean')
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[5]] ~ Site*COVID*NucAc, data = md[[5]]), method='euclidean')
+```
+
+## Euclidean >0.1%
+
+Again, this is the same as the previous, but only with genera that are above 0.1% relative abundance in at least one sample. And again, it looks pretty similar. 
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+for_adonis_df, for_adonis_md = get_fig(all_combined_perc_red, metric='euclidean')
+plt.tight_layout()
+plt.show()
+```
+
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ Site*COVID*NucAc*Region, data = md[[1]]), method='euclidean')
+
+cat('\n\nV4V5\n\n')
+print(adonis2(df[[2]] ~ Site, data = md[[2]]), method='euclidean')
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[3]] ~ Site*COVID*NucAc, data = md[[3]]), method='euclidean')
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[4]] ~ Site*COVID*NucAc, data = md[[4]]), method='euclidean')
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[5]] ~ Site*COVID*NucAc, data = md[[5]]), method='euclidean')
+```
+
+## Euclidean rarefied
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+rarefied = r.rare.transpose()
+rarefied.columns = all_combined.columns
+for_adonis_df, for_adonis_md = get_fig(rarefied, metric='euclidean')
+plt.tight_layout()
+plt.show()
+```
+
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ Site*COVID*NucAc*Region, data = md[[1]]), method='euclidean')
+
+cat('\n\nV4V5\n\n')
+print(adonis2(df[[2]] ~ Site, data = md[[2]]), method='euclidean')
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[3]] ~ Site*COVID*NucAc, data = md[[3]]), method='euclidean')
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[4]] ~ Site*COVID*NucAc, data = md[[4]]), method='euclidean')
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[5]] ~ Site*COVID*NucAc, data = md[[5]]), method='euclidean')
+```
+
+## Euclidean positive only
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+keeping = []
+for col in all_combined_perc.columns:
+  if 'pos' in col: keeping.append(True)
+  else: keeping.append(False)
+
+all_combined_perc_pos = pd.DataFrame(all_combined_perc.loc[:, keeping])
+
+for_adonis_df, for_adonis_md = get_fig(all_combined_perc_pos, metric='euclidean')
+plt.tight_layout()
+plt.show()
+```
+
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ Site*NucAc*Region, data = md[[1]]), method='euclidean')
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[2]] ~ Site*NucAc, data = md[[2]]), method='euclidean')
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[3]] ~ Site*NucAc, data = md[[3]]), method='euclidean')
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[4]] ~ NucAc, data = md[[4]]), method='euclidean')
+```
+
+## Euclidean oral only
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+keeping = []
+for col in all_combined_perc.columns:
+  if col.split('-')[2] == 'O': keeping.append(True)
+  else: keeping.append(False)
+
+all_combined_perc_oral = pd.DataFrame(all_combined_perc.loc[:, keeping])
+
+for_adonis_df, for_adonis_md = get_fig(all_combined_perc_oral, metric='euclidean')
+plt.tight_layout()
+plt.show()
+```
+
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ COVID*NucAc*Region, data = md[[1]]), metric='euclidean')
+
+cat('\n\nV4V5\n\n')
+cat('Only one group')
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[3]] ~ COVID*NucAc, data = md[[3]]), metric='euclidean')
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[4]] ~ COVID*NucAc, data = md[[4]]), metric='euclidean')
+
+cat('\n\nShotgun Kraken standard\n\n')
+print(adonis2(df[[5]] ~ COVID*NucAc, data = md[[5]]), metric='euclidean')
+```
+
+## Bray-Curtis no Kraken standard
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+def get_fig(data, metric='braycurtis'):
+  fig = plt.figure(figsize=(10,10))
+  titles = ['Combined', 'V4V5', 'V6V8', 'Metagenome']
+  ax1 = plt.subplot(211)
+  ax2, ax3, ax4 = plt.subplot(4,3,7), plt.subplot(4,3,8), plt.subplot(4,3,9)
+  filter_on = ['', 'V4V5', 'V6V8', 'RSC']
+  axes = [ax1, ax2, ax3, ax4]
+  shapes = {'TNA-V4V5':'v', 'TNA-V6V8':'^', 'TNA-RSC':'<', 'cDNA-V6V8':'o', 'cDNA-RSC':'s'}
+  rename = {'TNA-V4V5':'TNA-V4V5', 'TNA-V6V8':'TNA-V6V8', 'TNA-RSC':'TNA-Metagenome', 'cDNA-V6V8':'cDNA-V6V8', 'cDNA-RSC':'cDNA-Metagenome'}
+  colors_np = {'N-neg':'#0154B2', 'N-pos':'#B20154', 'O-neg':'#B1ECFD', 'O-pos':'#FCCAFE'}
+  for_adonis_df, for_adonis_md = [], []
+  for a in range(len(axes)):
+    if a > 0:
+      keeping = []
+      for col in data.columns:
+        if filter_on[a] in col: keeping.append(True)
+        else: keeping.append(False)
+      data_kept = pd.DataFrame(data.loc[:, keeping])
+      data_kept = data_kept[data_kept.max(axis=1) > 1]
+    else:
+      data_kept = pd.DataFrame(data)
+    if data_kept.shape[0] == 0: continue
+    groups = set(data_kept.columns)
+    groups = [g.split('-')[2]+'-'+g.split('-')[3] for g in groups]
+    groups = list(set(groups))
+    group_colors = [colors_np[g] for g in groups]
+    group_pos = [[[], []] for g in groups]
+    pos, npos, stress = transform_for_NMDS(data_kept.transpose(), dist_met=metric)
+    for b in range(len(data_kept.columns)):
+      cn = data_kept.columns[b].split('-')
+      grp = cn[2]+'-'+cn[3]
+      col, fill = '#0154B2', 'w'
+      if cn[3] == 'pos': col = '#B20154'
+      if cn[2] == 'N': fill = col
+      shape = shapes[cn[0]+'-'+cn[1]]
+      axes[a].scatter(npos[b,0], npos[b,1], marker=shape, color=fill, edgecolor=col)
+      for g in range(len(groups)):
+        if groups[g] == grp: group_pos[g][0].append(npos[b,0]), group_pos[g][1].append(npos[b,1])
+    for e in range(len(group_pos)):
+      ell = group_pos[e]
+      confidence_ellipse(np.asarray(ell[0]), np.asarray(ell[1]), axes[a], n_std=2, edgecolor=group_colors[e])
+    
+    mdat = []
+    data_kept_t = data_kept.transpose().reset_index()
+    rn = {}
+    for row in data_kept_t.index:
+      meta = data_kept_t.loc[row, 'index']
+      mdat.append(['s'+str(row)]+meta.split('-'))
+      rn[row] = 's'+str(row)
+    mdat = pd.DataFrame(mdat, columns=['index', 'NucAc', 'Region', 'Site', 'COVID'])
+    mdat = mdat.set_index('index')
+    data_kept_t = data_kept_t.drop(['index'], axis=1).rename(index=rn)
+    for col in ['NucAc', 'Region', 'Site', 'COVID']:
+      if len(set(mdat.loc[:, col].values)) == 1:
+        mdat = mdat.drop(col, axis=1)
+    for_adonis_df.append(data_kept_t), for_adonis_md.append(mdat)
+    axes[a].set_xlabel('nMDS1'), axes[a].set_ylabel('nMDS2'), axes[a].set_title(titles[a])
+    handles = [Patch(facecolor='w', edgecolor='#0154B2', label='Negative oropharyngeal'), Patch(facecolor='#0154B2', edgecolor='#0154B2', label='Negative nasopharyngeal'), Patch(facecolor='w', edgecolor='#B20154', label='Positive oropharyngeal'), Patch(facecolor='#B20154', edgecolor='#B20154', label='Positive nasopharyngeal')]
+    handles2 = [Line2D([0], [0], marker=shapes[shape], color='w', label=rename[shape], markerfacecolor='k', markersize=10) for shape in shapes]
+    if a == 0:
+      axes[a].legend(handles=handles+handles2, loc='upper right')
+  return for_adonis_df, for_adonis_md
+
+keeping = []
+for col in all_combined_perc.columns:
+  if 'KS' not in col: keeping.append(True)
+  else: keeping.append(False)
+all_combined_perc_RSC = pd.DataFrame(all_combined_perc.loc[:, keeping])
+
+for_adonis_df, for_adonis_md = get_fig(all_combined_perc_RSC)
+plt.tight_layout()
+plt.show()
+plt.savefig(folder+'NMDS no KS.png', dpi=600, bbox_inches='tight')
+```
+
+Adonis tests:</br>
+Note that for these (and all others), site refers to oral/nasal, COVID refers to positive/negative, NucAc refers to TNA/cDNA and region refers to V4V5/V6V8/shotgun RefSeq complete/shotgun kraken standard.
+```{R}
+df = py$for_adonis_df
+md = py$for_adonis_md
+
+cat('All samples together\n\n')
+print(adonis2(df[[1]] ~ Site*COVID*NucAc*Region, data = md[[1]]))
+
+cat('\n\nV4V5\n\n')
+print(adonis2(df[[2]] ~ Site, data = md[[2]]))
+
+cat('\n\nV6V8\n\n')
+print(adonis2(df[[3]] ~ Site*COVID*NucAc, data = md[[3]]))
+
+cat('\n\nShotgun RefSeq Complete\n\n')
+print(adonis2(df[[4]] ~ Site*COVID*NucAc, data = md[[4]]))
+```
+
+# Abundance bar chart {.tabset}
+
+For now, I'm only plotting these at the genus level as that's how the dataframes already are (and I'd need to go back to the kraken files for this I think). But I will go back and add the other levels at some point. I'm just showing the top 30 genera by abundance for readability.</br>
+Hopefully things will be clearer after differential abundance testing, but it does appear that Cupriavidus is only in the negative nasopharyngeal samples, and not the positive (although this would obviously be easier to confirm with more positive nasopharyngeal samples with enough reads!)
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+combined_sorted = pd.DataFrame(all_combined_perc_red)
+combined_sorted['Sum'] = combined_sorted.sum(axis=1)
+combined_sorted = combined_sorted.sort_values(by=['Sum'], ascending=False)
+combined_sorted = combined_sorted[:30].drop(['Sum'], axis=1)
+
+fig = plt.figure(figsize=(20,20))
+ax1, ax2, ax3 = plt.subplot2grid((5,5), (0,0), colspan=4), plt.subplot2grid((5,5), (1,0), colspan=4), plt.subplot2grid((5,5), (2,0), colspan=4)
+ax4, ax5, ax6, ax7 = plt.subplot2grid((5,5), (3,0), colspan=2), plt.subplot2grid((5,5), (3,2), colspan=2), plt.subplot2grid((5,5), (4,0), colspan=2), plt.subplot2grid((5,5), (4,2), colspan=2)
+axes = [ax1, ax2, ax3, ax4, ax5, ax6, ax7]
+filter_on = ['TNA-V4V5', 'TNA-V6V8', 'cDNA-V6V8', 'TNA-RSC', 'TNA-KS', 'cDNA-RSC', 'cDNA-KS']
+names = {'TNA-V4V5':'TNA V4V5', 'TNA-V6V8':'TNA V6V8', 'cDNA-V6V8':'cDNA V6V8', 'TNA-RSC':'TNA Shotgun RefSeq Complete', 'TNA-KS':'TNA Shotgun Nov20 Standard', 'cDNA-RSC':'cDNA Shotgun RefSeq Complete', 'cDNA-KS':'cDNA Shotgun Nov20 Standard'}
+colormap = mpl.cm.get_cmap('tab20b', 256)
+colormap2 = mpl.cm.get_cmap('tab20c', 256)
+norm = mpl.colors.Normalize(vmin=0, vmax=19)
+m = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+m2 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap2)
+
+colors = [m.to_rgba(a) for a in range(20)]+[m2.to_rgba(a) for a in range(20)]
+
+for a in range(len(axes)):
+  plt.sca(axes[a])
+  keeping = []
+  for col in combined_sorted.columns:
+    if filter_on[a] in col: keeping.append(True)
+    else: keeping.append(False)
+  plotting = pd.DataFrame(combined_sorted.loc[:, keeping])
+  axes[a].set_title(names[filter_on[a]])
+  cn = list(plotting.columns)
+  cn = [c.split('-')[2]+' '+c.split('-')[3] for c in cn]
+  col_rename = {}
+  for b in range(len(cn)):
+    col_rename[plotting.columns[b]] = cn[b]
+  plotting = plotting.rename(columns=col_rename)
+  plotting = plotting.sort_index(axis=1)
+  print(plotting.columns)
+  if a == 0:
+    plotting.transpose().plot.bar(ax=axes[a], stacked=True, legend=True, color=colors, width=0.9, edgecolor='k')
+    plt.legend(loc='upper left', bbox_to_anchor=(1.01,1.01))
+  else:
+    plotting.transpose().plot.bar(ax=axes[a], stacked=True, legend=False, color=colors, width=0.9, edgecolor='k')
+  locs, labels = plt.xticks()
+  plt.xticks(fontsize=8)
+  if a not in [4, 6]: 
+    plt.ylabel('Relative abundance (%)')
+
+plt.subplots_adjust(wspace=0.2, hspace=0.4)
+plt.show()
+plt.savefig(folder+'bar test.png', dpi=600, bbox_inches='tight')
+```
+
+
+# Abundance heatmap and differential abundance {.tabset}
+
+```{python}
+groups = [['TNA-V4V5-N-neg'], ['TNA-V4V5-O-neg'], ['TNA-V6V8-N-neg'], ['TNA-V6V8-O-neg', 'TNA-V6V8-O-pos'], ['cDNA-V6V8-N-neg'], ['cDNA-V6V8-O-neg', 'cDNA-V6V8-O-pos'], ['TNA-RSC-N-neg', 'TNA-RSC-N-pos'], ['TNA-RSC-O-neg', 'TNA-RSC-O-pos'], ['cDNA-RSC-N-neg', 'cDNA-RSC-N-pos'], ['cDNA-RSC-O-neg', 'cDNA-RSC-O-pos']]
+md_sample = []
+
+keeping = []
+for col in all_combined.columns:
+  if 'KS' not in col: 
+    keeping.append(True)
+    md_sample.append([col, col, col.split('-')[-1]])
+  else: keeping.append(False)
+ac_heat = pd.DataFrame(all_combined.loc[:, keeping])
+rare_ac = pd.DataFrame(rarefied.loc[:, keeping])
+ac_heat_perc = ac_heat.divide(ac_heat.sum(axis=0), axis=1).multiply(100)
+ac_heat_perc = ac_heat_perc[ac_heat_perc.max(axis=1) > 1]
+ac_heat_perc = ac_heat_perc.iloc[::-1]
+ac_heat_perc = ac_heat_perc.div(ac_heat_perc.max(axis=1), axis=0)
+ac_heat = ac_heat.loc[ac_heat_perc.index, :]
+
+metadata = pd.DataFrame(md_sample, columns=['Samples', 'Groups_samples', 'Groups']).set_index('Samples')
+groups_ancom = [ac_heat, ac_heat]
+groups_ancom_rare = [rare_ac, rare_ac]
+md_ancom = [metadata.drop(['Groups'], axis=1).rename(columns={'Groups_samples':'Groups'}).reset_index(), metadata.drop(['Groups_samples'], axis=1).reset_index()]
+for a in range(len(groups)):
+  if len(groups[a]) == 1: continue
+  else:
+    groups_ancom.append(ac_heat.loc[:, groups[a]])
+    groups_ancom_rare.append(rare_ac.loc[:, groups[a]])
+    md_ancom.append(metadata.loc[groups[a], :].drop(['Groups_samples'], axis=1).reset_index())
+```
+
+Perform ANCOM tests (on all groups split to e.g. TNA-V4V5-N-neg, all positive vs all negative, TNA V6V8 oral positive vs negative, cDNA V6V8 oral positive vs negative, TNA shotgun nasal positive vs negative, TNA shotgun oral positive vs negative, cDNA shotgun nasal positive vs negative, cDNA shotgun oral positive vs negative):
+```{R}
+source("/Users/robynwright/Documents/OneDrive/Github/R-notebooks/ancom_v2.1.R")
+ft = py$groups_ancom
+metadata = py$md_ancom
+
+feature_table = ft[1]
+md = metadata[1]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_1 = ancom_out$out
+
+feature_table = ft[2]
+md = metadata[2]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_2 = ancom_out$out
+
+feature_table = ft[3]
+md = metadata[3]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_3 = ancom_out$out
+
+feature_table = ft[4]
+md = metadata[4]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_4 = ancom_out$out
+
+feature_table = ft[5]
+md = metadata[5]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_5 = ancom_out$out
+
+feature_table = ft[6]
+md = metadata[6]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_6 = ancom_out$out
+
+feature_table = ft[7]
+md = metadata[7]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_7 = ancom_out$out
+
+feature_table = ft[8]
+md = metadata[8]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_8 = ancom_out$out
+```
+
+Look at ANCOM results:
+```{python}
+ancom_results = [r.ancom_1.set_index('taxa_id'), r.ancom_2.set_index('taxa_id'), r.ancom_3.set_index('taxa_id'), r.ancom_4.set_index('taxa_id'), r.ancom_5.set_index('taxa_id'), r.ancom_6.set_index('taxa_id'), r.ancom_7.set_index('taxa_id'), r.ancom_8.set_index('taxa_id')]
+
+sig_groups = []
+for ancom in ancom_results:
+  sig = []
+  for row in ancom.index.values:
+    if True in ancom.loc[row, :].values: 
+      sig.append(row)
+  sig_groups.append(sig)
+```
+None of the tests gave any significant values.
+
+Doing the same ANCOM tests with the rarefied samples:
+```{R}
+source("/Users/robynwright/Documents/OneDrive/Github/R-notebooks/ancom_v2.1.R")
+ft = py$groups_ancom_rare
+metadata = py$md_ancom
+
+feature_table = ft[1]
+md = metadata[1]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_1 = ancom_out$out
+
+feature_table = ft[2]
+md = metadata[2]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_2 = ancom_out$out
+
+feature_table = ft[3]
+md = metadata[3]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_3 = ancom_out$out
+
+feature_table = ft[4]
+md = metadata[4]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_4 = ancom_out$out
+
+feature_table = ft[5]
+md = metadata[5]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_5 = ancom_out$out
+
+feature_table = ft[6]
+md = metadata[6]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_6 = ancom_out$out
+
+feature_table = ft[7]
+md = metadata[7]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_7 = ancom_out$out
+
+feature_table = ft[8]
+md = metadata[8]
+process = feature_table_pre_process(feature_table, md, 'Samples', 'Groups', lib_cut=10, neg_lb=TRUE)
+ancom_out = ANCOM(process$feature_table, process$meta_data, process$struc_zero, main_var='Groups')
+ancom_8 = ancom_out$out
+```
+
+Look at the results:
+```{python}
+ancom_results = [r.ancom_1.set_index('taxa_id'), r.ancom_2.set_index('taxa_id'), r.ancom_3.set_index('taxa_id'), r.ancom_4.set_index('taxa_id'), r.ancom_5.set_index('taxa_id'), r.ancom_6.set_index('taxa_id'), r.ancom_7.set_index('taxa_id'), r.ancom_8.set_index('taxa_id')]
+
+sig_groups = []
+for ancom in ancom_results:
+  sig = []
+  for row in ancom.index.values:
+    if True in ancom.loc[row, :].values: 
+      sig.append(row)
+  sig_groups.append(sig)
+print(sig_groups)
+```
+So there are a few differences when we look at all vs all groups, but nothing too significant.
+
+Plot heatmap:
+```{python, results='hide', fig.keep='all', cache=TRUE}
+fig = plt.figure(figsize=(30,15))
+axes = []
+group_df = []
+first = True
+
+width = ac_heat.shape[1]+len(groups)*5
+current = 0
+
+def group_ax(group, current, first):
+  df = ac_heat_perc.loc[:, group]
+  cols = df.shape[1]
+  ax = plt.subplot2grid((1, width), (0, current), colspan=cols)
+  ax.pcolor(df)
+  rotation=0
+  if 'RSC' in group: rotation=90
+  if first != True:
+    plt.yticks([]), plt.xticks([]), plt.title(group, rotation=rotation)
+  else:
+    plt.xticks([]), plt.title(group, rotation=rotation)
+    names = [name for name in df.index]
+    for n in range(len(names)):
+      if names[n] in sig_groups[0]: 
+        print(names[n])
+        names[n] += '*'
+    plt.yticks(np.arange(0.5, len(df.index), 1), names, fontsize=8)
+    first = False
+  current += cols
+  return current, ax, df, first
+
+for a in range(len(groups)):
+  this_ax, this_df = [], []
+  if len(groups[a]) == 1:
+    current, ax, df, first = group_ax(groups[a][0], current, first)
+    current += 2
+    this_ax.append(ax), this_df.append(df)
+  else:
+    for b in range(len(groups[a])):
+      current, ax, df, first = group_ax(groups[a][b], current, first)
+      this_ax.append(ax), this_df.append(df)
+    current += 2
+  axes.append(this_ax), group_df.append(this_df)
+
+plt.show()
+plt.savefig(folder+'heatmap_test.png', dpi=600, bbox_inches='tight')
+```
+
+# Functional analysis
+
+Read files in:
+```{python, results='hide', fig.keep='all'}
+humann_folder = folder+'metagenome/humann3_out_summary/'
+func_gf = pd.read_csv(humann_folder+'humann3_genefamilies_relab_unstratified.tsv', header=0, index_col=0, sep='\t')
+sn_dict = {}
+for col in func_gf.columns:
+  sn_dict[col] = col.split('_')[0]
+func_gf = func_gf.rename(columns=sn_dict)
+func_gf_unmapped = pd.DataFrame(func_gf.loc['UNMAPPED', :]).transpose()
+func_gf = func_gf.drop(['UNMAPPED'], axis=0)
+
+func_path = pd.read_csv(humann_folder+'humann3_pathabundance_relab_unstratified.tsv', header=0, index_col=0, sep='\t')
+sn_dict = {}
+for col in func_path.columns:
+  sn_dict[col] = col.split('_')[0]
+func_path = func_path.rename(columns=sn_dict)
+func_path_unmapped = pd.DataFrame(func_path.loc[['UNMAPPED', 'UNINTEGRATED'], :])
+func_path = func_path.drop(['UNMAPPED', 'UNINTEGRATED'], axis=0)
+```
+
+## Unmapped reads
+
+This also includes unintegrated reads for the pathways
+```{python, results='hide', fig.keep='all', cache=TRUE}
+fp_unmapped = pd.DataFrame(func_path_unmapped.sum(axis=0)).transpose().rename(index={0:'UNMAPPED'})
+
+plt.figure(figsize=(12,6))
+ax1, ax2, ax3, ax4 = plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)
+
+snames = fp_unmapped.columns
+fp_unmapped[fp_unmapped == 0] = 100
+pltx, pltlab = [], []
+
+in_name = [['N', 'neg'], ['N', 'pos'], ['O', 'neg'], ['O', 'pos']]
+c1, c2 = 0, 0
+for a in range(len(in_name)):
+  col, fill = '#0154B2', 'w'
+  if 'pos' in in_name[a]: col = '#B20154'
+  if in_name[a][0] == 'N': fill = col
+  for b in range(len(snames)):
+    if snames[b][0] == in_name[a][0] and in_name[a][1] in snames[b]:
+      ax1.bar(c1, func_gf_unmapped.loc['UNMAPPED', snames[b]]*100, color=fill, edgecolor=col, width=0.8)
+      ax2.bar(c1, fp_unmapped.loc['UNMAPPED', snames[b]]*100, color=fill, edgecolor=col, width=0.8)
+      pltx.append(c1), pltlab.append(snames[b])
+      c1 += 1
+    elif snames[b][5] == in_name[a][0] and in_name[a][1] in snames[b]:
+      ax3.bar(c2, func_gf_unmapped.loc['UNMAPPED', snames[b]]*100, color=fill, edgecolor=col, width=0.8)
+      ax4.bar(c2, fp_unmapped.loc['UNMAPPED', snames[b]]*100, color=fill, edgecolor=col, width=0.8)
+      c2 += 1
+
+for ax in [ax1, ax2, ax3, ax4]:
+  plt.sca(ax)
+  if ax in [ax1, ax2]: plt.xticks(pltx, ['' for a in pltx])
+  else: plt.xticks(pltx, pltlab, rotation=90)
+  plt.xlim([pltx[0]-0.5, pltx[-1]+0.5]), plt.ylim([0, 100])
+  if ax == ax1: plt.ylabel('TNA\nUnmapped/Unintegrated (%)')
+  elif ax == ax3: plt.ylabel('cDNA\nUnmapped/Unintegrated (%)')
+
+ax1.set_title('Gene families')
+ax2.set_title('Pathways')
+plt.show()
+```
+
+## Alpha diversity {.tabset}
+
+### TNA gene families
+
+```{python, results='hide', fig.keep='all'}
+keeping = []
+for col in func_gf.columns:
+  if 'cDNA' not in col: keeping.append(True)
+  else: keeping.append(False)
+
+func_gf_tna = pd.DataFrame(func_gf.loc[:, keeping])
+get_alpha(func_gf_tna, rname='Gene families')
+plt.show()
+```
+
+### cDNA gene families
+
+```{python, results='hide', fig.keep='all'}
+keeping = []
+for col in func_gf.columns:
+  if 'cDNA' in col: keeping.append(True)
+  else: keeping.append(False)
+
+func_gf_cdna = pd.DataFrame(func_gf.loc[:, keeping])
+get_alpha(func_gf_cdna, rname='Gene families')
+plt.show()
+```
+
+### TNA pathways
+
+```{python, results='hide', fig.keep='all'}
+keeping = []
+for col in func_path.columns:
+  if 'cDNA' not in col: keeping.append(True)
+  else: keeping.append(False)
+
+func_path_tna = pd.DataFrame(func_path.loc[:, keeping])
+get_alpha(func_path_tna, rname='Pathways')
+plt.show()
+```
+
+### cDNA pathways
+
+```{python, results='hide', fig.keep='all'}
+keeping = []
+for col in func_path.columns:
+  if 'cDNA' in col: keeping.append(True)
+  else: keeping.append(False)
+
+func_path_cdna = pd.DataFrame(func_path.loc[:, keeping])
+get_alpha(func_path_cdna, rname='Pathways')
+plt.show()
+```
+
+## Beta diversity {.tabset}
+
+Note that each of these only contain samples with at least one predicted gene family/pathway.
+
+```{python}
+def get_fig_func(data, metric='braycurtis'):
+  fig = plt.figure(figsize=(10,15))
+  titles = ['Combined']
+  ax1 = plt.subplot(211)
+  filter_on = ['']
+  axes = [ax1]
+  shapes = {'TNA':'^', 'cDNA':'o'}
+  for a in range(len(axes)):
+    keeping = []
+    for col in data.columns:
+      if data.loc[:, col].sum() > 0: keeping.append(True)
+      else: keeping.append(False)
+    data_kept = pd.DataFrame(data.loc[:, keeping])
+    if data_kept.shape[0] == 0: continue
+    pos, npos, stress = transform_for_NMDS(data_kept.transpose(), dist_met=metric)
+    for b in range(len(data_kept.columns)):
+      cn = data_kept.columns[b].split('-')
+      col, fill = '#0154B2', 'w'
+      if cn[0] != 'cDNA': cn = ['TNA']+cn
+      if cn[2] == 'pos': col = '#B20154'
+      if 'N' in cn[1]: fill = col
+      axes[a].scatter(npos[b,0], npos[b,1], marker=shapes[cn[0]], color=fill, edgecolor=col)
+    axes[a].set_xlabel('nMDS1'), axes[a].set_ylabel('nMDS2')
+    handles = [Patch(facecolor='w', edgecolor='#0154B2', label='Negative oropharyngeal'), Patch(facecolor='#0154B2', edgecolor='#0154B2', label='Negative nasopharyngeal'), Patch(facecolor='w', edgecolor='#B20154', label='Positive oropharyngeal'), Patch(facecolor='#B20154', edgecolor='#B20154', label='Positive nasopharyngeal')]
+    handles2 = [Line2D([0], [0], marker=shapes[shape], color='w', label=shape, markerfacecolor='k', markersize=10) for shape in shapes]
+    axes[a].legend(handles=handles+handles2, loc='upper right')
+  return
+```
+
+### Bray-Curtis gene families
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_fig_func(func_gf)
+plt.tight_layout()
+plt.show()
+```
+
+### Bray-Curtis pathways
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_fig_func(func_path)
+plt.tight_layout()
+plt.show()
+```
+
+### Euclidean gene families
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_fig_func(func_gf, metric='euclidean')
+plt.tight_layout()
+plt.show()
+```
+
+### Euclidean pathways
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+get_fig_func(func_path, metric='euclidean')
+plt.tight_layout()
+plt.show()
+```
+
+# Get COVID sample number from NCBI
+
+```{python, results='hide', fig.keep='all', eval=FALSE}
+xml_file = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/Literature search/Public data/SraExperimentPackage_fastqAll.xml'
+xtree = et.parse(xml_file)
+
+root = xtree.getroot()
+headers = []
+all_samples = []
+for a in range(len(root)):
+  this_sample = {}
+  for elt in root[a].iter():
+    if str(elt.tag) in ['TAG', 'VALUE']:
+      if str(elt.tag) == 'TAG': 
+        tag = elt.text
+      else:
+        if str(tag) not in headers: headers.append(str(tag))
+        this_sample[str(tag)] = str(elt.text)
+    else:
+      this_sample[elt.tag] = elt.text
+      if elt.tag not in headers: headers.append(elt.tag)
+    if len(elt.attrib) != 0:
+      for item in elt.attrib:
+        this_sample[elt.tag+'_'+item] = elt.attrib[item]
+        if elt.tag+'_'+item not in headers: headers.append(elt.tag+'_'+item)
+  all_samples.append(this_sample)
+
+new_list = []
+for a in range(len(all_samples)):
+  this_list = []
+  for heading in headers:
+    if heading in all_samples[a]:
+      this_list.append(all_samples[a][heading])
+    else:
+      this_list.append('None')
+  new_list.append(this_list)
+
+df = pd.DataFrame(new_list, columns=headers)
+df.to_csv(folder+'NCBI_SRA_xml_fastqAll.csv')
+```

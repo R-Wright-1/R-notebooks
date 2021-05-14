@@ -1,0 +1,469 @@
+---
+title: COVID combined Fulzele
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+fig_width: 10
+fig_height: 10
+---
+
+```{R, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+library(reticulate)
+# library(kableExtra)
+library(knitr)
+library(vegan)
+library(SRAdb)
+```
+
+```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
+import numpy as np
+import os
+import pandas as pd
+from lifelines.utils import concordance_index
+import math
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+from scipy.cluster import hierarchy
+from scipy.spatial import distance
+import matplotlib as mpl
+from matplotlib.lines import Line2D
+import csv
+from matplotlib.patches import Patch
+import matplotlib.transforms as transforms
+import pickle
+from scipy.spatial import distance
+from scipy import stats
+from sklearn import manifold
+from sklearn.decomposition import PCA
+from scipy.stats import pearsonr, spearmanr
+import xml.etree.ElementTree as et
+
+folder_tna_v4v5 = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/16S_V4V5/'
+folder_tna_v6v8 = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/16S_TNA_V6V8/'
+folder_cdna_v6v8 = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/16S_cDNA_V6V8/'
+folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/'
+folder_rsc = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/kraken_RSCV93/'
+folder_krakstan = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/kraken_standard_Nov20/'
+folder_quast = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/metagenome/quast/quast_results/summaries_separate_kraken/'
+folder_fulzele = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/Fulzele/'
+
+def transform_for_NMDS(df, dist_met='braycurtis'):
+    X = df.iloc[0:].values
+    y = df.iloc[:,0].values
+    seed = np.random.RandomState(seed=3)
+    X_true = X
+    similarities = distance.cdist(X_true, X_true, dist_met)
+    mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
+                   dissimilarity="precomputed", n_jobs=1)
+    #print(similarities)
+    pos = mds.fit(similarities).embedding_
+    nmds = manifold.MDS(n_components=2, metric=False, max_iter=3000, eps=1e-12,
+                        dissimilarity="precomputed", random_state=seed, n_jobs=1,
+                        n_init=1)
+    npos = nmds.fit_transform(similarities, init=pos)
+    # Rescale the data
+    pos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((pos ** 2).sum())
+    npos *= np.sqrt((X_true ** 2).sum()) / np.sqrt((npos ** 2).sum())
+    # Rotate the data
+    clf = PCA()
+    X_true = clf.fit_transform(X_true)
+    pos = clf.fit_transform(pos)
+    npos = clf.fit_transform(npos)
+    return pos, npos, nmds.stress_
+```
+
+# Sample summary
+
+## Our data
+
+**COVID samples:**</br>
+- 40 participants:</br>
+  - 20 COVID +ve</br>
+  - 20 COVID -ve</br>
+- Naso- and oro-pharyngeal samples from each participant</br>
+</br>
+**COVID samples sequenced using:**</br>
+- TNA 16S rRNA gene V4-V5 (all participants)</br>
+- TNA 16S rRNA gene V6-V8 (all participants)</br>
+- cDNA 16S rRNA gene V6-V8 (all participants)</br>
+- TNA shotgun metagenome (reduced number of 5 +ve and 5 -ve participants)</br>
+- cDNA shotgun metagenome (reduced number of 5 +ve and 5 -ve participants)</br>
+
+## Fulzele data
+
+**COVID samples (passing filtering, >1000 reads):**</br>
+- 26 COVID +ve/asymptomatic</br>
+- 13 COVID +ve/symptomatic</br>
+- 25 COVID -ve</br>
+- Nasopharyngeal samples from participants
+
+# Look at number of reads {.tabset}
+
+Summary after Deblur/DADA2:
+```{python}
+all_samples = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/sample-frequency-detail-combined.csv', header=0, sep=',')
+data = ['Fulzele', 'TNA-V4V5', 'TNA-V6V8', 'cDNA-V6V8']
+plt.figure(figsize=(14,4))
+axes = [plt.subplot2grid((1,9), (0,0), colspan=3), plt.subplot2grid((1,9), (0,3), colspan=2), plt.subplot2grid((1,9), (0,5), colspan=2), plt.subplot2grid((1,9), (0,7), colspan=2)]
+names = {'neg':'Negative', 'pos':'Positive', 'pa':'Positive\nAsymptomatic', 'psy':'Positve\nSymptomatic'}
+colors = {'neg':'#2471A3', 'pos':'#E74C3C', 'pa':'#EC7063', 'psy':'#E74C3C'}
+titles = ['USA TNA V4V5', 'Canada TNA V4V5', 'Canada TNA V6V8', 'Canada cDNA V6V8']
+
+for a in range(len(data)):
+  plt.sca(axes[a])
+  keeping = []
+  for row in all_samples.index.values:
+    if all_samples.loc[row, 'Dataset'] == data[a]:
+      keeping.append(row)
+  this_data = pd.DataFrame(all_samples.loc[keeping, :])
+  groups = sorted(list(set(list(this_data.loc[:, 'COVID'].values))))
+  group_vals = []
+  for g in range(len(groups)):
+    vals = []
+    for row in this_data.index.values:
+      if this_data.loc[row, 'COVID'] == groups[g]:
+        vals.append(this_data.loc[row, 'Reads'])
+    group_vals.append(vals)
+    pltx = np.random.normal(g, scale=0.05, size=len(vals))
+    plt.scatter(pltx, vals, alpha=0.6, s=15, color=colors[groups[g]])
+    plt.boxplot(vals, positions=[g], showfliers=False, medianprops=dict(color='k'))
+  
+  x = [g for g in range(len(groups))]
+  xnames = [names[g] for g in groups]
+  plt.xticks(x, xnames)
+  
+  ma = max([max(b) for b in group_vals])
+  ma_add = ma*0.05
+  ma += ma_add*2
+  
+  for b in range(len(group_vals)):
+    for c in range(len(group_vals)):
+      if c > b:
+        plt.plot([b, b, c, c], [ma, ma+ma_add, ma+ma_add, ma], 'k-')
+        x = np.mean([b,c])
+        t, p = stats.ttest_ind(group_vals[b], group_vals[c])
+        txt = 'T='+str(round(t,3))+', $p$='+str(round(p,3))
+        plt.text(x, ma+ma_add, txt, ha='center', va='bottom')
+        ma += ma_add*3
+  plt.ylim([0, ma])
+  plt.title(titles[a], fontweight='bold')
+
+axes[0].set_ylabel('Number of reads\nBefore filtering steps')
+
+plt.tight_layout()
+#plt.show()
+plt.savefig(folder+'Samples comparison.png', dpi=600, bbox_inches='tight')
+```
+
+Summary after Deblur/DADA2 including oral:
+```{python}
+all_samples = pd.read_csv('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/COVID/sample-frequency-detail-combined-incl-oral.csv', header=0, sep=',')
+data = ['Fulzele', 'N-TNA-V4V5', 'O-TNA-V4V5', 'N-TNA-V6V8', 'O-TNA-V6V8', 'N-cDNA-V6V8', 'O-cDNA-V6V8']
+plt.figure(figsize=(23,4))
+axes = [plt.subplot2grid((1,15), (0,0), colspan=3), plt.subplot2grid((1,15), (0,3), colspan=2), plt.subplot2grid((1,15), (0,5), colspan=2), plt.subplot2grid((1,15), (0,7), colspan=2), plt.subplot2grid((1,15), (0,9), colspan=2), plt.subplot2grid((1,15), (0,11), colspan=2), plt.subplot2grid((1,15), (0,13), colspan=2)]
+names = {'neg':'Negative', 'pos':'Positive', 'pa':'Positive\nAsymptomatic', 'psy':'Positve\nSymptomatic'}
+colors = {'neg':'#2471A3', 'pos':'#E74C3C', 'pa':'#EC7063', 'psy':'#E74C3C'}
+titles = ['Nasopharyngeal\nUSA TNA V4V5', 'Nasopharyngeal\nCanada TNA V4V5', 'Oropharyngeal\nCanada TNA V4V5', 'Nasopharyngeal\nCanada TNA V6V8', 'Oropharyngeal\nCanada TNA V6V8', 'Nasopharyngeal\nCanada cDNA V6V8', 'Oropharyngeal\nCanada cDNA V6V8']
+
+for a in range(len(data)):
+  plt.sca(axes[a])
+  keeping = []
+  for row in all_samples.index.values:
+    if all_samples.loc[row, 'Dataset'] == data[a]:
+      keeping.append(row)
+  this_data = pd.DataFrame(all_samples.loc[keeping, :])
+  groups = sorted(list(set(list(this_data.loc[:, 'COVID'].values))))
+  group_vals = []
+  for g in range(len(groups)):
+    vals = []
+    for row in this_data.index.values:
+      if this_data.loc[row, 'COVID'] == groups[g]:
+        vals.append(this_data.loc[row, 'Reads'])
+    group_vals.append(vals)
+    pltx = np.random.normal(g, scale=0.05, size=len(vals))
+    plt.scatter(pltx, vals, alpha=0.6, s=15, color=colors[groups[g]])
+    plt.boxplot(vals, positions=[g], showfliers=False, medianprops=dict(color='k'))
+  
+  x = [g for g in range(len(groups))]
+  xnames = [names[g] for g in groups]
+  plt.xticks(x, xnames)
+  
+  ma = max([max(b) for b in group_vals])
+  ma_add = ma*0.05
+  ma += ma_add*2
+  
+  for b in range(len(group_vals)):
+    for c in range(len(group_vals)):
+      if c > b:
+        plt.plot([b, b, c, c], [ma, ma+ma_add, ma+ma_add, ma], 'k-')
+        x = np.mean([b,c])
+        t, p = stats.ttest_ind(group_vals[b], group_vals[c])
+        txt = 'T='+str(round(t,3))+', $p$='+str(round(p,3))
+        plt.text(x, ma+ma_add, txt, ha='center', va='bottom')
+        ma += ma_add*3
+  plt.ylim([0, ma])
+  plt.title(titles[a], fontweight='bold')
+
+axes[0].set_ylabel('Number of reads\nBefore filtering steps')
+
+plt.tight_layout()
+plt.show()
+plt.savefig(folder+'Samples comparison including oral.png', dpi=600, bbox_inches='tight')
+```
+
+After all filtering steps (i.e. keeping only samples >1000 reads):
+```{python}
+ft_name = 'feature-table_w_tax.txt'
+samples_fulzele = pd.read_csv(folder_fulzele+ft_name, index_col=0, header=0, sep='\t')
+samples_v4v5 = pd.read_csv(folder_tna_v4v5+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+samples_v6v8 = pd.read_csv(folder_tna_v6v8+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+samples_v6v8_cdna = pd.read_csv(folder_cdna_v6v8+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+snames = [['neg', 'pa', 'psy'], ['neg', 'pos'], ['neg', 'pos'], ['neg', 'pos']]
+keeping = []
+
+plt.figure(figsize=(14,4))
+axes = [plt.subplot2grid((1,9), (0,0), colspan=3), plt.subplot2grid((1,9), (0,3), colspan=2), plt.subplot2grid((1,9), (0,5), colspan=2), plt.subplot2grid((1,9), (0,7), colspan=2)]
+
+df = [samples_fulzele, samples_v4v5, samples_v6v8, samples_v6v8_cdna]
+for a in range(len(df)):
+  plt.sca(axes[a])
+  df[a].set_index('taxonomy', inplace=True)
+  sums = df[a].sum(axis=0)
+  df[a] = df[a].loc[:, sums>1000]
+  cols = df[a].columns
+  
+  keeping = []
+  for col in cols:
+    if col[0] != 'O': keeping.append(col)
+  df[a] = df[a].loc[:, keeping]
+  
+  df[a] = pd.DataFrame(df[a].sum(axis=0))
+  rename = {}
+  for sn in df[a].index.values:
+    sn_new = sn.split('-')
+    if a == 0: sn_new = sn_new[0].lower()
+    else: sn_new = sn_new[1]
+    if sn_new == 'na': sn_new = 'neg'
+    rename[sn] = sn_new
+  df[a] = df[a].rename(index=rename)
+  group_vals = []
+  for b in range(len(snames[a])):
+    if snames[a][b] not in df[a].index.values: 
+      vals = [0]
+    else:
+      this_val = list(pd.DataFrame(df[a].loc[snames[a][b], :]).values)
+      vals = [x[0] for x in this_val]
+    group_vals.append(vals)
+    if len(vals) < 2: continue
+    pltx = np.random.normal(b, scale=0.05, size=len(vals))
+    plt.scatter(pltx, vals, alpha=0.6, s=15, color=colors[snames[a][b]])
+    plt.boxplot(vals, positions=[b], showfliers=False, medianprops=dict(color='k'))
+  
+  x = [g for g in range(len(snames[a]))]
+  xnames = [names[g] for g in snames[a]]
+  plt.xticks(x, xnames)
+  plt.xlim([x[0]-0.5, x[-1]+0.5])
+  
+  ma = max([max(b) for b in group_vals])
+  ma_add = ma*0.05
+  ma += ma_add*2
+
+  for b in range(len(group_vals)):
+    for c in range(len(group_vals)):
+      if len(group_vals[b]) < 2 or len(group_vals[c]) < 2: continue
+      if c > b:
+        plt.plot([b, b, c, c], [ma, ma+ma_add, ma+ma_add, ma], 'k-')
+        x = np.mean([b,c])
+        t, p = stats.ttest_ind(group_vals[b], group_vals[c])
+        txt = 'T='+str(round(t,3))+', $p$='+str(round(p,3))
+        plt.text(x, ma+ma_add, txt, ha='center', va='bottom')
+        ma += ma_add*3
+  
+  plt.ylim([0, ma])
+  plt.title(titles[a], fontweight='bold')
+
+axes[0].set_ylabel('Number of reads\nSamples >1000 reads only')
+
+plt.tight_layout() 
+#plt.show()
+plt.savefig(folder+'Samples above 1000 reads comparison.png', dpi=600, bbox_inches='tight')
+```
+
+After all filtering steps (i.e. keeping only samples >1000 reads) including oral:
+```{python}
+ft_name = 'feature-table_w_tax.txt'
+samples_fulzele = pd.read_csv(folder_fulzele+ft_name, index_col=0, header=0, sep='\t')
+samples_v4v5_N = pd.read_csv(folder_tna_v4v5+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+samples_v6v8_N = pd.read_csv(folder_tna_v6v8+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+samples_v6v8_cdna_N = pd.read_csv(folder_cdna_v6v8+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+samples_v4v5_O = pd.read_csv(folder_tna_v4v5+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+samples_v6v8_O = pd.read_csv(folder_tna_v6v8+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+samples_v6v8_cdna_O = pd.read_csv(folder_cdna_v6v8+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+snames = [['neg', 'pa', 'psy'], ['neg', 'pos'], ['neg', 'pos'], ['neg', 'pos'], ['neg', 'pos'], ['neg', 'pos'], ['neg', 'pos']]
+filtering = ['none', 'O', 'N', 'O', 'N', 'O', 'N']
+
+plt.figure(figsize=(23,4))
+axes = [plt.subplot2grid((1,15), (0,0), colspan=3), plt.subplot2grid((1,15), (0,3), colspan=2), plt.subplot2grid((1,15), (0,5), colspan=2), plt.subplot2grid((1,15), (0,7), colspan=2), plt.subplot2grid((1,15), (0,9), colspan=2), plt.subplot2grid((1,15), (0,11), colspan=2), plt.subplot2grid((1,15), (0,13), colspan=2)]
+
+df = [samples_fulzele, samples_v4v5_N, samples_v4v5_O, samples_v6v8_N, samples_v6v8_O, samples_v6v8_cdna_N, samples_v6v8_cdna_O]
+for a in range(len(df)):
+  plt.sca(axes[a])
+  df[a].set_index('taxonomy', inplace=True)
+  sums = df[a].sum(axis=0)
+  df[a] = df[a].loc[:, sums>1000]
+  cols = df[a].columns
+  if filtering[a] != 'none':
+    keeping = []
+    for col in cols:
+      if col[0] != filtering[a]: keeping.append(col)
+    df[a] = df[a].loc[:, keeping]
+  df[a] = pd.DataFrame(df[a].sum(axis=0))
+  rename = {}
+  for sn in df[a].index.values:
+    sn_new = sn.split('-')
+    if a == 0: sn_new = sn_new[0].lower()
+    else: sn_new = sn_new[1]
+    if sn_new == 'na': sn_new = 'neg'
+    rename[sn] = sn_new
+  df[a] = df[a].rename(index=rename)
+  group_vals = []
+  for b in range(len(snames[a])):
+    if snames[a][b] not in df[a].index.values:
+      vals = [0]
+    else:
+      this_val = list(pd.DataFrame(df[a].loc[snames[a][b], :]).values)
+      vals = [x[0] for x in this_val]
+    group_vals.append(vals)
+    if len(vals) < 2: continue
+    pltx = np.random.normal(b, scale=0.05, size=len(vals))
+    plt.scatter(pltx, vals, alpha=0.6, s=15, color=colors[snames[a][b]])
+    plt.boxplot(vals, positions=[b], showfliers=False, medianprops=dict(color='k'))
+
+  x = [g for g in range(len(snames[a]))]
+  xnames = [names[g] for g in snames[a]]
+  plt.xticks(x, xnames)
+  plt.xlim([x[0]-0.5, x[-1]+0.5])
+
+  ma = max([max(b) for b in group_vals])
+  ma_add = ma*0.05
+  ma += ma_add*2
+
+  for b in range(len(group_vals)):
+    for c in range(len(group_vals)):
+      if len(group_vals[b]) < 2 or len(group_vals[c]) < 2: continue
+      if c > b:
+        plt.plot([b, b, c, c], [ma, ma+ma_add, ma+ma_add, ma], 'k-')
+        x = np.mean([b,c])
+        t, p = stats.ttest_ind(group_vals[b], group_vals[c])
+        txt = 'T='+str(round(t,3))+', $p$='+str(round(p,3))
+        plt.text(x, ma+ma_add, txt, ha='center', va='bottom')
+        ma += ma_add*3
+
+  plt.ylim([0, ma])
+  plt.title(titles[a], fontweight='bold')
+
+axes[0].set_ylabel('Number of reads\nSamples >1000 reads only')
+
+plt.tight_layout() 
+#plt.show()
+plt.savefig(folder+'Samples above 1000 reads comparison including oral.png', dpi=600, bbox_inches='tight')
+```
+
+DNA concentration (USA samples only):
+```{python}
+dna_conc = pd.read_csv(folder_fulzele+'DNA concentrations.csv', index_col=0, header=0, sep=',')
+
+ax1 = plt.subplot(111)
+groups = ['neg', 'pa', 'psy']
+
+group_vals = []
+for a in range(len(groups)):
+  vals = []
+  for row in dna_conc.index.values:
+    if dna_conc.loc[row, 'COVID'] == groups[a]:
+      vals.append(dna_conc.loc[row, 'Concentration'])
+  pltx = np.random.normal(a, scale=0.05, size=len(vals))
+  plt.scatter(pltx, vals, alpha=0.6, s=15, color=colors[groups[a]])
+  plt.boxplot(vals, positions=[a], showfliers=False, medianprops=dict(color='k'))
+  group_vals.append(vals)
+
+x = [g for g in range(len(groups))]
+xnames = [names[g] for g in groups]
+plt.xticks(x, xnames)
+plt.xlim([x[0]-0.5, x[-1]+0.5])
+plt.ylabel(r'DNA concentration (ng $\mu$L$^{-1}$)')
+
+ma = max([max(b) for b in group_vals])
+ma_add = ma*0.05
+ma += ma_add*2
+
+for b in range(len(group_vals)):
+  for c in range(len(group_vals)):
+    if len(group_vals[b]) < 2 or len(group_vals[c]) < 2: continue
+    if c > b:
+      plt.plot([b, b, c, c], [ma, ma+ma_add, ma+ma_add, ma], 'k-')
+      x = np.mean([b,c])
+      t, p = stats.ttest_ind(group_vals[b], group_vals[c])
+      txt = 'T='+str(round(t,3))+', $p$='+str(round(p,3))
+      plt.text(x, ma+ma_add, txt, ha='center', va='bottom')
+      ma += ma_add*3
+
+plt.ylim([0, ma])
+
+plt.tight_layout()
+#plt.show()
+plt.savefig(folder+'Samples DNA concentration.png', dpi=600, bbox_inches='tight')
+```
+
+Beta diversity:
+```{python}
+ft_name = 'feature-table_w_tax.txt'
+samples_fulzele = pd.read_csv(folder_fulzele+ft_name, index_col=0, header=0, sep='\t')
+samples_v4v5 = pd.read_csv(folder_tna_v4v5+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+samples_v6v8 = pd.read_csv(folder_tna_v6v8+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+samples_v6v8_cdna = pd.read_csv(folder_cdna_v6v8+'exports/'+ft_name, index_col=0, header=0, sep='\t')
+names = {'neg':'Negative', 'pos':'Positive', 'pa':'Positive\nAsymptomatic', 'psy':'Positve\nSymptomatic'}
+colors = {'neg':'#2471A3', 'na':'#2471A3', 'pos':'#E74C3C', 'pa':'#EC7063', 'psy':'#E74C3C'}
+
+
+dfs = [samples_fulzele, samples_v4v5]
+for a in range(len(dfs)):
+  dfs[a] = dfs[a].set_index('taxonomy')
+  if a > 0:
+    keeping = []
+    for col in dfs[a].columns:
+      if col[0] != 'O': keeping.append(col)
+    dfs[a] = dfs[a].loc[:, keeping]
+
+combined = pd.concat(dfs)
+combined = combined.groupby(by=combined.index, axis=0).sum().transpose()
+combined['Sum'] = combined.sum(axis=1)
+combined = combined[combined['Sum'] > 1000]
+combined = combined.transpose()
+
+pos, npos, stress = transform_for_NMDS(combined.transpose())
+
+ax1 = plt.subplot(111)
+for a in range(len(combined.columns)):
+  sname = combined.columns[a].split('-')
+  if sname[1] in ['neg', 'pos']:
+    sname = sname[1]
+    shape = 'o'
+  else:
+    sname = sname[0].lower()
+    shape = '^'
+  color = colors[sname]
+  ax1.scatter(npos[a,0], npos[a,1], color=color, marker=shape)
+plt.xlabel('NMDS1'), plt.ylabel('NMDS2')
+
+handles = [Patch(facecolor=colors['neg'], label='Negative'), Patch(facecolor=colors['pos'], label='Positive'), Line2D([0], [0], marker='^', color='w', label='USA', markerfacecolor='k', markersize=10), Line2D([0], [0], marker='o', color='w', label='Canada', markerfacecolor='k', markersize=10)]
+plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.05, 1.01))
+
+plt.tight_layout()
+#plt.show()
+plt.savefig(folder+'Samples combined NMDS.png', dpi=600, bbox_inches='tight')
+```

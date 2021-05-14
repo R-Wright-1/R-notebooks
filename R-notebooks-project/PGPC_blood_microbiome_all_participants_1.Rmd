@@ -11,9 +11,10 @@ output:
 
 ```{R, results='hide', fig.keep='all', message=FALSE, include=FALSE, eval=FALSE}
 library(reticulate)
-library(kableExtra)
+#library(kableExtra)
 library(knitr)
 library(phyloseq)
+library(microbiome)
 ```
 
 ```{python, results='hide', fig.keep='all', message=FALSE, include=FALSE}
@@ -37,11 +38,13 @@ save_path = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_bl
 analysis = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/'
 
 def transform_for_NMDS(df, dist_met='braycurtis'):
+    #df = np.nan_to_num(df)
     X = df.iloc[0:].values
     y = df.iloc[:,0].values
     seed = np.random.RandomState(seed=3)
     X_true = X
     similarities = distance.cdist(X_true, X_true, dist_met)
+    similarities = np.nan_to_num(similarities)
     mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, random_state=seed,
                    dissimilarity="precomputed", n_jobs=1)
     #print(similarities)
@@ -59,6 +62,45 @@ def transform_for_NMDS(df, dist_met='braycurtis'):
     pos = clf.fit_transform(pos)
     npos = clf.fit_transform(npos)
     return pos, npos, nmds.stress_
+    
+def six_panel_nmds(npos_nmds, reads_df):
+  fig = plt.figure(figsize=(15,15))
+  ax1, ax2, ax3, ax4, ax5, ax6 = plt.subplot(321), plt.subplot(322), plt.subplot(323), plt.subplot(324), plt.subplot(325), plt.subplot(326)
+  colormap = mpl.cm.get_cmap('winter', 256)
+  norm = mpl.colors.Normalize(vmin=0, vmax=21)
+  m1 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+  colors = [m1.to_rgba(a) for a in range(21)]
+  colors_conf = {}
+  for c in range(len(confidence)):
+    colors_conf[confidence[c]] = colors[c]
+  colors_db = {'gtdb':'#1A5276', 'gtdb-masked':'#5499C7', 'refseq':'#E67E22', 'refseq-masked':'#F7DC6F'}
+  
+  for a in range(len(reads_df.columns)):
+    sample = list(reads_df.columns)[a].split('_')
+    t1, t2, t3, t4 = 0.1, 0.1, 0.1, 0.1
+    if sample[1] == 'gtdb': t1 = 1
+    elif sample[1] == 'gtdb-masked': t2 = 1
+    elif sample[1] == 'refseq': t3 = 1
+    elif sample[1] == 'refseq-masked': t4 = 1
+    ax1.scatter(npos_nmds[a,0], npos_nmds[a,1], color=colors_db[sample[1]], alpha=0.6, edgecolor='k')
+    ax2.scatter(npos_nmds[a,0], npos_nmds[a,1], color=colors_conf[sample[2]], alpha=0.6, edgecolor='k')
+    ax3.scatter(npos_nmds[a,0], npos_nmds[a,1], color=colors_conf[sample[2]], alpha=t1, edgecolor='k')
+    ax4.scatter(npos_nmds[a,0], npos_nmds[a,1], color=colors_conf[sample[2]], alpha=t2, edgecolor='k')
+    ax5.scatter(npos_nmds[a,0], npos_nmds[a,1], color=colors_conf[sample[2]], alpha=t3, edgecolor='k')
+    ax6.scatter(npos_nmds[a,0], npos_nmds[a,1], color=colors_conf[sample[2]], alpha=t4, edgecolor='k')
+  
+  ax = [ax1, ax2, ax3, ax4, ax5, ax6]
+  titles = ['Coloured by database', 'Coloured by confidence', 'GTDB coloured by confidence', 'GTDB-masked coloured by confidence', 'RefSeq coloured by confidence', 'RefSeq-masked coloured by confidence']
+  for a in range(len(ax)):
+    ax[a].set_title(titles[a])
+    ax[a].set_xlabel('NMDS1')
+    ax[a].set_ylabel('NMDS2')
+  
+  handles = [Patch(facecolor=colors_db[db], edgecolor='k', label=db) for db in colors_db]
+  ax1.legend(handles=handles, loc='best')
+  handles = [Patch(facecolor=colors_conf[conf], edgecolor='k', label=conf) for conf in confidence]
+  ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.05,1.0))
+  return
 ```
 
 # Run everything through kneaddata {.tabset}
@@ -162,6 +204,29 @@ with open('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_bloo
     pickle.dump(new_participants, f)
 ```
 I checked several at random to see that the number of files was correct and it all looks good.
+
+## PGPC_0022
+
+We didn't have this one originally and it is only available as a bam file, so need to convert this before running.
+
+Download:
+```{bash, eval=FALSE}
+wget https://personalgenomes.ca/v1/public/files/804/download
+mv download PGPC_0022_human.bam
+```
+
+Get the reads in the right order (needed for outputting to R1 and R2 files):
+```{bash, eval=FALSE}
+samtools collate PGPC_0022_human.bam PGPC_0022_human_collate.bam
+```
+
+Then split:
+```{bash, eval=FALSE}
+#samtools fastq [options] file.bam
+samtools fastq -1 PGPC_0022_human_R1.fastq -2 PGPC_0022_human_R2.fastq PGPC_0022_human_collate.bam
+```
+
+This only had human reads, so still can't use it.
 
 ## Run through all participants
 
@@ -507,7 +572,6 @@ for participant in participants:
     if file.split('_kneaddata')[0] not in unique:
       unique.append(file.split('_kneaddata')[0])
       
-      
   for file in unique:
     r1_rename, r2_rename = file+'_kneaddata_paired_1.fastq.gz', file+'_kneaddata_paired_2.fastq.gz'
     r1, r2 = file+'_kneaddata_paired_R1.fastq.gz', file+'_kneaddata_paired_R2.fastq.gz'
@@ -568,6 +632,13 @@ for file in files:
 Looks like it wouldn't be easy to filter out reads based on confidence afterwards so running all confidence parameters now.
 ```{bash, eval=FALSE}
 parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ --memory-mapping {1} --output kraken2_outraw/{1/.}_gtdb_{2}.kraken.txt --report kraken2_kreport/{1/.}_gtdb_{2}.kreport --confidence {2}) 2> times/time_{1/.}_gtdb_{2}.txt' ::: joined_lanes/*.fastq ::: 0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00
+```
+
+## Kraken2 + GTDB (no human genome)
+10th May 2021
+
+```{bash, eval=FALSE}
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2_GTDB_no_human_May2021/ --memory-mapping {1} --output kraken2_outraw/{1/.}_gtdb-nohuman_{2}.kraken.txt --report kraken2_kreport/{1/.}_gtdb-nohuman_{2}.kreport --confidence {2}' ::: joined_lanes/*.fastq.gz ::: 0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00
 ```
 
 ## Kraken2 + RefSeq
@@ -641,6 +712,13 @@ With the first file (PGPC_0001), this has file sizes of 1.3G > 742M > 749M > 425
 parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 24 --db /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ --memory-mapping {1} --output kraken2_outraw/{1/.}_gtdb_{2}.kraken.txt --report kraken2_kreport/{1/.}_gtdb_{2}.kreport --confidence {2}) 2> times/time_{1/.}_gtdb_{2}.txt' ::: joined_lanes/*_masked_removed.fasta ::: 0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00
 ```
 
+### Kraken2 + GTDB (no human)
+10th May
+
+```{bash, eval=FALSE}
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2_GTDB_no_human_May2021/ --memory-mapping {1} --output kraken2_outraw/{1/.}_gtdb-nohuman_{2}.kraken.txt --report kraken2_kreport/{1/.}_gtdb-nohuman_{2}.kreport --confidence {2}' ::: joined_lanes/*_masked_removed.fasta.gz ::: 0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00
+```
+
 ### Kraken2 + RefSeq
 
 ```{bash, eval=FALSE}
@@ -654,10 +732,82 @@ parallel -j 1 '(/usr/bin/time -v kraken2 --use-names --threads 24 --db /scratch/
 parallel -j 12 'bracken -d /scratch/ramdisk/Kraken2_GTDB_human_Dec2020/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*_gtdb_*.kreport
 ```
 
+### GTDB no human
+```{bash, eval=FALSE}
+parallel -j 12 'bracken -d /scratch/ramdisk/Kraken2_GTDB_no_human_May2021/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*_gtdb-nohuman_*.kreport
+```
+
 ### RefSeq
 ```{bash, eval=FALSE}
 parallel -j 12 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93 -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*_refseq_*.kreport
 ```
+
+# Nonpareil 3 {.tabset}
+
+## Run
+
+Run all samples (note that samples need to be gunzipped first, or the count lines won't work):
+```{python, eval=FALSE}
+import os
+import math
+
+fp = 'joined_lanes/'
+cat_reads = sorted(os.listdir(fp))
+cat_reads = [fq for fq in cat_reads if 'fastq' in fq and 'gz' not in fq]
+
+for fq in cat_reads:
+  count = len(open(fp+fq).readlines())/4
+  print(count)
+  sample = int(math.floor(count/100))
+  if sample > 1000: sample = 1000
+  np = 'nonpareil -s '+fp+fq+' -T kmer -f fastq -b '+'nonpareil/'+fq.split('.')[0]+' -X '+str(sample)
+  os.system(np)
+```
+
+## Results
+
+Nonpareil curves TNA:
+```{R}
+library(Nonpareil)
+np_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/nonpareil/'
+samples <- read.table(paste(np_folder, 'nonpareil_samples.csv', sep=''), sep=',', header=TRUE, as.is=TRUE)
+attach(samples)
+nps <- Nonpareil.set(paste(np_folder, File, sep=''), labels=Name, plot.opts=list(plot.observed=FALSE))
+detach(samples)
+summary(nps)
+cov = summary(nps)[,"C"]*100
+div = summary(nps)[,"diversity"]
+lrs = summary(nps)[,"LRstar"]/1e9
+```
+So it looks like the majority of samples have pretty good coverage. We'll look at them individually now.
+
+```{python, results='hide', fig.keep='all'}
+cov = r.cov
+div = r.div
+lrs = r.lrs
+snames = r.samples
+snames = snames.loc[:, 'File'].values
+snames = [a.split('.')[0] for a in snames]
+
+x = [a for a in range(len(snames))]
+plt.figure(figsize=(10,10))
+ax1 = plt.subplot(311)
+plt.bar(x, div)
+plt.xticks(x, snames, rotation=90, fontsize=6)
+plt.xlim([x[0]-0.5, x[-1]+0.5])#, plt.ylim([0, 100])
+#plt.plot([x[0]-0.5, x[-1]+0.5], [90, 90], 'k--')
+plt.ylabel('Diversity')
+# for a in range(len(cov)):
+#   if cov[a] < 90: print(snames[a], cov[a])
+
+#plt.show()
+plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/nonpareil/Diversity.png', dpi=600, bbox_inches='tight')
+```
+The dotted line is plotted at y=90, so we only actually have 4 samples with below 90% coverage:</br>
+- PGPC2 81.37%</br>
+- PGPC5 79.06%</br>
+- PGPC6 79.13%</br>
+- PGPC14 89.18%
 
 # Basic analysis {.tabset}
 
@@ -904,6 +1054,7 @@ handles = [Patch(facecolor=colors[0], edgecolor='k', label='Bacteria'), Patch(fa
 ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.05,1.05))
 plt.tight_layout()
 plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Reads kraken.png', dpi=600, bbox_inches='tight')
 ```
 
 ### Number of bacterial reads
@@ -937,6 +1088,7 @@ for d in range(len(groups)):
     plt.title(groups[d])
 plt.tight_layout()
 plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Reads kraken bacteria.png', dpi=600, bbox_inches='tight')
 ```
 
 ### Proportion of bacterial reads
@@ -971,6 +1123,7 @@ for d in range(len(groups)):
     plt.title(groups[d])
 plt.tight_layout()
 plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Reads kraken bacteria proportion.png', dpi=600, bbox_inches='tight')
 ```
 
 ## Number of bacterial species
@@ -1019,6 +1172,7 @@ for d in range(len(groups)):
     plt.title(groups[d])
 plt.tight_layout()
 plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial species.png', dpi=600, bbox_inches='tight')
 ```
 
 ```{python, results='hide', fig.keep='all', cache=TRUE}
@@ -1054,6 +1208,7 @@ for d in range(len(groups)):
     plt.title(groups[d])
 plt.tight_layout()
 plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial species log.png', dpi=600, bbox_inches='tight')
 ```
 
 ## Beta diversity {.tabset}
@@ -1068,44 +1223,10 @@ else:
   pos, npos, stress = transform_for_NMDS(reads_bacteria.transpose())
   with open(analysis+'npos_bacteria.df', 'wb') as f: pickle.dump(npos, f)
 
-fig = plt.figure(figsize=(15,15))
-ax1, ax2, ax3, ax4, ax5, ax6 = plt.subplot(321), plt.subplot(322), plt.subplot(323), plt.subplot(324), plt.subplot(325), plt.subplot(326)
-colormap = mpl.cm.get_cmap('winter', 256)
-norm = mpl.colors.Normalize(vmin=0, vmax=21)
-m1 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
-colors = [m1.to_rgba(a) for a in range(21)]
-colors_conf = {}
-for c in range(len(confidence)):
-  colors_conf[confidence[c]] = colors[c]
-colors_db = {'gtdb':'#1A5276', 'gtdb-masked':'#5499C7', 'refseq':'#E67E22', 'refseq-masked':'#F7DC6F'}
-
-for a in range(len(reads_bacteria.columns)):
-  sample = list(reads_bacteria.columns)[a].split('_')
-  t1, t2, t3, t4 = 0.1, 0.1, 0.1, 0.1
-  if sample[1] == 'gtdb': t1 = 1
-  elif sample[1] == 'gtdb-masked': t2 = 1
-  elif sample[1] == 'refseq': t3 = 1
-  elif sample[1] == 'refseq-masked': t4 = 1
-  ax1.scatter(npos[a,0], npos[a,1], color=colors_db[sample[1]], alpha=0.6, edgecolor='k')
-  ax2.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=0.6, edgecolor='k')
-  ax3.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t1, edgecolor='k')
-  ax4.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t2, edgecolor='k')
-  ax5.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t3, edgecolor='k')
-  ax6.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t4, edgecolor='k')
-
-ax = [ax1, ax2, ax3, ax4, ax5, ax6]
-titles = ['Coloured by database', 'Coloured by confidence', 'GTDB coloured by confidence', 'GTDB-masked coloured by confidence', 'RefSeq coloured by confidence', 'RefSeq-masked coloured by confidence']
-for a in range(len(ax)):
-  ax[a].set_title(titles[a])
-  ax[a].set_xlabel('NMDS1')
-  ax[a].set_ylabel('NMDS2')
-
-handles = [Patch(facecolor=colors_db[db], edgecolor='k', label=db) for db in colors_db]
-ax1.legend(handles=handles, loc='best')
-handles = [Patch(facecolor=colors_conf[conf], edgecolor='k', label=conf) for conf in confidence]
-ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.05,1.0))
+six_panel_nmds(npos, reads_bacteria)
 plt.tight_layout()
 plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS species.png', dpi=600, bbox_inches='tight')
 ```
 
 ### Genus
@@ -1131,49 +1252,11 @@ else:
   with open(analysis+'npos_bacteria_genus.df', 'wb') as f: pickle.dump(npos, f)
   reads_bacteria_genus.to_csv(analysis+'reads_bacteria_genus.csv')
 
-fig = plt.figure(figsize=(15,15))
-ax1, ax2, ax3, ax4, ax5, ax6 = plt.subplot(321), plt.subplot(322), plt.subplot(323), plt.subplot(324), plt.subplot(325), plt.subplot(326)
-colormap = mpl.cm.get_cmap('winter', 256)
-norm = mpl.colors.Normalize(vmin=0, vmax=21)
-m1 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
-colors = [m1.to_rgba(a) for a in range(21)]
-colors_conf = {}
-for c in range(len(confidence)):
-  colors_conf[confidence[c]] = colors[c]
-colors_db = {'gtdb':'#1A5276', 'gtdb-masked':'#5499C7', 'refseq':'#E67E22', 'refseq-masked':'#F7DC6F'}
-
-for a in range(len(reads_bacteria_genus.columns)):
-  sample = list(reads_bacteria_genus.columns)[a].split('_')
-  t1, t2, t3, t4 = 0.1, 0.1, 0.1, 0.1
-  if sample[1] == 'gtdb': t1 = 1
-  elif sample[1] == 'gtdb-masked': t2 = 1
-  elif sample[1] == 'refseq': t3 = 1
-  elif sample[1] == 'refseq-masked': t4 = 1
-  ax1.scatter(npos[a,0], npos[a,1], color=colors_db[sample[1]], alpha=0.6, edgecolor='k')
-  ax2.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=0.6, edgecolor='k')
-  ax3.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t1, edgecolor='k')
-  ax4.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t2, edgecolor='k')
-  ax5.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t3, edgecolor='k')
-  ax6.scatter(npos[a,0], npos[a,1], color=colors_conf[sample[2]], alpha=t4, edgecolor='k')
-
-ax = [ax1, ax2, ax3, ax4, ax5, ax6]
-titles = ['Coloured by database', 'Coloured by confidence', 'GTDB coloured by confidence', 'GTDB-masked coloured by confidence', 'RefSeq coloured by confidence', 'RefSeq-masked coloured by confidence']
-for a in range(len(ax)):
-  ax[a].set_title(titles[a])
-  ax[a].set_xlabel('NMDS1')
-  ax[a].set_ylabel('NMDS2')
-
-handles = [Patch(facecolor=colors_db[db], edgecolor='k', label=db) for db in colors_db]
-ax1.legend(handles=handles, loc='best')
-handles = [Patch(facecolor=colors_conf[conf], edgecolor='k', label=conf) for conf in confidence]
-ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.05,1.0))
+six_panel_nmds(npos, reads_bacteria_genus)
 plt.tight_layout()
 plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS genus.png', dpi=600, bbox_inches='tight')
 ```
-
-## Other distance
-
-Show how these distances correlate within the same sample as well as to other samples - heatmap showing average distance values like in meta-analysis? Basically we want to see if confidence parameter, database or sample ID have the largest effect on sample composition.
 
 # Mapping to genomes {.tabset}
 
@@ -1186,7 +1269,7 @@ As there is not a huge difference here, I'll go with the 0.1% per sample.</br>
 Where a species is present in both, I've checked whether the NCBI taxid for the GTDB accession number matches the NCBI taxid I have from kraken. If they match, then I'll just use the GTDB accession as I already have these genomes. If not (only one instance), I'll just take the GTDB genome and the NCBI genome.</br>
 For the NCBI taxid's, if they are in GTDB then I'll just take those genomes. There are only 12 taxid's that are not, so I will probably just download these genomes individually.
 
-```{python, results='hide', fig.keep='all'}
+```{python, results='hide', fig.keep='all', eval=FALSE}
 # max_keep = (np.mean(reads_bacteria.sum(axis=0))/100)*0.1
 # reads_bacteria_reduced = reads_bacteria[reads_bacteria.max(axis=1) > max_keep]
 reads_bacteria_perc = reads_bacteria.divide(reads_bacteria.sum(axis=0), axis=1).multiply(100)
@@ -1207,7 +1290,7 @@ for acc in gtdb_ncbi_taxid.index.values:
   gtdb_list[acc] = gtdb_ncbi_taxid.loc[acc, :].values[0]
 ```
 
-```{python, results='hide', fig.keep='all'}
+```{python, results='hide', fig.keep='all', eval=FALSE}
 species = list(reads_bacteria_red.index.values)
 accession, taxid, both, none = [], [], [], []
 for sp in species:
@@ -1511,32 +1594,889 @@ Many samples end up with no contigs aligned - I think the problem is that many d
 (/usr/bin/time -v python /home/robyn/tools/quast-5.0.2/metaquast.py graham_spades/all_participants/*_contigs.fasta -r whole_genomes/* --threads 12 --min-contig 100) 2> all_participants_quast_100_time.txt
 ```
 
-## Assembly results
-
-
-
-## PGPC 0022
-
-We didn't have this one originally and it is only available as a bam file, so need to convert this before running.
-
-Download:
+Also running with separate samples:
 ```{bash, eval=FALSE}
-wget https://personalgenomes.ca/v1/public/files/804/download
-mv download PGPC_0022_human.bam
+parallel -j 2 --link 'python /home/robyn/tools/quast-5.0.2/metaquast.py {} -r whole_genomes/* --threads 12 -o quast_results/separate_samples/{/.}_100 --min-contig 100' ::: graham_runs/graham_spades/all_participants/*
 ```
 
-Get the reads in the right order (needed for outputting to R1 and R2 files):
+Also running directly on the reads.</br>
+Test single sample:
 ```{bash, eval=FALSE}
-samtools collate PGPC_0022_human.bam PGPC_0022_human_collate.bam
+(/usr/bin/time -v python /home/robyn/tools/quast-5.0.2/metaquast.py joined_lanes/PGPC_0001.fasta -r whole_genomes/* --threads 20 -o quast_results/reads_PGPC_0001 --min-contig 100) 2> PGPC_0001_quast_reads_time.txt
 ```
 
-Then split:
-```{bash, eval=FALSE}
-#samtools fastq [options] file.bam
-samtools fastq -1 PGPC_0022_human_R1.fastq -2 PGPC_0022_human_R2.fastq PGPC_0022_human_collate.bam
+And now get only the results we want:
+```{python, eval=FALSE}
+import os
+
+folder = 'separate_samples/'
+new_fol = 'summary_separate_samples/'
+samples = os.listdir(folder)
+
+for sample in samples:
+  rep = '/report.html'
+  frac = '/summary/TSV/Genome_fraction.tsv'
+  la = '/summary/TSV/Largest_alignment.tsv'
+  lc = '/summary/TSV/Largest_contig.tsv'
+  nc = '/summary/TSV/num_contigs.tsv'
+  ta = '/summary/TSV/Total_aligned_length.tsv'
+  to_copy = [rep, frac, la, lc, nc, ta]
+  for copy in to_copy:
+    string = 'cp '+folder+sample+copy+' '+new_fol+sample+'_'+copy.split('/')[-1]
+    os.system(string)
 ```
 
-# Anvio
+# Mapping to genomes results {.tabset}
 
-Started 
+Make dictionary to convert between species names and genome names:
+```{python, results='hide', fig.keep='all'}
+with open(analysis+'accession_to_get.list', 'rb') as f: accession = pickle.load(f)
+with open(analysis+'need_taxid.list', 'rb') as f: need_taxid = pickle.load(f)
 
+rename_acc_to_sp = {}
+rename_sp_to_acc = {}
+all_spc, all_gen = [], []
+
+for a in range(len(accession)):
+  spc, gen = accession[a][0], accession[a][1].replace('RS_', '')
+  rename_acc_to_sp[gen] = spc
+  rename_acc_to_sp[gen+'_genomic.tax'] = spc
+  rename_sp_to_acc[spc] = gen
+  all_spc.append(spc)
+  all_gen.append(gen)
+
+for a in range(len(need_taxid)):
+  spc, gen = need_taxid[a][0], str(need_taxid[a][1])
+  rename_acc_to_sp[gen] = spc
+  rename_sp_to_acc[spc] = gen
+  all_spc.append(spc)
+  all_gen.append(gen)
+```
+
+Import QUAST results:
+```{python, results='hide', fig.keep='all'}
+q_folder = '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/quast/separate_samples/'
+quast = sorted(os.listdir(q_folder))
+names = ['Genome_fraction', 'Largest_alignment', 'Largest_contig', 'Total_aligned_length', 'num_contigs']
+file_lists = []
+for name in names:
+  this_list = [file for file in quast if name in file]
+  file_lists.append(this_list)
+
+dfs = []
+for file_set in file_lists:
+  df_list = []
+  for csv in file_set:
+    this_file = pd.read_csv(q_folder+csv, sep='\t', header=0, index_col=0)
+    cols = this_file.columns[0].split('_')
+    cols = cols[0]+'_'+cols[1]
+    rename_index = {this_file.index.values[0]:cols}
+    rename_column = {this_file.columns[0]:str(this_file.index.values[0])}
+    this_file = this_file.rename(index=rename_index, columns=rename_column).transpose()
+    df_list.append(this_file)
+  this_df = pd.concat(df_list)
+  #this_df = this_df.rename(index=rename_acc_to_sp)
+  this_df = this_df.groupby(by=this_df.index, axis=0).sum().fillna(value=0).rename(index=rename_acc_to_sp)
+  dfs.append(this_df)
+    
+```
+
+Get the taxa that are above the coverage limit in each sample:
+```{python, results='hide', fig.keep='all'}
+quast_coverage = pd.DataFrame(dfs[0])
+lim1, lim2 = 0.01, 0.005
+tax_lim1, tax_lim2 = {}, {}
+for col in quast_coverage.columns:
+  this_sample = pd.DataFrame(quast_coverage.loc[:, col])
+  above_lim1 = this_sample[this_sample.max(axis=1) > lim1]
+  above_lim2 = this_sample[this_sample.max(axis=1) > lim2]
+  tax_lim1[col] = list(above_lim1.index.values)
+  tax_lim2[col] = list(above_lim2.index.values)
+```
+
+So here I have filtered based on the number of taxa where the genome coverage is at least 0.01 of 0.005%, and interestingly the number of taxa remaining is almost the same in every sample (either 165 for 0.01 or 580 for 0.005%).
+
+Filter number of taxa to only include those that we used for QUAST input:
+```{python, results='hide', fig.keep='all'}
+keeping = []
+for row in reads_bacteria.index.values:
+  if row in all_spc:
+    keeping.append(True)
+  else:
+    keeping.append(False)
+
+reads_bacteria_red = pd.DataFrame(reads_bacteria.loc[keeping, :])
+reads_bacteria_species_sum = pd.DataFrame(reads_bacteria)
+reads_bacteria_species_sum[reads_bacteria_species_sum > 0] = 1
+reads_bacteria_species_sum = pd.DataFrame(reads_bacteria_species_sum.sum(axis=0)).transpose()
+reads_bacteria = pd.read_csv(analysis+'reads_bacteria.csv', index_col=0, header=0)
+reads_bacteria_sum = pd.DataFrame(reads_bacteria.sum(axis=0)).transpose()
+
+reads_bacteria_red_sum = pd.DataFrame(reads_bacteria_red.sum(axis=0)).transpose()
+reads_bacteria_red_species_sum = pd.DataFrame(reads_bacteria_red)
+reads_bacteria_red_species_sum[reads_bacteria_red_species_sum > 0] = 1
+reads_bacteria_red_species_sum = pd.DataFrame(reads_bacteria_red_species_sum.sum(axis=0)).transpose()
+```
+
+Filter number of taxa to only include those that were covered by QUAST:
+```{python, results='hide', fig.keep='all', eval=FALSE}
+reads_bacteria = pd.read_csv(analysis+'reads_bacteria.csv', index_col=0, header=0)
+keeping = []
+for row in reads_bacteria.index.values:
+  if row in all_spc:
+    keeping.append(True)
+  else:
+    keeping.append(False)
+reads_bacteria_red = pd.DataFrame(reads_bacteria.loc[keeping, :])
+reads_bacteria_red.to_csv(analysis+'reads_bacteria_red.csv')
+
+above_lim1 = pd.DataFrame(reads_bacteria_red)
+new_samples = []
+for sample in tax_lim1:
+  columns_matching = []
+  for col in above_lim1.columns:
+    if sample.replace('_', '-') in col: columns_matching.append(col)
+  this_set = above_lim1.loc[tax_lim1[sample], columns_matching]
+  new_samples.append(this_set)
+
+above_lim1 = pd.concat(new_samples)
+above_lim1 = above_lim1.groupby(by=above_lim1.index, axis=0).sum().fillna(value=0)
+with open(analysis+'above_lim1.df', 'wb') as f: pickle.dump(above_lim1, f)
+
+reads_bacteria = pd.read_csv(analysis+'reads_bacteria.csv', index_col=0, header=0)
+keeping = []
+for row in reads_bacteria.index.values:
+  if row in all_spc:
+    keeping.append(True)
+  else:
+    keeping.append(False)
+reads_bacteria_red = pd.DataFrame(reads_bacteria.loc[keeping, :])
+
+above_lim2 = pd.DataFrame(reads_bacteria_red)
+new_samples = []
+for sample in tax_lim2:
+  columns_matching = []
+  for col in above_lim2.columns:
+    if sample.replace('_', '-') in col: columns_matching.append(col)
+  this_set = above_lim2.loc[tax_lim2[sample], columns_matching]
+  new_samples.append(this_set)
+
+above_lim2 = pd.concat(new_samples)
+above_lim2 = above_lim2.groupby(by=above_lim2.index, axis=0).sum().fillna(value=0)
+with open(analysis+'above_lim2.df', 'wb') as f: pickle.dump(above_lim2, f)
+```
+
+```{python, results='hide', fig.keep='all'}
+with open(analysis+'above_lim1.df', 'rb') as f: above_lim1 = pickle.load(f)
+with open(analysis+'above_lim2.df', 'rb') as f: above_lim2 = pickle.load(f)
+
+above_lim1_sp = pd.DataFrame(above_lim1)
+above_lim1_sp[above_lim1_sp > 0] = 1
+above_lim1_sp = pd.DataFrame(above_lim1_sp.sum(axis=0)).transpose()
+
+above_lim2_sp = pd.DataFrame(above_lim2)
+above_lim2_sp[above_lim2_sp > 0] = 1
+above_lim2_sp = pd.DataFrame(above_lim2_sp.sum(axis=0)).transpose()
+
+with open(analysis+'above_lim1.df', 'rb') as f: above_lim1 = pickle.load(f)
+with open(analysis+'above_lim2.df', 'rb') as f: above_lim2 = pickle.load(f)
+above_lim1 = pd.DataFrame(above_lim1.sum(axis=0)).transpose()
+above_lim2 = pd.DataFrame(above_lim2.sum(axis=0)).transpose()
+```
+
+Plot the number of taxa:
+```{python, results='hide', fig.keep='all'}
+plt.figure(figsize=(30,20))
+axes = [plt.subplot(4,4,a) for a in range(1,17)]
+axes_twin = [axes[a].twinx() for a in range(len(axes))]
+titles = ['refseq', 'refseq-masked', 'gtdb', 'gtdb-masked', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']
+ylabels = ['Number of reads', '', '', '', 'Number of reads', '', '', '', 'Number of reads', '', '', '', 'Number of reads', '', '', '']
+ylabeltype = ['Raw', '', '', '', 'Above 0.1% abundance', '', '', '', 'Above 0.005% genome fraction', '', '', '', 'Above 0.01% genome fraction', '', '', '']
+ylabels_twin = ['', '', '', 'Number of species', '', '', '', 'Number of species', '', '', '', 'Number of species', '', '', '', 'Number of species']
+group_names = ['refseq', 'refseq-masked', 'gtdb', 'gtdb-masked']
+groups = [[0, 4, 8, 12], [1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15]]
+
+for a in range(len(axes)):
+  axes[a].set_title(titles[a], fontweight='bold')
+  axes[a].set_ylabel(ylabels[a])
+  axes[a].text(-0.25, 0.5, ylabeltype[a], transform=axes[a].transAxes, fontweight='bold', fontsize=12, rotation=90, ha='left', va='center')
+  axes_twin[a].set_ylabel(ylabels_twin[a])
+
+dfs = [[reads_bacteria_sum, reads_bacteria_species_sum], [reads_bacteria_red_sum, reads_bacteria_red_species_sum], [above_lim2, above_lim2_sp], [above_lim1, above_lim1_sp]]
+limits = [[6000000, 8000], [6000000, 500], [6000000, 200], [2000000, 100]]
+
+for b in range(len(group_names)):
+  for d in range(len(dfs)):
+    plt_mean, plt_lower, plt_upper = [], [], []
+    plt_mean_sp, plt_lower_sp, plt_upper_sp = [], [], []
+    for c in confidence:
+      keeping = []
+      for col in dfs[d][0].columns:
+        if group_names[b]+'_'+c in col: keeping.append(True)
+        else: keeping.append(False)
+      this_conf = dfs[d][0].loc[:, keeping].values[0]
+      mean = np.mean(this_conf)
+      std = np.std(this_conf)
+      plt_mean.append(mean), plt_lower.append(mean-std), plt_upper.append(mean+std)
+      
+      this_conf_sp = dfs[d][1].loc[:, keeping].values[0]
+      mean_sp = np.mean(this_conf_sp)
+      std_sp = np.std(this_conf_sp)
+      plt_mean_sp.append(mean_sp), plt_lower_sp.append(mean_sp-std_sp), plt_upper_sp.append(mean_sp+std_sp)
+  
+    x = [float(c) for c in confidence]
+    axes[groups[b][d]].plot(x, plt_mean, color='royalblue')
+    axes[groups[b][d]].fill_between(x, plt_lower, plt_upper, alpha=0.1, color='royalblue')
+    axes_twin[groups[b][d]].plot(x, plt_mean_sp, color='crimson')
+    axes_twin[groups[b][d]].fill_between(x, plt_lower_sp, plt_upper_sp, alpha=0.1, color='crimson')
+    axes[groups[b][d]].set_ylim([0, limits[d][0]])
+    axes_twin[groups[b][d]].set_ylim([0, limits[d][1]])
+    axes[groups[b][d]].set_xlim([x[0]-0.025, x[-1]+0.025])
+    axes[groups[b][d]].yaxis.label.set_color('royalblue')
+    axes[groups[b][d]].spines['left'].set_color('royalblue')
+    axes_twin[groups[b][d]].spines['left'].set_color('royalblue')
+    axes_twin[groups[b][d]].yaxis.label.set_color('crimson')
+    axes_twin[groups[b][d]].spines['right'].set_color('crimson')
+    if b != 0: 
+      plt.sca(axes[groups[b][d]])
+      plt.yticks([])
+    if b < 3:
+      plt.sca(axes_twin[groups[b][d]])
+      plt.yticks([])
+    if d < 3:
+      plt.sca(axes[groups[b][d]])
+      plt.xticks(x, ['' for y in x])
+    else:
+      plt.sca(axes[groups[b][d]])
+      plt.xticks(x, confidence, rotation=90)
+    
+
+plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/QUAST summary.png', dpi=600, bbox_inches='tight')
+```
+Here, the blue lines are the number of reads while the red lines are the number of taxa. The lines show the mean across all samples for each confidence interval while the shaded area shows the standard deviation.
+
+## Beta diversity {.tabset}
+
+So the previous diversity plots were using all species, now I'll just first of all reduce this to only the species that were >0.01% abundance. 
+
+### 0.1% abundance filter {.tabset}
+
+#### Species
+
+Bray-Curtis of bacteria only at species level
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria_red.df'):
+  with open(analysis+'npos_bacteria_red.df', 'rb') as f: npos = pickle.load(f)
+  reads_bacteria_red = pd.read_csv(analysis+'reads_bacteria_red.csv', index_col=0, header=0)
+else:
+  reads_bacteria_red = pd.read_csv(analysis+'reads_bacteria_red.csv', index_col=0, header=0)
+  pos, npos, stress = transform_for_NMDS(reads_bacteria_red.transpose())
+  with open(analysis+'npos_bacteria_red.df', 'wb') as f: pickle.dump(npos, f)
+
+six_panel_nmds(npos, reads_bacteria_red)
+plt.tight_layout()
+plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS species reduced.png', dpi=600, bbox_inches='tight')
+```
+
+#### Genus
+
+Bray-Curtis of bacteria only at genus level
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria_genus_red.df'):
+  with open(analysis+'npos_bacteria_genus_red.df', 'rb') as f: npos = pickle.load(f)
+  reads_bacteria_genus_red = pd.read_csv(analysis+'reads_bacteria_genus_red.csv', header=0, index_col=0)
+else:
+  reads_bacteria_red = pd.read_csv(analysis+'reads_bacteria_red.csv', index_col=0, header=0)
+  species = list(reads_bacteria_red.index.values)
+  gen_dict = {}
+  count = 0
+  for sp in species:
+    count += 1
+    gen = sp_dict[sp].split(';')[-2]
+    if '__' in gen: gen = gen.split('__')[1]
+    gen = gen.lstrip().rstrip()
+    gen_dict[sp] = gen
+  reads_bacteria_genus_red = reads_bacteria_red.rename(index=gen_dict)
+  reads_bacteria_genus_red = reads_bacteria_genus_red.groupby(by=reads_bacteria_genus_red.index, axis=0).sum()
+  reads_bacteria_genus_red.to_csv(analysis+'reads_bacteria_genus_red.csv')
+  pos, npos, stress = transform_for_NMDS(reads_bacteria_genus_red.transpose())
+  with open(analysis+'npos_bacteria_genus_red.df', 'wb') as f: pickle.dump(npos, f)
+  
+six_panel_nmds(npos, reads_bacteria_genus_red)
+plt.tight_layout()
+plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS genus reduced.png', dpi=600, bbox_inches='tight')
+```
+
+### QUAST 0.01% coverage filter {.tabset}
+
+#### Species
+
+Bray-Curtis of bacteria only at species level
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria_quast_l1.df'):
+  with open(analysis+'npos_bacteria_quast_l1.df', 'rb') as f: npos = pickle.load(f)
+  reads_bacteria_l1 = pd.read_csv(analysis+'reads_bacteria_l1.csv', index_col=0, header=0)
+else:
+  with open(analysis+'above_lim1.df', 'rb') as f: above_lim1 = pickle.load(f)
+  reads_bacteria_l1 = above_lim1.fillna(0)
+  reads_bacteria_l1.to_csv(analysis+'reads_bacteria_l1.csv')
+  pos, npos, stress = transform_for_NMDS(reads_bacteria_l1.transpose())
+  with open(analysis+'npos_bacteria_quast_l1.df', 'wb') as f: pickle.dump(npos, f)
+
+six_panel_nmds(npos, reads_bacteria_l1)
+plt.tight_layout()
+plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS species QUAST lim1.png', dpi=600, bbox_inches='tight')
+```
+
+#### Genus
+
+Bray-Curtis of bacteria only at genus level
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria_genus_quast_l1.df'):
+  with open(analysis+'npos_bacteria_genus_quast_l1.df', 'rb') as f: npos = pickle.load(f)
+  reads_bacteria_genus_l1 = pd.read_csv(analysis+'reads_bacteria_genus_quast_l1.csv', header=0, index_col=0)
+else:
+  with open(analysis+'above_lim1.df', 'rb') as f: above_lim1 = pickle.load(f)
+  reads_bacteria_l1 = above_lim1.fillna(0)
+  species = list(reads_bacteria_l1.index.values)
+  gen_dict = {}
+  count = 0
+  for sp in species:
+    count += 1
+    gen = sp_dict[sp].split(';')[-2]
+    if '__' in gen: gen = gen.split('__')[1]
+    gen = gen.lstrip().rstrip()
+    gen_dict[sp] = gen
+  reads_bacteria_genus_l1 = reads_bacteria_l1.rename(index=gen_dict)
+  reads_bacteria_genus_l1 = reads_bacteria_genus_l1.groupby(by=reads_bacteria_genus_l1.index, axis=0).sum()
+  reads_bacteria_genus_l1.to_csv(analysis+'reads_bacteria_genus_l1.csv')
+  pos, npos, stress = transform_for_NMDS(reads_bacteria_genus_l1.transpose())
+  with open(analysis+'npos_bacteria_genus_l1.df', 'wb') as f: pickle.dump(npos, f)
+
+six_panel_nmds(npos, reads_bacteria_genus_l1)
+plt.tight_layout()
+plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS genus QUAST lim1.png', dpi=600, bbox_inches='tight')
+```
+
+### QUAST 0.005% coverage filter {.tabset}
+
+#### Species
+
+Bray-Curtis of bacteria only at species level
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria_quast_l2.df'):
+  with open(analysis+'npos_bacteria_quast_l2.df', 'rb') as f: npos = pickle.load(f)
+  reads_bacteria_l2 = pd.read_csv(analysis+'reads_bacteria_l2.csv', index_col=0, header=0)
+else:
+  with open(analysis+'above_lim2.df', 'rb') as f: above_lim2 = pickle.load(f)
+  reads_bacteria_l2 = above_lim2.fillna(0)
+  reads_bacteria_l2.to_csv(analysis+'reads_bacteria_l2.csv')
+  pos, npos, stress = transform_for_NMDS(reads_bacteria_l1.transpose())
+  with open(analysis+'npos_bacteria_quast_l2.df', 'wb') as f: pickle.dump(npos, f)
+
+six_panel_nmds(npos, reads_bacteria_l2)
+plt.tight_layout()
+plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS species QUAST lim2.png', dpi=600, bbox_inches='tight')
+```
+
+#### Genus
+
+Bray-Curtis of bacteria only at genus level
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria_genus_quast_l2.df'):
+  with open(analysis+'npos_bacteria_genus_quast_l2.df', 'rb') as f: npos = pickle.load(f)
+  reads_bacteria_genus_l2 = pd.read_csv(analysis+'reads_bacteria_genus_quast_l2.csv', header=0, index_col=0)
+else:
+  with open(analysis+'above_lim2.df', 'rb') as f: above_lim2 = pickle.load(f)
+  reads_bacteria_l2 = above_lim2.fillna(0)
+  species = list(reads_bacteria_l2.index.values)
+  gen_dict = {}
+  count = 0
+  for sp in species:
+    count += 1
+    gen = sp_dict[sp].split(';')[-2]
+    if '__' in gen: gen = gen.split('__')[1]
+    gen = gen.lstrip().rstrip()
+    gen_dict[sp] = gen
+  reads_bacteria_genus_l2 = reads_bacteria_l2.rename(index=gen_dict)
+  reads_bacteria_genus_l2 = reads_bacteria_genus_l2.groupby(by=reads_bacteria_genus_l2.index, axis=0).sum()
+  reads_bacteria_genus_l2.to_csv(analysis+'reads_bacteria_genus_l2.csv')
+  pos, npos, stress = transform_for_NMDS(reads_bacteria_genus_l2.transpose())
+  with open(analysis+'npos_bacteria_genus_l2.df', 'wb') as f: pickle.dump(npos, f)
+
+six_panel_nmds(npos, reads_bacteria_genus_l1)
+plt.tight_layout()
+plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS genus QUAST lim2.png', dpi=600, bbox_inches='tight')
+```
+
+## Beta diversity within confidence groups {.tabset}
+
+Where above I've plotted all of the samples with all of the confidence parameters and all database combinations together, now I want to see if the grouping of samples will be the same within each confidence parameter and database combination. I'll just show them at 0.1 intervals to cut down on plotting for now. I'll just show these at the species level, but at each filtering level.</br>
+I've removed the axes ticks and coloured samples just by the participant number - both so that hopefully it's easier to visualise whether samples are grouped roughly in the same way between different confidence parameters and databases.
+
+```{python, results='hide', fig.keep='all'}
+reads_bacteria = pd.read_csv(analysis+'reads_bacteria.csv', index_col=0, header=0)
+reads_bacteria_red = pd.read_csv(analysis+'reads_bacteria_red.csv', index_col=0, header=0)
+reads_bacteria_l1 = pd.read_csv(analysis+'reads_bacteria_l1.csv', header=0, index_col=0)
+reads_bacteria_l2 = pd.read_csv(analysis+'reads_bacteria_l2.csv', header=0, index_col=0)
+
+databases = ['_gtdb_', '_gtdb-masked_', '_refseq_', '_refseq-masked_']
+colormap = mpl.cm.get_cmap('plasma', 256)
+norm = mpl.colors.Normalize(vmin=1, vmax=71)
+m1 = mpl.cm.ScalarMappable(norm=norm, cmap=colormap)
+
+def plot_one_database(df_full, db, dist_met='braycurtis'):
+  df = pd.DataFrame(df_full)
+  keeping = []
+  for col in df.columns:
+    if db in col: keeping.append(col)
+  df_red = df.loc[:, keeping]
+  plt.figure(figsize=(20,10))
+  ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11 = plt.subplot(3,4,1), plt.subplot(3,4,2), plt.subplot(3,4,3), plt.subplot(3,4,4), plt.subplot(3,4,5), plt.subplot(3,4,6), plt.subplot(3,4,7), plt.subplot(3,4,8), plt.subplot(3,4,9), plt.subplot(3,4,10), plt.subplot(3,4,11)
+  axes = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10, ax11]
+  count = 0
+  for conf in confidence:
+    if conf[-1] == '5': continue
+    keeping = []
+    for col in df_red.columns:
+      if conf in col: keeping.append(col)
+    this_df = pd.DataFrame(df_red.loc[:, keeping])
+    pos, npos, stress = transform_for_NMDS(this_df.transpose(), dist_met=dist_met)
+    cols = this_df.columns
+    for a in range(len(cols)):
+      sample = str(int(cols[a].split('_')[0].split('-')[1]))
+      axes[count].scatter(npos[a,0], npos[a,1], color='w', edgecolor='k', s=20)
+      text = 'w'
+      if int(sample) > 30: text = 'k'
+      axes[count].text(npos[a,0], npos[a,1], sample, fontsize=8, color=text, va='center', ha='center', bbox=dict(boxstyle="circle", facecolor=m1.to_rgba(int(sample)), edgecolor='k'))
+    axes[count].set_title(conf)
+    count += 1
+  
+  for a in range(len(axes)):
+    plt.sca(axes[a])
+    if a % 4 == 0: 
+      plt.ylabel('NMDS2')
+    if a >= 7: plt.xlabel('NMDS1')
+    plt.yticks([]), plt.xticks([])
+  return
+```
+
+### All taxa {.tabset}
+
+#### GTDB
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[0]
+plot_one_database(reads_bacteria, db)
+plt.show()
+```
+
+#### GTDB masked
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[1]
+plot_one_database(reads_bacteria, db)
+plt.show()
+```
+
+#### RefSeq
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[2]
+plot_one_database(reads_bacteria, db)
+plt.show()
+```
+
+#### RefSeq masked
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[3]
+plot_one_database(reads_bacteria, db)
+plt.show()
+```
+
+### All taxa >0.1% abundance {.tabset}
+
+#### GTDB
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[0]
+plot_one_database(reads_bacteria_red, db)
+plt.show()
+```
+
+#### GTDB masked
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[1]
+plot_one_database(reads_bacteria_red, db)
+plt.show()
+```
+
+#### RefSeq
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[2]
+plot_one_database(reads_bacteria_red, db)
+plt.show()
+```
+
+#### RefSeq masked
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[3]
+plot_one_database(reads_bacteria_red, db)
+plt.show()
+```
+
+### All taxa >0.005% QUAST coverage {.tabset}
+
+#### GTDB
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[0]
+plot_one_database(reads_bacteria_l2, db)
+plt.show()
+```
+
+#### GTDB masked
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[1]
+plot_one_database(reads_bacteria_l2, db)
+plt.show()
+```
+
+#### RefSeq
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[2]
+plot_one_database(reads_bacteria_l2, db)
+plt.show()
+```
+
+#### RefSeq masked
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[3]
+plot_one_database(reads_bacteria_l2, db)
+plt.show()
+```
+
+### All taxa >0.005% QUAST coverage {.tabset}
+
+#### GTDB
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[0]
+plot_one_database(reads_bacteria_l1, db)
+plt.show()
+```
+
+#### GTDB masked
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[1]
+plot_one_database(reads_bacteria_l1, db)
+plt.show()
+```
+
+#### RefSeq
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[2]
+plot_one_database(reads_bacteria_l1, db)
+plt.show()
+```
+
+#### RefSeq masked
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[3]
+plot_one_database(reads_bacteria_l1, db)
+plt.show()
+```
+
+## Centered log ratio transformation
+
+Make sure we have reads all read in:
+```{python, results='hide', fig.keep='all', eval=FALSE}
+reads_bacteria = pd.read_csv(analysis+'reads_bacteria.csv', index_col=0, header=0)
+reads_bacteria_red = pd.read_csv(analysis+'reads_bacteria_red.csv', index_col=0, header=0)
+reads_bacteria_l1 = pd.read_csv(analysis+'reads_bacteria_l1.csv', header=0, index_col=0)
+reads_bacteria_l2 = pd.read_csv(analysis+'reads_bacteria_l2.csv', header=0, index_col=0)
+
+reads_bacteria_genus = pd.read_csv(analysis+'reads_bacteria_genus.csv', index_col=0, header=0)
+reads_bacteria_genus_red = pd.read_csv(analysis+'reads_bacteria_genus_red.csv', index_col=0, header=0)
+reads_bacteria_genus_l1 = pd.read_csv(analysis+'reads_bacteria_genus_l1.csv', header=0, index_col=0)
+reads_bacteria_genus_l2 = pd.read_csv(analysis+'reads_bacteria_genus_l2.csv', header=0, index_col=0)
+```
+
+Transform using R:
+```{R, results='hide', fig.keep='all', eval=FALSE}
+table_full = py$reads_bacteria
+table_mat_full = as.matrix(table_full)
+table_otu_full = otu_table(table_full, taxa_are_rows = TRUE)
+physeq_full = phyloseq(table_otu_full)
+physeq_clr_full <- microbiome::transform(physeq_full, "clr") #convert to CLR
+physeq_clr_otu_full = otu_table(physeq_clr_full, taxa_are_rows=TRUE)
+
+table_red = py$reads_bacteria_red
+table_mat_red = as.matrix(table_red)
+table_otu_red = otu_table(table_red, taxa_are_rows = TRUE)
+physeq_red = phyloseq(table_otu_red)
+physeq_clr_red <- microbiome::transform(physeq_red, "clr") #convert to CLR
+physeq_clr_otu_red = otu_table(physeq_clr_red, taxa_are_rows=TRUE)
+
+table_l1 = py$reads_bacteria_l1
+table_mat_l1 = as.matrix(table_l1)
+table_otu_l1 = otu_table(table_l1, taxa_are_rows = TRUE)
+physeq_l1 = phyloseq(table_otu_l1)
+physeq_clr_l1 <- microbiome::transform(physeq_l1, "clr") #convert to CLR
+physeq_clr_otu_l1 = otu_table(physeq_clr_l1, taxa_are_rows=TRUE)
+
+table_l2 = py$reads_bacteria_l2
+table_mat_l2 = as.matrix(table_l2)
+table_otu_l2 = otu_table(table_l2, taxa_are_rows = TRUE)
+physeq_l2 = phyloseq(table_otu_l2)
+physeq_clr_l2 <- microbiome::transform(physeq_l2, "clr") #convert to CLR
+physeq_clr_otu_l2 = otu_table(physeq_clr_l2, taxa_are_rows=TRUE)
+
+table_full_genus = py$reads_bacteria_genus
+table_mat_full_genus = as.matrix(table_full_genus)
+table_otu_full_genus = otu_table(table_full_genus, taxa_are_rows = TRUE)
+physeq_full_genus = phyloseq(table_otu_full_genus)
+physeq_clr_full_genus <- microbiome::transform(physeq_full_genus, "clr") #convert to CLR
+physeq_clr_otu_full_genus = otu_table(physeq_clr_full_genus, taxa_are_rows=TRUE)
+
+table_red_genus = py$reads_bacteria_genus_red
+table_mat_red_genus = as.matrix(table_red_genus)
+table_otu_red_genus = otu_table(table_red_genus, taxa_are_rows = TRUE)
+physeq_red_genus = phyloseq(table_otu_red_genus)
+physeq_clr_red_genus <- microbiome::transform(physeq_red_genus, "clr") #convert to CLR
+physeq_clr_otu_red_genus = otu_table(physeq_clr_red_genus, taxa_are_rows=TRUE)
+
+table_l1_genus = py$reads_bacteria_genus_l1
+table_mat_l1_genus = as.matrix(table_l1_genus)
+table_otu_l1_genus = otu_table(table_l1_genus, taxa_are_rows = TRUE)
+physeq_l1_genus = phyloseq(table_otu_l1_genus)
+physeq_clr_l1_genus <- microbiome::transform(physeq_l1_genus, "clr") #convert to CLR
+physeq_clr_otu_l1_genus = otu_table(physeq_clr_l1_genus, taxa_are_rows=TRUE)
+
+table_l2_genus = py$reads_bacteria_genus_l2
+table_mat_l2_genus = as.matrix(table_l2_genus)
+table_otu_l2_genus = otu_table(table_l2_genus, taxa_are_rows = TRUE)
+physeq_l2_genus = phyloseq(table_otu_l2_genus)
+physeq_clr_l2_genus <- microbiome::transform(physeq_l2_genus, "clr") #convert to CLR
+physeq_clr_otu_l2_genus = otu_table(physeq_clr_l2_genus, taxa_are_rows=TRUE)
+```
+
+Read back into Python and save as csv files:
+```{python, results='hide', fig.keep='all'}
+reads_bacteria_full_clr = r.physeq_clr_otu_full
+reads_bacteria_full_clr = pd.DataFrame(reads_bacteria_full_clr, index=reads_bacteria.index, columns=reads_bacteria.columns)
+
+reads_bacteria_red_clr = r.physeq_clr_otu_red
+reads_bacteria_red_clr = pd.DataFrame(reads_bacteria_red_clr, index=reads_bacteria_red.index, columns=reads_bacteria_red.columns)
+
+reads_bacteria_l1_clr = r.physeq_clr_otu_l1
+reads_bacteria_l1_clr = pd.DataFrame(reads_bacteria_l1_clr, index=reads_bacteria_l1.index, columns=reads_bacteria_l1.columns)
+
+reads_bacteria_l2_clr = r.physeq_clr_otu_l2
+reads_bacteria_l2_clr = pd.DataFrame(reads_bacteria_l2_clr, index=reads_bacteria_l2.index, columns=reads_bacteria_l2.columns)
+
+reads_bacteria_full_clr_genus = r.physeq_clr_otu_full_genus
+reads_bacteria_full_clr_genus = pd.DataFrame(reads_bacteria_full_clr_genus, index=reads_bacteria_genus.index, columns=reads_bacteria_genus.columns)
+
+reads_bacteria_red_clr_genus = r.physeq_clr_otu_red_genus
+reads_bacteria_red_clr_genus = pd.DataFrame(reads_bacteria_red_clr_genus, index=reads_bacteria_genus_red.index, columns=reads_bacteria_genus_red.columns)
+
+reads_bacteria_l1_clr_genus = r.physeq_clr_otu_l1_genus
+reads_bacteria_l1_clr_genus = pd.DataFrame(reads_bacteria_l1_clr_genus, index=reads_bacteria_genus_l1.index, columns=reads_bacteria_genus_l1.columns)
+
+reads_bacteria_l2_clr_genus = r.physeq_clr_otu_l2_genus
+reads_bacteria_l2_clr_genus = pd.DataFrame(reads_bacteria_l2_clr_genus, index=reads_bacteria_genus_l2.index, columns=reads_bacteria_genus_l2.columns)
+
+reads_bacteria_full_clr.to_csv(analysis+'reads_bacteria_full_clr.csv')
+reads_bacteria_red_clr.to_csv(analysis+'reads_bacteria_red_clr.csv')
+reads_bacteria_l1_clr.to_csv(analysis+'reads_bacteria_l1_clr.csv')
+reads_bacteria_l2_clr.to_csv(analysis+'reads_bacteria_l2_clr.csv')
+reads_bacteria_full_clr_genus.to_csv(analysis+'reads_bacteria_full_clr_genus.csv')
+reads_bacteria_red_clr_genus.to_csv(analysis+'reads_bacteria_red_clr_genus.csv')
+reads_bacteria_l1_clr_genus.to_csv(analysis+'reads_bacteria_l1_clr_genus.csv')
+reads_bacteria_l2_clr_genus.to_csv(analysis+'reads_bacteria_l2_clr_genus.csv')
+```
+
+### NMDS of CLR-transformed bacteria only at species level {.tabset}
+
+#### All species
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria_clr.df'):
+  with open(analysis+'npos_bacteria_clr.df', 'rb') as f: npos = pickle.load(f)
+  reads_bacteria_full_clr = pd.read_csv(analysis+'reads_bacteria_full_clr.csv', index_col=0, header=0)
+else:
+  reads_bacteria_full_clr = pd.read_csv(analysis+'reads_bacteria_full_clr.csv', index_col=0, header=0)
+  pos, npos, stress = transform_for_NMDS(reads_bacteria_full_clr.transpose(), dist_met='euclidean')
+  with open(analysis+'npos_bacteria_clr.df', 'wb') as f: pickle.dump(npos, f)
+
+six_panel_nmds(npos, reads_bacteria_full_clr)
+plt.tight_layout()
+plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS species CLR.png', dpi=600, bbox_inches='tight')
+```
+
+#### >0.1% abundance
+
+# Still need to run
+```{python, results='hide', fig.keep='all', cache=TRUE}
+if os.path.exists(analysis+'npos_bacteria_red_clr.df'):
+  with open(analysis+'npos_bacteria_red_clr.df', 'rb') as f: npos = pickle.load(f)
+  reads_bacteria_red_clr = pd.read_csv(analysis+'reads_bacteria_red_clr.csv', index_col=0, header=0)
+else:
+  reads_bacteria_red_clr = pd.read_csv(analysis+'reads_bacteria_red_clr.csv', index_col=0, header=0)
+  pos, npos, stress = transform_for_NMDS(reads_bacteria_red_clr.transpose(), dist_met='euclidean')
+  with open(analysis+'npos_bacteria_red_clr.df', 'wb') as f: pickle.dump(npos, f)
+
+six_panel_nmds(npos, reads_bacteria_full_clr)
+plt.tight_layout()
+plt.show()
+#plt.savefig('/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/Human_blood_metagenome/analysis/Figures/Kraken bacterial NMDS species CLR.png', dpi=600, bbox_inches='tight')
+```
+
+### Look at where distance between subsequent confidence values starts to drop
+
+Function:
+```{python}
+databases = ['_gtdb_', '_gtdb-masked_', '_refseq_', '_refseq-masked_']
+titles = ['GTDB', 'GTDB-masked', 'RefSeq', 'RefSeq-masked']
+
+def plot_similarities(sim_df):
+  plt.figure(figsize=(15,10))
+  axes = [plt.subplot(221), plt.subplot(222), plt.subplot(223), plt.subplot(224)]
+  for d in range(len(databases)):
+    db = databases[d]
+    plt.sca(axes[d])
+    plt.title(titles[d])
+    xlab, x = [], []
+    all_dist = []
+    for c in range(len(confidence)):
+      distance = []
+      if c == 0: continue
+      for participant in participants:
+        this_conf = participant+db+confidence[c]
+        last_conf = participant+db+confidence[c-1]
+        distance.append(sim_df.loc[this_conf, last_conf])
+      xlab.append(confidence[c]+'-'+confidence[c-1])
+      all_dist.append(distance)
+      x.append(c)
+      pltx = np.random.normal(c, scale=0.05, size=len(distance))
+      plt.scatter(pltx, distance, alpha=0.1, s=15, color='maroon')
+    axes[d].boxplot(all_dist, positions=x, showfliers=False, medianprops=dict(color='k'))
+    plt.xticks(x, xlab, rotation=90)
+    if d in [0, 2]:
+      plt.ylabel('Average distance')
+
+  return
+```
+
+#### CLR transformed data
+
+##### All species
+
+```{python}
+df = reads_bacteria_full_clr.transpose()
+X = df.iloc[0:].values
+X_true = X
+similarities = distance.cdist(X_true, X_true, 'euclidean')
+similarities = np.nan_to_num(similarities)
+similarities_df = pd.DataFrame(similarities, index=df.index, columns=df.index)
+
+plot_similarities(similarities_df)
+plt.tight_layout()
+plt.show()
+plt.savefig(analysis+'Figures/Distance confidence CLR.png', dpi=600, bbox_inches='tight')
+```
+
+##### 0.01% abundance filtering
+
+```{python}
+reads_bacteria_red_clr = pd.read_csv(analysis+'reads_bacteria_red_clr.csv', index_col=0, header=0)
+df = reads_bacteria_red_clr.transpose()
+X = df.iloc[0:].values
+X_true = X
+similarities_red_clr = distance.cdist(X_true, X_true, 'euclidean')
+similarities_red_clr = np.nan_to_num(similarities_red_clr)
+similarities_df_red_clr = pd.DataFrame(similarities_red_clr, index=df.index, columns=df.index)
+
+plot_similarities(similarities_df_red_clr)
+plt.tight_layout()
+plt.show()
+plt.savefig(analysis+'Figures/Distance confidence reduced CLR.png', dpi=600, bbox_inches='tight')
+```
+
+##### 0.005% QUAST cut-off
+
+```{python}
+reads_bacteria_l2_clr = pd.read_csv(analysis+'reads_bacteria_l2_clr.csv', index_col=0, header=0)
+df = reads_bacteria_l2_clr.transpose()
+X = df.iloc[0:].values
+X_true = X
+similarities_l2_clr = distance.cdist(X_true, X_true, 'euclidean')
+similarities_l2_clr = np.nan_to_num(similarities_l2_clr)
+similarities_df_l2_clr = pd.DataFrame(similarities_l2_clr, index=df.index, columns=df.index)
+
+plot_similarities(similarities_df_l2_clr)
+plt.tight_layout()
+plt.show()
+plt.savefig(analysis+'Figures/Distance confidence lim2 CLR.png', dpi=600, bbox_inches='tight')
+```
+
+##### 0.01% QUAST cut-off
+
+```{python}
+reads_bacteria_l1_clr = pd.read_csv(analysis+'reads_bacteria_l1_clr.csv', index_col=0, header=0)
+df = reads_bacteria_l1_clr.transpose()
+X = df.iloc[0:].values
+X_true = X
+similarities_l1_clr = distance.cdist(X_true, X_true, 'euclidean')
+similarities_l1_clr = np.nan_to_num(similarities_l1_clr)
+similarities_df_l1_clr = pd.DataFrame(similarities_l1_clr, index=df.index, columns=df.index)
+
+plot_similarities(similarities_df_l1_clr)
+plt.tight_layout()
+plt.show()
+plt.savefig(analysis+'Figures/Distance confidence lim1 CLR.png', dpi=600, bbox_inches='tight')
+```
+
+
+#### Bray-Curtis abundance
+
+```{python}
+df = reads_bacteria.transpose()
+X = df.iloc[0:].values
+X_true = X
+similarities_bc = distance.cdist(X_true, X_true, 'braycurtis')
+similarities_bc = np.nan_to_num(similarities_bc)
+similarities_df_bc = pd.DataFrame(similarities_bc, index=df.index, columns=df.index)
+
+plot_similarities(similarities_df_bc)
+plt.tight_layout()
+plt.show()
+plt.savefig(analysis+'Figures/Distance confidence Bray.png', dpi=600, bbox_inches='tight')
+```
+
+#### RefSeq
+
+```{python, results='hide', fig.keep='all', cache=TRUE}
+db =  databases[2]
+plot_one_database(reads_bacteria_full_clr, db, dist_met='euclidean')
+plt.show()
+```

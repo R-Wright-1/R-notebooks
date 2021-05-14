@@ -1,0 +1,1107 @@
+---
+title: Vinko analysis commands run
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+fig_width: 10
+fig_height: 10
+---
+
+# Test single sample D1
+
+Kneaddata:
+```{bash, eval=FALSE}
+mkdir kneaddata_out
+parallel -j 1 --link 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 12 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: D1/*1.fq.gz ::: D1/*2.fq.gz
+```
+
+```{bash, eval=FALSE}
+mkdir kneaddata_out
+parallel -j 1 --link 'kneaddata -i {1} -i {2} -o kneaddata_out/ \
+-db /home/shared/bowtiedb/GRCh38_PhiX --trimmomatic /home/robyn/tools/Trimmomatic-0.39/ \
+-t 12 --trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50" \
+--bowtie2-options "--very-sensitive --dovetail" --remove-intermediate-output' \
+ ::: test/*1.fq.gz ::: test/*2.fq.gz
+```
+
+Join reads:
+```{bash, eval=FALSE}
+concat_paired_end.pl -p 4 -o cat_reads --no-R-match kneaddata_out/*paired*.fastq 
+```
+
+Classify reads with Kraken2 and RefSeq Complete v93 (confidence=0.2):
+```{bash, eval=FALSE}
+mkdir kraken2_outraw
+mkdir kraken2_kreport
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93 --memory-mapping {1} --output kraken2_outraw/{1/.}_refseq_{2}.kraken.txt --report kraken2_kreport/{1/.}_refseq_{2}.kreport --confidence {2}' ::: cat_reads/*.fastq ::: 0 0.2
+```
+
+Bracken:
+```{bash, eval=FALSE}
+parallel -j 12 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93 -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*.kreport
+```
+
+# Test mock
+
+```{bash, eval=FALSE}
+java -jar /home/vinko/tools/Trimmomatic-0.39/trimmomatic-0.39.jar PE test/ZymoMock_S87_L001_R1_001.fastq.gz test/ZymoMock_S87_L001_R2_001.fastq.gz output_forward_paired.fq.gz output_forward_unpaired.fq.gz output_reverse_paired.fq.gz output_reverse_unpaired.fq.gz ILLUMINACLIP:/home/vinko/tools/Trimmomatic-0.39/adapters/TruSeq3-PE.fa:2:30:10:2:keepBothReads LEADING:3 TRAILING:3 MINLEN:36
+```
+
+Join reads:
+```{bash, eval=FALSE}
+cat output_forward_paired.fq.gz output_reverse_paired.fq.gz > output_joined.fq.gz
+```
+
+Kraken2:
+```{bash, eval=FALSE}
+mkdir kraken2_outraw
+mkdir kraken2_kreport
+parallel -j 1 'kraken2 --use-names --threads 12 --db databases/minikraken2_v1_8GB/ --memory-mapping {1} --output kraken2_outraw/{1/.}_refseq_{2}.kraken.txt --report kraken2_kreport/{1/.}_refseq_{2}.kreport --confidence {2}' ::: output_joined.fq.gz ::: 0.2
+```
+
+Bracken:
+```{bash, eval=FALSE}
+parallel -j 12 'bracken -databases/minikraken2_v1_8GB/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*.kreport
+```
+
+SPAdes:
+```{bash, eval=FALSE}
+spades.py -o test_spades_out --meta -1 output_forward_paired.fq.gz -2 output_reverse_paired.fq.gz -t 12
+```
+
+## Test PathoFact
+
+Edit config.yaml:
+```{bash, eval=FALSE}
+pathofact:
+  sample: ["sample1_test"] # requires user input
+  project: PathoFact_results # requires user input
+  datadir:  /home/vinko/test_mock/test_patho/ # requires user input
+  workflow: "complete" #options: "complete", "AMR", "Tox", "Vir"
+  size_fasta: 10000 #Adjustable to preference
+  scripts: "scripts"
+  signalp: "/home/vinko/tools/signalp-5.0b/bin" # requires user input
+  deepvirfinder: "submodules/DeepVirFinder/dvf.py"
+  tox_hmm: "databases/toxins/combined_Toxin.hmm"
+  tox_lib: "databases/library_HMM_Toxins.csv"
+  tox_threshold: 40 #Bitscore threshold of the toxin prediction, adjustable by user to preference
+  vir_hmm: "databases/virulence/Virulence_factor.hmm"
+  vir_domains: "databases/models_and_domains"
+  plasflow_threshold: 0.7
+  plasflow_minlen: 1000
+  runtime:
+    short: "00:10:00"
+    medium: "01:00:00"
+    long: "02:00:00"
+  mem:
+    normal_mem_per_core_gb: "4G"
+    big_mem_cores: 12
+    big_mem_per_core_gb: "30G"
+```
+
+Run:
+```{bash, eval=FALSE}
+snakemake -s Snakefile --use-conda --reason --cores 12 -p
+```
+
+## HUMANN
+
+To download:
+```{bash, eval=FALSE}
+wget https://sourceforge.net/projects/bowtie-bio/files/bowtie2/2.2.9/bowtie2-2.2.9-linux-x86_64.zip/download
+mv download bowtie2-source.zip
+unzip bowtie2-source.zip
+```
+
+```{bash, eval=FALSE}
+humann --input output_joined.fq --output HUMANN_out/ --threads 12 --nucleotide-database /home/vinko/databases/HUMANN/chocophlan/ --protein-database /home/vinko/databases/HUMANN/uniref/ --bowtie2 /home/vinko/tools/bowtie2-2.2.9/
+```
+
+# Run samples
+
+## Trimmomatic
+```{bash, eval=FALSE}
+mkdir raw_files
+mkdir trimmed_reads
+
+parallel -j 1 --link 'java -jar /home/vinko/tools/Trimmomatic-0.39/trimmomatic-0.39.jar PE {1} {2} trimmed_reads/{1/.}_paired.fq.gz trimmed_reads/{1/.}_unpaired.fq.gz trimmed_reads/{2/.}_paired.fq.gz trimmed_reads/{2/.}_unpaired.fq.gz  ILLUMINACLIP:TruSeq3-PE.fa:2:30:10:2:keepBothReads LEADING:3 TRAILING:3 MINLEN:36 -threads 12' ::: raw_files/*_1.fq.gz ::: raw_files/*_2.fq.gz
+```
+
+First run didn't have the path to the adapters, so stopped the run and then restarted with the path:
+```{bash, eval=FALSE}
+ctrl + c
+rm -r trimmed_reads
+mkdir trimmed_reads
+
+parallel -j 1 --link 'java -jar /home/vinko/tools/Trimmomatic-0.39/trimmomatic-0.39.jar PE {1} {2} trimmed_reads/{1/.}_paired.fq.gz trimmed_reads/{1/.}_unpaired.fq.gz trimmed_reads/{2/.}_paired.fq.gz trimmed_reads/{2/.}_unpaired.fq.gz  ILLUMINACLIP:/home/vinko/tools/Trimmomatic-0.39/adapters/TruSeq3-PE.fa:2:30:10:2:keepBothReads LEADING:3 TRAILING:3 MINLEN:36 -threads 12' ::: raw_files/*_1.fq.gz ::: raw_files/*_2.fq.gz
+```
+
+## tmux
+```{bash, eval=FALSE}
+tmux # start new window
+tmux ls # list all current tmux sessions
+tmux attach-session -t session_name # attach to session_name
+tmux rename-session -t old_name new_name #rename session
+tmux kill-session -t session_name # kill session
+ctrl + b, d # unattach from tmux session
+```
+
+## Rename files
+```{python, eval=FALSE}
+python
+import os
+files = os.listdir('trimmed_reads/')
+unique_files = set([f.split('.')[0] for f in files if 'unpaired' not in f])
+unique_files = [f for f in unique_files if f[-1] == '1']
+
+for f in unique_files:
+  R1_old = f+'.fq_paired.fq.gz'
+  R2_old = f[:-1]+'2.fq_paired.fq.gz'
+  R1_new = R1_old.split('_')[0]+'_R1.fq.gz'
+  R2_new = R2_old.split('_')[0]+'_R2.fq.gz'
+  cmd1 = 'mv trimmed_reads/'+R1_old+' trimmed_reads/'+R1_new
+  cmd2 = 'mv trimmed_reads/'+R2_old+' trimmed_reads/'+R2_new
+  os.system(cmd1)
+  os.system(cmd2)
+```
+
+## SPADES
+```{bash, eval=FALSE}
+mkdir spades_out
+parallel -j 1 'spades.py -o spades_out --meta -1 {1} -2 {2} -t 12' ::: trimmed_reads/*_R1.fq.gz ::: trimmed_reads/*_R2.fq.gz
+```
+
+```{bash, eval=FALSE}
+(/usr/bin/time -v spades.py --meta -1 trimmed_reads/D8_R1.fq.gz -2 trimmed_reads/D8_R2.fq.gz -o spades_out/D8/ -t 20) 2> D8_R1_spades_time.txt
+```
+
+Out of memory on kronos, running on vulcan:
+```{bash, eval=FALSE}
+(/usr/bin/time -v spades.py --meta -1 trimmed_reads/D8_R1.fq.gz -2 trimmed_reads/D8_R2.fq.gz -o spades_out/D8/ -t 12) 2> D8_R1_spades_time.txt
+```
+
+Still ran out of memory (spades sets a memory limit of 250 GB) - trying to restart from the files already created and using 400GB:
+```{bash, eval=FALSE}
+(/usr/bin/time -v spades.py --restart-from last -o spades_out/D8/ -t 12 -m 400) 2> D8_R1_spades_time_400.txt
+```
+
+I think maybe the issue is to do with there being different numbers of reads in the forward and reverse files:
+```{}
+(base) robyn@vulcan:~/vinko$ wc -l trimmed_reads/D8_R1.fq.gz 
+15373122 trimmed_reads/D8_R1.fq.gz
+(base) robyn@vulcan:~/vinko$ wc -l trimmed_reads/D8_R2.fq.gz 
+16341206 trimmed_reads/D8_R2.fq.gz
+```
+
+So writing a Python script to check this:
+```{python, eval=FALSE}
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
+import gzip
+
+R1 = 'trimmed_reads/D8_R1.fq.gz'
+R2 = 'trimmed_reads/D8_R2.fq.gz'
+
+ids = [[], []]
+
+with gzip.open(R1, "rt") as f1:
+  for record in SeqIO.parse(f1, "fastq"):
+    ids[0].append(record.id)
+    
+with gzip.open(R2, "rt") as f2:
+  for record in SeqIO.parse(f2, "fastq"):
+    ids[1].append(record.id)
+
+print(len(ids[0]), len(ids[1]))
+print(ids[0] == ids[1])
+```
+```{}
+>>> print(len(ids[0]), len(ids[1]))
+57101648 57101648
+>>> print(ids[0] == ids[1])
+True
+```
+So that's not the case...
+
+Let's just try re-running entirely with more memory.
+```{bash, eval=FALSE}
+(/usr/bin/time -v spades.py --meta -1 trimmed_reads/D8_R1.fq.gz -2 trimmed_reads/D8_R2.fq.gz -o spades_out/D8_500/ -t 12 -m 500) 2> D8_R1_spades_time_500.txt
+```
+
+This worked. Copied the contigs to kronos. Run PathoFact.
+
+Join reads:
+```{bash, eval=FALSE}
+concat_paired_end.pl -p 4 -o joined_reads trimmed_reads/*_R*.fq.gz
+```
+
+Kraken (running on vulcan):
+```{bash, eval=FALSE}
+mkdir kraken2_outraw
+mkdir kraken2_kreport
+parallel -j 1 'kraken2 --use-names --threads 12 --db /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ --memory-mapping {1} --output kraken2_outraw/{1/.}_refseq_{2}.kraken.txt --report kraken2_kreport/{1/.}_refseq_{2}.kreport --confidence {2}' ::: joined_reads/*.fq.gz ::: 0.2
+```
+
+Bracken:
+```{bash, eval=FALSE}
+parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93 -i {} -l S -o {.}.bracken -r 150' ::: kraken2_kreport/*.kreport
+```
+
+Copy from server:
+```{bash, eval=FALSE}
+scp -r vinko@kronos.pharmacology.dal.ca:/home/vinko/kraken2_kreport/ .
+```
+
+## HUMANN
+```{bash, eval=FALSE}
+mkdir HUMANN_out/
+parallel -j 1 'humann --input {1} --output HUMANN_out/ --threads 24 --nucleotide-database /home/vinko/databases/HUMANN/chocophlan/ --protein-database /home/vinko/databases/HUMANN/uniref/ --bowtie2 /home/vinko/tools/bowtie2-2.2.9/' ::: joined_reads/*.fq.gz
+```
+
+```{python}
+print(len('CATATGGACAATCCACATCCGCAGATCTCTGAGTCGAAACAGATGTACTTAGAGACCTGACTTCTCCGTAGAATACAGGTGCCTCTGGGTCCGAGCGCAACAAATTATCCAGTTTCTCTAAGAAGAATTGGCAAAATTTCTCATCCTCGT'))
+```
+
+Rename contigs files (change fna and add sample names):
+```{bash, eval=FALSE}
+mkdir spades_contigs
+```
+
+## PathoFact
+
+```{bash, eval=FALSE}
+pathofact:
+  sample: ["D8"] # requires user input
+  project: PathoFact_results # requires user input
+  datadir:  /home/vinko/PathoFact/ # requires user input
+  workflow: "complete" #options: "complete", "AMR", "Tox", "Vir"
+  size_fasta: 10000 #Adjustable to preference
+  scripts: "scripts"
+  signalp: "/home/vinko/tools/signalp-5.0b/bin" # requires user input
+  deepvirfinder: "submodules/DeepVirFinder/dvf.py"
+  tox_hmm: "databases/toxins/combined_Toxin.hmm"
+  tox_lib: "databases/library_HMM_Toxins.csv"
+  tox_threshold: 40 #Bitscore threshold ofx the toxin prediction, adjustable by user to preference
+  vir_hmm: "databases/virulence/Virulence_factor.hmm"
+  vir_domains: "databases/models_and_domains"
+  plasflow_threshold: 0.7
+  plasflow_minlen: 1000
+  runtime:
+    short: "00:10:00"
+    medium: "01:00:00"
+    long: "02:00:00"
+  mem:
+    normal_mem_per_core_gb: "4G"
+    big_mem_cores: 12
+    big_mem_per_core_gb: "30G"
+```
+
+```{bash, eval=FALSE}
+pathofact:
+  sample: ["sample1_test"] # requires user input
+  project: PathoFact_results # requires user input
+  datadir:  /home/vinko/test_mock/test_patho/ # requires user input
+  workflow: "complete" #options: "complete", "AMR", "Tox", "Vir"
+  size_fasta: 10000 #Adjustable to preference
+  scripts: "scripts"
+  signalp: "/home/vinko/tools/signalp-5.0b/bin" # requires user input
+  deepvirfinder: "submodules/DeepVirFinder/dvf.py"
+  tox_hmm: "databases/toxins/combined_Toxin.hmm"
+  tox_lib: "databases/library_HMM_Toxins.csv"
+  tox_threshold: 40 #Bitscore threshold of the toxin prediction, adjustable by user to preference
+  vir_hmm: "databases/virulence/Virulence_factor.hmm"
+  vir_domains: "databases/models_and_domains"
+  plasflow_threshold: 0.7
+  plasflow_minlen: 1000
+  runtime:
+    short: "00:10:00"
+    medium: "01:00:00"
+    long: "02:00:00"
+  mem:
+    normal_mem_per_core_gb: "4G"
+    big_mem_cores: 12
+    big_mem_per_core_gb: "30G"
+```
+
+Run:
+```{bash, eval=FALSE}
+snakemake -s Snakefile --use-conda --reason --cores 12 -p
+```
+
+# Run on ComputeCanada
+
+Login:
+```{bash, eval=FALSE}
+ssh rwright@cedar.computecanada.ca
+S0uthAfr1ca!
+```
+
+Spades:
+Then make an sbatch script to run:
+```{python, eval=FALSE}
+import os
+
+sample_names = ['D1', 'D2', 'D3', 'D5', 'D6', 'D7', 'D9', 'D10', 'D11', 'D12']
+#sample_names = ['D4']
+direc = '/home/rwright/scratch/vinko/'
+
+for sample in sample_names:
+    r1, r2 = direc+'all_reads/trimmed_reads/'+sample+'_R1.fq.gz', direc+'all_reads/trimmed_reads/'+sample+'_R2.fq.gz'
+    str = '#!/bin/bash\n'
+    str += '#SBATCH --job-name='+sample+'_spades.job\n'
+    str += '#SBATCH --output='+direc+'out/'+sample+'_spades.out\n'
+    str += '#SBATCH --error='+direc+'out/'+sample+'_spades.err\n'
+    str += '#SBATCH --mem=250G\n'
+    str += '#SBATCH --time=1-0:00\n'
+    str += '#SBATCH --cpus-per-task=32\n'
+    str += '#SBATCH --mail-user=robyn.wright@dal.ca\n'
+    str += '#SBATCH --mail-user=vinko.zadjelovic-varas@warwick.ac.uk\n'
+    str += '#SBATCH --mail-type=ALL\n'
+    str += 'conda activate spades\n'
+    str += 'source activate spades\n'
+    str += 'mkdir '+direc+'/spades_out/'+sample+'\n'
+    str += '/home/rwright/anaconda3/envs/spades/bin/spades.py --meta -1 '+r1+' -2 '+r2+' -o '+direc+'spades_out/'+sample+'/ -t 32'+'\n'
+    with open(sample+'_spades.job', 'w') as f:
+        f.write(str)
+    #os.system('sbatch '+sample+'_spades.job')
+```
+
+These tended to time out, so we should be able to re-run like so...
+```{python, eval=FALSE}
+import os
+
+#sample_names = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D9', 'D10', 'D11', 'D12']
+#finished = ['D6', 'D8', 'D9', 'D11']
+#running = ['D10']
+sample_names = ['D1', 'D2', 'D3', 'D4', 'D5', 'D7', 'D12']
+direc = '/home/rwright/scratch/vinko/'
+
+for sample in sample_names:
+    r1, r2 = direc+'all_reads/trimmed_reads/'+sample+'_R1.fq.gz', direc+'all_reads/trimmed_reads/'+sample+'_R2.fq.gz'
+    str = '#!/bin/bash\n'
+    str += '#SBATCH --job-name='+sample+'_spades.job\n'
+    str += '#SBATCH --output='+direc+'out/'+sample+'_spades.out\n'
+    str += '#SBATCH --error='+direc+'out/'+sample+'_spades.err\n'
+    str += '#SBATCH --mem=450G\n'
+    str += '#SBATCH --time=4-0:00\n'
+    str += '#SBATCH --cpus-per-task=32\n'
+    str += '#SBATCH --mail-user=robyn.wright@dal.ca\n'
+    str += '#SBATCH --mail-user=vinko.zadjelovic-varas@warwick.ac.uk\n'
+    str += '#SBATCH --mail-type=ALL\n'
+    str += 'conda activate spades\n'
+    str += 'source activate spades\n'
+    str += 'mkdir '+direc+'/spades_out/'+sample+'\n'
+    #str += '/home/rwright/anaconda3/envs/spades/bin/spades.py --restart-from last -o '+direc+'spades_out/'+sample+'/ -t 32'+'\n'
+    str += '/home/rwright/anaconda3/envs/spades/bin/spades.py --meta -1 '+r1+' -2 '+r2+' -o '+direc+'spades_out/'+sample+'/ -t 32 -m 450'+'\n'
+    with open(sample+'_spades.job', 'w') as f:
+        f.write(str)
+    os.system('sbatch '+sample+'_spades.job')
+```
+
+Re-running on graham
+```{python, eval=FALSE}
+import os
+
+#sample_names = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D9', 'D10', 'D11', 'D12']
+#finished = ['D6', 'D8', 'D9', 'D11']
+#running = ['D10']
+sample_names = ['D1']
+to_run = ['D2', 'D3', 'D4', 'D5', 'D7', 'D12']
+direc = '/home/rwright/scratch/vinko/'
+
+for sample in sample_names:
+    r1, r2 = direc+'all_reads/trimmed_reads/'+sample+'_R1.fq.gz', direc+'all_reads/trimmed_reads/'+sample+'_R2.fq.gz'
+    str = '#!/bin/bash\n'
+    str += '#SBATCH --job-name='+sample+'_spades.job\n'
+    str += '#SBATCH --output='+direc+'out/'+sample+'_spades.out\n'
+    str += '#SBATCH --error='+direc+'out/'+sample+'_spades.err\n'
+    str += '#SBATCH --mem=300G\n'
+    str += '#SBATCH --time=4-0:00\n'
+    str += '#SBATCH --cpus-per-task=32\n'
+    str += '#SBATCH --mail-user=robyn.wright@dal.ca\n'
+    str += '#SBATCH --mail-user=vinko.zadjelovic-varas@warwick.ac.uk\n'
+    str += '#SBATCH --mail-type=ALL\n'
+    str += 'conda activate spades\n'
+    str += 'source activate spades\n'
+    str += 'mkdir '+direc+'/spades_out/'+sample+'\n'
+    #str += '/home/rwright/anaconda3/envs/spades/bin/spades.py --restart-from last -o '+direc+'spades_out/'+sample+'/ -t 32'+'\n'
+    str += '/home/rwright/anaconda3/envs/spades/bin/spades.py --meta -1 '+r1+' -2 '+r2+' -o '+direc+'spades_out/'+sample+'/ -t 32 -m 300'+'\n'
+    with open(sample+'_spades.job', 'w') as f:
+        f.write(str)
+    os.system('sbatch '+sample+'_spades.job')
+```
+
+`sq` - check status of jobs
+`scancel jobid` - cancel the job
+
+HUMANN:
+```{python, eval=FALSE}
+import os
+
+sample_names = ['D1', 'D2', 'D3', 'D4', 'D6', 'D7', 'D8', 'D9', 'D10', 'D12']
+running = ['D5']
+copying = ['D11']
+#sample_names = ['D1']
+direc = '/home/rwright/scratch/vinko/'
+
+for sample in sample_names:
+    f = direc+'all_reads/joined_reads/'+sample+'.fq.gz'
+    string = '#!/bin/bash\n'
+    string += '#SBATCH --job-name='+sample+'_humann.job\n'
+    string += '#SBATCH --output='+direc+'out/'+sample+'_humann.out\n'
+    string += '#SBATCH --error='+direc+'out/'+sample+'_humann.err\n'
+    string += '#SBATCH --mem=120G\n'
+    string += '#SBATCH --time=3-0:00\n'
+    string += '#SBATCH --cpus-per-task=24\n'
+    string += '#SBATCH --mail-user=robyn.wright@dal.ca\n'
+    string += '#SBATCH --mail-user=vinko.zadjelovic-varas@warwick.ac.uk\n'
+    string += '#SBATCH --mail-type=ALL\n'
+    string += 'conda activate biobakery3\n'
+    string += 'source activate biobakery3\n'
+    string += 'mkdir '+direc+'/humann_out/'+sample+'\n'
+    string += 'humann --input '+f+' --output '+direc+'humann_out/'+sample+' --threads 24 --nucleotide-database /home/rwright/scratch/databases/HUMANN/chocophlan_new/ --protein-database /home/rwright/scratch/databases/HUMANN/uniref_new/ --bowtie2 /home/rwright/tools/bowtie2-2.2.9/ --resume'+'\n'
+    with open(sample+'_humann.job', 'w') as f:
+        f.write(string)
+    os.system('sbatch '+sample+'_humann.job')
+```
+
+```{bash, eval=FALSE}
+squeue | awk '
+BEGIN {
+    abbrev["R"]="(Running)"
+    abbrev["PD"]="(Pending)"
+    abbrev["CG"]="(Completing)"
+    abbrev["F"]="(Failed)"
+}
+NR>1 {a[$5]++}
+END {
+    for (i in a) {
+        printf "%-2s %-12s %d\n", i, abbrev[i], a[i]
+    }
+}'
+```
+
+# Anvio
+
+Modified for my samples:
+```{bash, eval=FALSE}
+conda deactivate
+conda activate anvio-6.2
+
+R1=$( ls trimmed_reads/*_R1.fq.gz | tr '\n' ',' | sed 's/,$//' )
+R2=$( ls trimmed_reads/*_R2.fq.gz | tr '\n' ',' | sed 's/,$//' )
+    
+ megahit -1 $R1 \
+         -2 $R2 \
+         --min-contig-len 1000 \
+         --num-cpu-threads 12 \
+         --presets meta-large \
+         --memory 0.3 \
+         -o anvio/megahit_out \
+        --verbose
+
+# Remove intermediate contigs to save space
+rm -r megahit_out_by_set/*/intermediate_contigs
+
+# This step ensured that all characters used in the scaffold names were compatible with the downstream anvi’o analyses.
+# Also removed scaffolds too short to produce a reliable tetra-nucleotide frequency (1000 bp)
+# After that then also created database of these contigs, which will be output to new folder ("contig_databases")
+
+anvi-script-reformat-fasta megahit_out/final.contigs.fa \
+                               --simplify-names \
+                               --min-len 1000 \
+                               -o megahit_out/final.contigs.fixed.fa \
+                               --prefix blood
+
+mkdir anvio_databases
+
+anvi-gen-contigs-database -f megahit_out/final.contigs.fixed.fa \
+                              -o anvio_databases/CONTIGS.db \
+                              -n blood
+
+anvi-run-hmms -c anvio_databases/CONTIGS.db --num-threads 12
+
+anvi-get-sequences-for-gene-calls -c anvio_databases/CONTIGS.db -o anvio_databases/gene_calls.fa
+
+# install kaiju
+# conda install -c bioconda kaiju
+        
+kaiju -t /scratch/db/kaiju_db_nr_euk/nodes.dmp \
+      -f /scratch/db/kaiju_db_nr_euk/kaiju_db_nr_euk.fmi \
+      -i anvio_databases/gene_calls.fa \
+      -o anvio_databases/gene_calls.nr.out \
+      -z 10 \
+      -v
+    
+kaiju-addTaxonNames -t /scratch/db/kaiju_db_nr_euk/nodes.dmp \
+              -n /scratch/db/kaiju_db_nr_euk/names.dmp \
+              -i anvio_databases/gene_calls.nr.out \
+              -o anvio_databases/gene_calls.nr.names \
+              -r superkingdom,phylum,class,order,family,genus,species
+
+anvi-import-taxonomy-for-genes -i anvio_databases/gene_calls.nr.names \
+                               -c anvio_databases/CONTIGS.db \
+                               -p kaiju \
+                               --just-do-it
+
+
+
+bowtie2-build megahit_out/final.contigs.fixed.min1000.fa megahit_out/final.contigs.fixed.min1000
+
+
+mkdir bam_files
+cd ..
+
+#I need to make this sample_ids.txt file
+python
+import os
+
+files = os.listdir('joined_lanes_separate_reads/')
+files = [f for f in files if 'R1' in f]
+files = [f.split('_') for f in files]
+files = [f[0]+'_'+f[1] for f in files]
+files = sorted(files)
+with open('sample_ids.txt', 'w') as f:
+  for sample in files:
+    f.write(sample+'\n')
+
+# Now do mapping
+for SAMPLE in `awk '{print $1}' sample_ids.txt`
+do
+
+    # do the bowtie mapping to get the SAM file:
+    bowtie2 --threads 12 \
+            -x anvio/megahit_out/final.contigs.fixed.min1000 \
+            -1 "raw_reads_reformat/"$SAMPLE"_R1.fastq.gz" \
+            -2 "raw_reads_reformat/"$SAMPLE"_R2.fastq.gz" \
+            --no-unal \
+            -S anvio/bam_files/$SAMPLE.sam
+
+    # covert the resulting SAM file to a BAM file:
+    samtools view -F 4 -bS anvio/bam_files/$SAMPLE.sam > anvio/bam_files/$SAMPLE-RAW.bam
+
+    # sort and index the BAM file:
+    samtools sort anvio/bam_files/$SAMPLE-RAW.bam -o anvio/bam_files/$SAMPLE.bam
+    samtools index anvio/bam_files/$SAMPLE.bam
+
+    # remove temporary files:
+    rm anvio/bam_files/$SAMPLE.sam anvio/bam_files/$SAMPLE-RAW.bam
+
+done
+
+mv sample_ids.txt anvio/
+cd anvio
+
+# Generate anvi’o profile databases that contain the coverage and detection statistics of each scaffold
+mkdir anvio_databases/profiles
+
+for SAMPLE in `awk '{print $1}' sample_ids.txt`
+do
+
+    anvi-profile -c anvio_databases/CONTIGS.db \
+                 -i bam_files/$SAMPLE.bam \
+                 --num-threads 12 \
+                 -o anvio_databases/profiles/$SAMPLE
+done
+
+Getting this output:
+WARNING
+=====================================
+According to the data generated in the contigs database, there are 12666 contigs
+in your BAM file with 0 gene calls. Which may not be unusual if (a) some of your
+contigs are very short, or (b) your the gene caller was not capable of dealing
+with the type of data you had. If you would like to take a look yourself, here
+is one contig that is missing any genes: c_000000009922
+
+
+
+Config Error: At least one contig name in your BAM file does not match contig names stored in
+              the contigs database. For instance, this is one contig name found in your BAM  
+              file: 'c_000000000001', and this is another one found in your contigs database:
+              'blood_000000003939'. You may be using an contigs database for profiling that  
+              has nothing to do with the BAM file you are trying to profile, or you may have 
+              failed to fix your contig names in your FASTA file prior to mapping, which is  
+              described here: http://goo.gl/Q9ChpS 
+
+# So I am going to edit the headers of the bam files from c to blood (as in the other files)
+for SAMPLE in `awk '{print $1}' sample_ids.txt`
+do
+     samtools view -H $SAMPLE".bam" > header.sam
+     sed "s/c/blood/" header.sam > header_corrected.sam
+     samtools reheader header_corrected.sam $SAMPLE".bam" > $SAMPLE"_new.bam"
+     samtools index $SAMPLE"_new.bam"
+done
+
+#And redo the previous step
+for SAMPLE in `awk '{print $1}' sample_ids.txt`
+do
+
+    anvi-profile -c anvio_databases/CONTIGS.db \
+                 -i bam_files/$SAMPLE"_new.bam" \
+                 --num-threads 12 \
+                 -o anvio_databases/profiles/$SAMPLE
+done
+
+
+# Merge sample profiles
+anvi-merge -c anvio_databases/CONTIGS.db \
+           -o anvio_databases/merged_profiles \
+           anvio_databases/profiles/PGPC*/PROFILE.db
+
+anvi-cluster-contigs -c anvio_databases/CONTIGS.db \
+                         -p anvio_databases/merged_profiles/PROFILE.db \
+                         --collection-name "merged_concoct" \
+                         --driver concoct \
+                         --num-threads 12 \
+                         --just-do-it
+
+mkdir concoct_summary
+
+anvi-summarize -c anvio_databases/CONTIGS.db \
+                   -p anvio_databases/merged_profiles/PROFILE.db \
+                   -C "merged_concoct" \
+                   -o concoct_summary/$SET-summary
+                  
+
+anvi-estimate-genome-completeness -c anvio_databases/CONTIGS.db \
+                                  -p anvio_databases/merged_profiles/PROFILE.db \
+                                  -C "merged_concoct"
+                                  
+### STOPPED HERE FOR NOW ### 
+
+anvi-refine -c contig_databases/$SET/$SET-CONTIGS.db \
+            -p profile_databases/$SET-MERGED/PROFILE.db \
+            -C $SET"_concoct" \
+            -b Bin_136 --server-only -P 8082
+
+mkdir hmm_hits
+
+for SET in `cat primate_sets.txt`
+do
+anvi-get-sequences-for-hmm-hits -c contig_databases/$SET/$SET-CONTIGS.db \
+                                -p profile_databases/$SET-MERGED/PROFILE.db \
+                                -C $SET"_concoct" \
+                                 -o hmm_hits/$SET"_concat-proteins.fa" \
+                                --hmm-source 'Bacteria_71' \
+                                --return-best-hit \
+                                --get-aa-sequences \
+                                --concatenate
+done
+
+
+# For each SET parse the output and retain only bins with completeness >90% and redundancy < 10%. Re-name seqs in FASTA to be "SET_bin#" and remove all gaps (so that re-alignment can be done) 
+mkdir hmm_hits_clean
+
+for SET in `cat primate_sets.txt`
+do
+python /home/gavin/projects/POMS/scripts/parse_anvio_faa_output.py -f hmm_hits/$SET"_concat-proteins.fa" \
+                                                                   -s concoct_summary/$SET-summary/bins_summary.txt \
+                                                                   -d $SET \
+                                                                   -o hmm_hits_clean/$SET"_concat-proteins_clean.fa"
+done
+
+# Concatenate bins across all sets
+cat hmm_hits_clean/*fa > ALL-SETS_concat-proteins_clean.fa
+
+# Align with muscle (with all default options)
+muscle3.8.31_i86linux64 -in ALL-SETS_concat-proteins_clean.fa -out ALL-SETS_concat-proteins_clean_aligned.fa
+
+# Run fasttree
+anvi-gen-phylogenomic-tree -f ALL-SETS_concat-proteins_clean_aligned.fa \
+                           -o ALL-SETS_concat-proteins_clean_aligned.tre                           
+
+
+### Annotate MAGs with KOs.
+# First need to extract protein sequences
+mkdir protein_seqs
+
+for SET in `cat primate_sets.txt`
+do
+    anvi-get-sequences-for-gene-calls -c contig_databases/$SET/$SET-CONTIGS.db \
+                                      --get-aa-sequences \
+                                      -o protein_seqs/$SET-protein_seqs.faa
+done
+
+# Give each protein different id per SET
+# Note that the "genecall" part of this was removed later, so that part should be removed in the future.
+for SET in `cat primate_sets.txt`
+do
+    REPLACE=">genecall-$SET""_"
+    echo sed -i \'"s/>/$REPLACE/"\' protein_seqs/$SET-protein_seqs.faa
+done
+
+cat /home/gavin/projects/primate_microbiome/mgs_datasets/amato2019_PE/protein_seqs/*faa > /home/gavin/projects/primate_microbiome/mgs_datasets/amato2019_PE/all_protein_seqs.faa
+
+sed -i 's/genecall-//' all_protein_seqs.faa
+
+# Temporarily move to kofam_scan dir to run executable:
+cd /home/gavin/local/prg/kofam_scan/
+
+./exec_annotation /home/gavin/projects/primate_microbiome/mgs_datasets/amato2019_PE/all_protein_seqs.faa \
+                  -o /home/gavin/projects/primate_microbiome/mgs_datasets/amato2019_PE/all_protein_seqs_kofamscan.txt \
+                  --profile /scratch/db/kofamscan_db/profiles/ \
+                  --ko-list /scratch/db/kofamscan_db/ko_list \
+                  --cpu 20 \
+                  --format detail-tsv \
+                  --report-unannotated
+
+# Parse sig hits based on score threshold (indicated by *) into separate file:
+grep -e "^*" /home/gavin/projects/primate_microbiome/mgs_datasets/amato2019_PE/all_protein_seqs_kofamscan.txt | awk '{ print $2"\t"$3 }' > /home/gavin/projects/primate_microbiome/mgs_datasets/amato2019_PE/all_protein_seqs_kofamscan_hits.txt
+
+           
+cd /home/gavin/projects/primate_microbiome/mgs_datasets/amato2019_PE/
+
+
+rm concoct_summary/bin_gene_calls.tsv
+
+for SET in `cat primate_sets.txt`
+do
+    for BIN in $(ls concoct_summary/$SET-summary/bin_by_bin)
+    do
+      tail -n +2 concoct_summary/$SET-summary/bin_by_bin/$BIN/$BIN-gene_calls.txt | awk -v set=$SET -v bin="$BIN" '{print set "_" bin "\t" set "_" $1}' >> concoct_summary/bin_gene_calls.tsv
+    done
+done
+
+
+# Get table of KOs per MAG
+python /home/gavin/projects/POMS/scripts/link_long_tables.py --file1 concoct_summary/bin_gene_calls.tsv \
+                                                             --file2 all_protein_seqs_kofamscan_hits.txt \
+                                                             --output Amato2019_MAG_genes.tsv
+```
+
+
+# Analysis
+
+## Number of reads
+
+Compare:
+1. Number of reads initially, after Trimmomatic, after Kraken2, after HUMAnN
+2. Number of reads initially, after QC...
+
+## Kraken2
+
+```{R}
+library(phyloseq)
+library(microbiome)
+library(philr)
+library(ape)
+library(metacoder)
+library("data.table")
+library(vegan)
+library(tidyr)
+library("plyr")
+library(gridExtra)
+library(randomcoloR)
+library(DESeq2)
+
+folder <- '/Users/robynwright/Documents/OneDrive/Langille_Lab_postdoc/vinko/'
+```
+
+Put all samples into one dataframe (in python):
+```{python, eval=FALSE}
+import os
+import pandas as pd
+
+folder = r.folder
+files = os.listdir(folder+'/kraken2_kreport/')
+files = [f for f in files if f[-8:] == '.bracken']
+
+df = []
+
+for f in files:
+  this_sample = pd.read_csv(folder+'kraken2_kreport/'+f, index_col=0, header=0, sep='\t')
+  this_sample = pd.DataFrame(this_sample.loc[:, 'added_reads'])
+  this_sample = this_sample[this_sample.max(axis=1) > 10]
+  this_sample = this_sample.rename(columns={'added_reads':f.split('.')[0]})
+  df.append(this_sample)
+
+all_samples = pd.concat(df).fillna(value=0)
+all_samples = all_samples.groupby(by=all_samples.index, axis=0).sum()
+all_samples = all_samples.loc[:, ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9', 'D10', 'D11', 'D12']]
+all_samples.to_csv(folder+'All samples.csv')
+```
+
+Get the taxonomy for all taxa (in python):
+```{python, eval=FALSE}
+folder = r.folder
+files = os.listdir(folder+'/kraken2_kreport/')
+files = [f for f in files if 'bracken.kreport' in f]
+current = {'D':'', 'P':'', 'C':'', 'O':'', 'F':'', 'G':''}
+all_taxa = {}
+
+for f in files:
+  classifications = pd.read_csv(folder+'kraken2_kreport/'+f, sep='\t').transpose()
+  classifications = classifications.reset_index().transpose()
+  classifications.columns = ['Percentfragments', 'Number fragments root', 'Number fragments', 'Rank', 'NCBI taxid', 'Scientific name']
+  rows = classifications.index.values
+  for row in rows:
+    rank = classifications.loc[row, 'Rank']
+    name = classifications.loc[row, 'Scientific name'].lstrip()
+    if rank in current:
+      current[rank] = name
+    if rank == 'S':
+      full_tax = current['D']+';'+current['P']+';'+current['C']+';'+current['O']+';'+current['F']+';'+current['G']+';'+name
+      all_taxa[name] = full_tax
+```
+
+Get the full taxonomy for the samples and save the file for R (python):
+```{python, eval=FALSE}
+all_samples_rename = all_samples.rename(index=all_taxa)
+all_samples_rename.to_csv(folder+'All samples taxonomy.csv')
+
+all_samples_rename_R = all_samples_rename.reset_index()
+rename_tax = {}
+for row in all_samples_rename_R.index.values:
+  rename_tax[row] = 'taxa'+str(row)
+all_samples_rename_R = all_samples_rename_R.rename(index=rename_tax)
+all_samples_rename_R.to_csv(folder+'All samples taxonomy R.csv')
+```
+
+Read in data to R:
+```{R}
+table <- read.csv(paste(folder, "All samples taxonomy R.csv", sep=""))
+taxonomy = table[, c(1, 2)]
+table_num = data.matrix(table[,3:14]) #convert the ASV table to a numeric matric
+rownames(table_num) = table[,1] #give the matrix row names
+table = as.matrix(table_num) #convert it to a matrix
+table = otu_table(table, taxa_are_rows = TRUE)
+
+taxonomy_sep <- separate(data = taxonomy, col = name, into = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"), sep = "\\;") #separate the taxonomy table so each phylogenetic level is its own column
+taxmat <- taxonomy_sep[,-1] #remove the OTU ID column from the taxonomy table
+rownames(taxmat) <- taxonomy_sep[,1] #and now give the taxonomy table the OTU IDs as row names
+
+sampledata <- read.csv(paste(folder, "metadata.csv", sep=""))
+samples <- sampledata[, 2:3] #get the metadata columns
+rownames(samples) = sampledata[,1] #and add the sample names as row names
+samples = data.frame(samples, stringsAsFactors = FALSE) #convert this to a data frame
+SAMPLE = sample_data(samples)
+
+TAX = tax_table(taxmat)
+taxa_names(TAX) = taxonomy_sep[,1]
+physeq = phyloseq(table, TAX, SAMPLE)
+physeq_relabun  <- transform_sample_counts(physeq, function(x) (x / sum(x))*100) #convert to relative abundance
+physeq_rare <- rarefy_even_depth(physeq, sample.size = min(sample_sums(physeq)), replace = TRUE, trimOTUs = TRUE, verbose = TRUE) #rarefy to the lowest sample depth
+physeq_clr <- microbiome::transform(physeq, "clr") #convert to CLR
+```
+
+Save CLR table:
+```{R}
+table = otu_table(physeq_clr)
+write.csv(table, paste(folder, "All samples CLR.csv", sep=""))
+```
+
+### Plot richness
+```{R}
+plot_richness(physeq, measures=c("Observed", "Chao1", "Simpson", "Shannon"))
+```
+```{R}
+plot_richness(physeq, x="Type", measures=c("Observed", "Chao1", "Simpson", "Shannon")) + geom_boxplot()
+```
+
+### Beta diversity {.tabset}
+
+#### Species level
+
+Bray-Curtis (raw counts):
+```{R}
+ps.ord <- ordinate(physeq, "PCoA", "bray")
+plot_ordination(physeq, ps.ord, type="samples", color="Type") 
+```
+
+Bray-Curtis (relative abundance):
+```{R}
+ps.ord.ra <- ordinate(physeq_relabun, "PCoA", "bray")
+plot_ordination(physeq_relabun, ps.ord.ra, type="samples", color="Type") 
+```
+
+Bray-Curtis (rarefied):
+```{R}
+ps.ord.rare <- ordinate(physeq_rare, "PCoA", "bray")
+plot_ordination(physeq_rare, ps.ord.rare, type="samples", color="Type") 
+distance <- phyloseq::distance(physeq_rare, method="bray", weighted=F)
+print(adonis(distance ~ sample_data(physeq_rare)$Type))
+```
+
+Bray-Curtis (CLR):
+```{R}
+ps.ord.clr <- ordinate(physeq_clr, "PCoA", "euclidean")
+plot_ordination(physeq_clr, ps.ord.clr, type="samples", color="Type")
+distance <- phyloseq::distance(physeq_clr, method="euclidean", weighted=F)
+print(adonis(distance ~ sample_data(physeq_clr)$Type))
+```
+
+#### Genus level
+
+Bray-Curtis (raw counts):
+```{R}
+rnk = "ta6"
+ps.rank = tax_glom(physeq, taxrank=rnk, NArm=FALSE)
+ps.ord <- ordinate(ps.rank, "PCoA", "bray")
+plot_ordination(ps.rank, ps.ord, type="samples", color="Type") 
+```
+
+Bray-Curtis (relative abundance):
+```{R}
+rnk = "ta6"
+ps.rank.ra = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+ps.ord.ra <- ordinate(ps.rank.ra, "PCoA", "bray")
+plot_ordination(ps.rank.ra, ps.ord.ra, type="samples", color="Type") 
+```
+
+Bray-Curtis (rarefied):
+```{R}
+rnk = "ta6"
+ps.rank.rare = tax_glom(physeq_rare, taxrank=rnk, NArm=FALSE)
+ps.ord.rank.rare <- ordinate(ps.rank.rare, "PCoA", "bray")
+plot_ordination(ps.rank.rare, ps.ord.rank.rare, type="samples", color="Type") 
+distance <- phyloseq::distance(ps.rank.rare, method="bray", weighted=F)
+print(adonis(distance ~ sample_data(ps.rank.rare)$Type))
+```
+
+Bray-Curtis (CLR):
+```{R}
+rnk = "ta6"
+ps.rank.clr = tax_glom(physeq_clr, taxrank=rnk, NArm=FALSE)
+ps.ord.rank.clr <- ordinate(ps.rank.clr, "PCoA", "euclidean")
+plot_ordination(ps.rank.clr, ps.ord.rank.clr, type="samples", color="Type")
+distance <- phyloseq::distance(ps.rank.clr, method="euclidean", weighted=F)
+print(adonis(distance ~ sample_data(ps.rank.clr)$Type))
+```
+
+### Barplots {.tabset}
+
+#### Phylum
+
+```{R, results='hide', fig.keep='all', message=FALSE}
+options(warn = -1) 
+palette = distinctColorPalette(30)
+rnk = "ta2"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Type), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Class
+
+```{R, results='hide', fig.keep='all', message=FALSE}
+options(warn = -1) 
+palette = distinctColorPalette(30)
+rnk = "ta3"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Type), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Order
+
+```{R, results='hide', fig.keep='all', message=FALSE}
+options(warn = -1) 
+palette = distinctColorPalette(30)
+rnk = "ta4"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Type), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Family
+
+```{R, results='hide', fig.keep='all', message=FALSE}
+options(warn = -1) 
+palette = distinctColorPalette(30)
+rnk = "ta5"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Type), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Genus
+
+```{R, results='hide', fig.keep='all', message=FALSE}
+options(warn = -1) 
+palette = distinctColorPalette(30)
+rnk = "ta6"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Type), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+#### Species
+
+```{R, results='hide', fig.keep='all', message=FALSE}
+options(warn = -1) 
+palette = distinctColorPalette(30)
+rnk = "ta7"
+ps.rank = tax_glom(physeq_relabun, taxrank=rnk, NArm=FALSE)
+rank.sum = tapply(taxa_sums(ps.rank), tax_table(ps.rank)[, rnk], sum, na.rm=TRUE)
+top30 = names(sort(rank.sum, TRUE))[1:30]
+ps.rank = prune_taxa((tax_table(ps.rank)[, rnk] %in% top30), ps.rank)
+
+plot_bar(ps.rank, fill=rnk) + facet_wrap(c(~Type), scales="free_x", nrow=1) + theme(legend.text=element_text(size=5), legend.key.size = unit(0.3, "cm")) + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values=palette)
+```
+
+### Differential abundance
+
+LDPE vs Weathered LDPE
+```{R, results='hide', fig.keep='all', message=FALSE}
+options(warn = -1) 
+samples_keeping = c("D4", "D5", "D6", "D7", "D8", "D9")
+physeq
+ps = prune_samples(samples_keeping, physeq)
+sample_data(ps)$Type <- as.factor(sample_data(ps)$Type)
+ds = phyloseq_to_deseq2(ps, ~ Type)
+ds = DESeq(ds)
+alpha = 0.01
+res = results(ds, contrast=c("Type", "LDPE", "W_LDPE"), alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_sig = res[(res$padj < alpha), ]
+res_sig = cbind(as(res_sig, "data.frame"), as(tax_table(ps)[rownames(res_sig), ], "matrix"))
+res_sig
+ggplot(res_sig, aes(x=ta5, y=log2FoldChange, color=ta3)) +
+    geom_jitter(size=2, width = 0.2) +
+    theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5, size=4)) +
+    theme(legend.text=element_text(size=4))
+```
+
+LDPE vs Wood
+```{R, results='hide', fig.keep='all', message=FALSE}
+options(warn = -1) 
+samples_keeping = c("D1", "D2", "D3", "D7", "D8", "D9")
+physeq
+ps = prune_samples(samples_keeping, physeq)
+sample_data(ps)$Type <- as.factor(sample_data(ps)$Type)
+ds = phyloseq_to_deseq2(ps, ~ Type)
+ds = DESeq(ds)
+alpha = 0.01
+res = results(ds, contrast=c("Type", "LDPE", "Wood"), alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_sig = res[(res$padj < alpha), ]
+res_sig = cbind(as(res_sig, "data.frame"), as(tax_table(ps)[rownames(res_sig), ], "matrix"))
+res_sig
+ggplot(res_sig, aes(x=ta5, y=log2FoldChange, color=ta3)) +
+    geom_jitter(size=2, width = 0.2) +
+    theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5, size=4)) +
+    theme(legend.text=element_text(size=4))
+```

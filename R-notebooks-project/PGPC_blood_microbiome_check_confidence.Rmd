@@ -1135,8 +1135,8 @@ If I move the other files used for creating to a different folder, just the hash
 
 
 ```{bash, eval=FALSE}
-bracken-build -d /home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/gtdb_human/ -t 12 #makes Bracken database with read length of 100
-bracken-build -d /home/robyn/tools/kraken_gtdb_human/RW_gtdb_human/gtdb_human/ -t 12 -l 150 #makes Bracken database with read length of 150
+bracken-build -d Kraken2_GTDB_no_human_May2021/ -t 12 #makes Bracken database with read length of 100
+bracken-build -d Kraken2_GTDB_no_human_May2021/ -t 12 -l 150 #makes Bracken database with read length of 150
 ```
 
 Accidentally forgot to put seqid2taxid file back in this folder when making, so this did [step 1a of creating the database](https://ccb.jhu.edu/software/bracken/index.shtml?t=manual). Luckily, you can just move this file back and then rerun it and it won't make the files it has already created again.

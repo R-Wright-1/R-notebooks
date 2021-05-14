@@ -33,6 +33,7 @@ import matplotlib.pyplot as plt
 from scipy.cluster import hierarchy
 import matplotlib as mpl
 from matplotlib_venn import venn2
+from matplotlib.lines import Line2D
 import csv
 from matplotlib.patches import Patch
 from scipy.spatial import distance

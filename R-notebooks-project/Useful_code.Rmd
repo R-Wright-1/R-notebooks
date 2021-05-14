@@ -15,6 +15,23 @@ library(knitr)
 
 ## Basic command line
 
+Count number of slurm jobs:
+```{bash, eval=FALSE}
+squeue | awk '
+BEGIN {
+    abbrev["R"]="(Running)"
+    abbrev["PD"]="(Pending)"
+    abbrev["CG"]="(Completing)"
+    abbrev["F"]="(Failed)"
+}
+NR>1 {a[$5]++}
+END {
+    for (i in a) {
+        printf "%-2s %-12s %d\n", i, abbrev[i], a[i]
+    }
+}'
+```
+
 Count number of files in directory:
 ```{bash, eval=FALSE}
 ls -1 | wc -l
@@ -65,6 +82,16 @@ Go to [this link](http://localhost:8787/). Login details are robyn and server pa
 Combine fasta files:
 ```{bash, eval=FALSE}
 cat folder/*.fasta > combined.fasta
+```
+
+Convert fastq to fasta:
+```{bash, eval=FALSE}
+sed -n '1~4s/^@/>/p;2~4p' cat_reads/cDNA-N1-neg.fastq > cat_reads/cDNA-N1-neg.fasta
+```
+
+Convert bam to fastq:
+```{bash, eval=FALSE}
+samtools bam2fq SAMPLE.bam > SAMPLE.fastq
 ```
 
 [Server backup](https://github.com/LangilleLab/lab_information/wiki/Backups-and-Extra-Storage):
@@ -263,7 +290,7 @@ qiime deblur denoise-16S \
 Summarise:
 ```{bash, eval=FALSE}
 qiime feature-table summarize \
-  --i-table deblur_output_quality/table.qza  \
+  --i-table deblur_output/table.qza  \
   --o-visualization deblur_table_summary.qzv
 ```
 
@@ -483,6 +510,14 @@ checkm
 checkm lineage_wf -t 8 -x fa bin_folder output_folder
 ```
 
+## Read length distribution in files
+
+```{bash, eval=FALSE}
+awk 'NR%4 == 2 {lengths[length($0)]++} END {for (l in lengths) {print l, lengths[l]}}' S10-WWMB_S32_R2.fastq
+```
+
+Change NR%4 if it is not a fasta file.
+
 ## Kneaddata
 
 ```{bash, eval=FALSE}
@@ -572,10 +607,10 @@ Install and get databases (note that conda didn't work):
 pip install humann
 pip install metaphlan
 
-humann_databases --download chocophlan full humann_databases/ --update-config yes
-humann_databases --download uniref uniref90_diamond humann_databases/ --update-config yes
-humann_databases --download uniref uniref50_diamond humann_databases/ --update-config yes
-humann_databases --download utility_mapping full humann_databases/ --update-config yes
+humann_databases --download chocophlan full /home/vinko/databases/HUMANN/ --update-config yes
+humann_databases --download uniref uniref90_diamond /home/vinko/databases/HUMANN/ --update-config yes
+humann_databases --download uniref uniref50_diamond  /home/vinko/databases/HUMANN/ --update-config yes
+humann_databases --download utility_mapping full /home/vinko/databases/HUMANN/ --update-config yes
 ```
 
 Get the correct DIAMOND version:
@@ -693,6 +728,53 @@ sh install_bracken.sh
 Run bracken:
 ```{bash, eval=FALSE}
 parallel -j 1 'bracken -d /scratch/ramdisk/Kraken2.0.8_Bracken150mer_RefSeqCompleteV93/ -i {} -l S -o {.}.bracken -r 150' ::: kraken2_refseq/kraken2_kreport_conf/*.kreport
+```
+
+## SPAdes
+
+Install:
+```{bash, eval=FALSE}
+#Check dependencies
+g++ --version
+g++ (Ubuntu 5.5.0-12ubuntu1~16.04) 5.5.0 20171010
+cmake --version
+cmake version 3.5.1
+conda install zlib #still isn't showing with which or --version, but it says it installed so I'll try the rest anyway.
+conda install libbz2 #also didn't install, so trying anyway
+
+wget http://cab.spbu.ru/files/release3.14.1/SPAdes-3.14.1.tar.gz
+tar -xzf SPAdes-3.14.1.tar.gz
+cd SPAdes-3.14.1
+
+PREFIX=/home/robyn/anaconda3/ ./spades_compile.sh
+```
+
+Test:
+```{bash, eval=FALSE}
+/home/robyn/anaconda3/bin/spades.py --test
+```
+
+Input:
+- paired end reads (using fastq files from concatenating lanes)
+
+Test single sample:
+```{bash, eval=FALSE}
+/home/robyn/anaconda3/bin/spades.py -o test_spades_out --meta -1 cat_lanes/cDNA-N1-pos_S75_R1.fastq.gz -2 cat_lanes/cDNA-N1-pos_S75_R2.fastq.gz -t 12
+```
+
+## MetaQUAST
+
+Install MetaQUAST:
+```{bash, eval=FALSE}
+wget https://downloads.sourceforge.net/project/quast/quast-5.0.2.tar.gz
+tar -xzf quast-5.0.2.tar.gz
+cd quast-5.0.2
+```
+Seems to work fine.
+
+Run on the sample:
+```{bash, eval=FALSE}
+python /home/robyn/tools/quast-5.0.2/metaquast.py test_spades_out/contigs.fasta --references-list reference-list.txt --threads 10
 ```
 
 ## Add existing folder to Github
@@ -1042,9 +1124,14 @@ Get relative abundance:
 db = db.divide(db.sum(axis=0), axis=1).multiply(100)
 ```
 
-Sort by the value in a row:
+Sort by value in certain column:
 ```{python, eval=FALSE}
+db = db.sort_values(by=['col1'], ascending=True)
+```
 
+Get only first 10 rows:
+```{python, eval=FALSE}
+db = db[:10]
 ```
 
 ## Stats

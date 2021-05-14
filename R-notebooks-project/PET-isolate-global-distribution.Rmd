@@ -695,10 +695,10 @@ def get_plot_scatter(matches, ax, limit=97):
     x.append(g)
     pltx = np.random.normal(g, scale=0.1, size=len(group_plots[g]))
     # pltx = [g for x in range()]
-    plt.scatter(pltx, group_plots[g], alpha=0.2, s=15)
+    plt.scatter(pltx, group_plots[g], alpha=0.7, s=15)
     lq, uq = np.quantile(group_plots[g], 0.25), np.quantile(group_plots[g], 0.75)
     quantiles = [[lq], [uq]]
-    plt.errorbar(g, np.mean(group_plots[g]), color='k', marker='o', capsize=2)
+    plt.errorbar(g, np.mean(group_plots[g]), color='k', marker='o', markeredgecolor='w', capsize=2)
   
   # plt.boxplot(group_plots, labels=new_groups)
   plt.xticks(x, new_groups, rotation=90)
@@ -723,7 +723,7 @@ for a in range(len(axes)):
 
 plt.tight_layout()
 plt.show()
-# plt.savefig(folder3+'Thioclava abundance in plastics.png', dpi=600, bbox_inches='tight')
+plt.savefig(folder3+'Thioclava abundance in plastics.png', dpi=600, bbox_inches='tight')
 ```
 
 ## Bacillus sp. BHET2 abundance in different plastic types
@@ -745,7 +745,7 @@ for a in range(len(axes)):
 
 plt.tight_layout()
 plt.show()
-# plt.savefig(folder3+'Bacillus abundance in plastics.png', dpi=600, bbox_inches='tight')
+plt.savefig(folder3+'Bacillus abundance in plastics.png', dpi=600, bbox_inches='tight')
 ```
 
 ## Thioclava sp. BHET1 distribution in plastisphere samples
